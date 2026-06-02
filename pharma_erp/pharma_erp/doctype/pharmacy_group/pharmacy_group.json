@@ -13,14 +13,13 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Group Name",
-   "reqd": 1,
    "unique": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-01 12:12:41.325461",
+ "modified": "2026-06-01 16:16:44.901227",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Pharmacy Group",
