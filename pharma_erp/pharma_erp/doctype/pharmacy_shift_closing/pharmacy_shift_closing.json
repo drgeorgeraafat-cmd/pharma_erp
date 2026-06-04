@@ -1,0 +1,191 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "SHIFT-.YYYY.-.#####",
+ "creation": "2026-06-03 16:41:44.477171",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_jpgc",
+  "status",
+  "cashier",
+  "column_break_legd",
+  "start_time",
+  "end_time",
+  "\u0627\u0644\u062d\u0633\u0627\u0628\u0627\u062a_section",
+  "opening_balance",
+  "total_cash_sales",
+  "total_visa_sales",
+  "total_expenses",
+  "\u062c\u062f\u0648\u0644_\u0627\u0644\u0645\u0633\u062d\u0648\u0628\u0627\u062a_section",
+  "expenses",
+  "\u0627\u0644\u062a\u0642\u0641\u064a\u0644_\u0627\u0644\u0641\u0639\u0644\u064a_reconciliation_section",
+  "expected_cash",
+  "actual_cash",
+  "difference",
+  "cash_additions",
+  "amended_from",
+  "section_break_jyxn",
+  "payment_summary",
+  "detailed_report"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_jpgc",
+   "fieldtype": "Section Break",
+   "label": "\u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0648\u0631\u062f\u064a\u0629"
+  },
+  {
+   "default": "Open",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Open\nClosed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cashier",
+   "fieldtype": "Link",
+   "label": "Cashier",
+   "options": "User"
+  },
+  {
+   "fieldname": "start_time",
+   "fieldtype": "Datetime",
+   "label": "Start Time",
+   "read_only": 1
+  },
+  {
+   "fieldname": "end_time",
+   "fieldtype": "Datetime",
+   "label": "End Time",
+   "read_only": 1
+  },
+  {
+   "fieldname": "\u0627\u0644\u062d\u0633\u0627\u0628\u0627\u062a_section",
+   "fieldtype": "Section Break",
+   "label": "\u0627\u0644\u062d\u0633\u0627\u0628\u0627\u062a"
+  },
+  {
+   "fieldname": "opening_balance",
+   "fieldtype": "Currency",
+   "label": "Opening Balance"
+  },
+  {
+   "fieldname": "total_cash_sales",
+   "fieldtype": "Currency",
+   "label": "Total Cash Sales",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_visa_sales",
+   "fieldtype": "Currency",
+   "hidden": 1,
+   "label": "Total Visa Sales"
+  },
+  {
+   "fieldname": "total_expenses",
+   "fieldtype": "Currency",
+   "label": "Total Expenses",
+   "read_only": 1
+  },
+  {
+   "fieldname": "\u062c\u062f\u0648\u0644_\u0627\u0644\u0645\u0633\u062d\u0648\u0628\u0627\u062a_section",
+   "fieldtype": "Section Break",
+   "label": "\u062c\u062f\u0648\u0644 \u0627\u0644\u0645\u0633\u062d\u0648\u0628\u0627\u062a"
+  },
+  {
+   "fieldname": "expenses",
+   "fieldtype": "Table",
+   "label": "Expenses",
+   "options": "Pharmacy Shift Expense"
+  },
+  {
+   "fieldname": "\u0627\u0644\u062a\u0642\u0641\u064a\u0644_\u0627\u0644\u0641\u0639\u0644\u064a_reconciliation_section",
+   "fieldtype": "Section Break",
+   "label": "\u0627\u0644\u062a\u0642\u0641\u064a\u0644 \u0627\u0644\u0641\u0639\u0644\u064a (Reconciliation)"
+  },
+  {
+   "fieldname": "expected_cash",
+   "fieldtype": "Currency",
+   "label": "Expected Cash",
+   "read_only": 1
+  },
+  {
+   "fieldname": "actual_cash",
+   "fieldtype": "Currency",
+   "label": "Actual Cash"
+  },
+  {
+   "fieldname": "difference",
+   "fieldtype": "Currency",
+   "label": "Difference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Pharmacy Shift Closing",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "section_break_jyxn",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "payment_summary",
+   "fieldtype": "Table",
+   "label": "Payment Summary",
+   "options": "Shift Payment Summary"
+  },
+  {
+   "fieldname": "detailed_report",
+   "fieldtype": "HTML",
+   "label": "Detailed Report"
+  },
+  {
+   "fieldname": "cash_additions",
+   "fieldtype": "Currency",
+   "label": "Cash Additions",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_legd",
+   "fieldtype": "Column Break"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-06-04 02:44:17.703352",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Shift Closing",
+ "naming_rule": "Set by user",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
