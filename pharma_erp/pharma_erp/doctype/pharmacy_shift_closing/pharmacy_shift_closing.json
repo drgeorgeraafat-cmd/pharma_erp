@@ -15,6 +15,7 @@
   "\u0627\u0644\u062d\u0633\u0627\u0628\u0627\u062a_section",
   "opening_balance",
   "total_cash_sales",
+  "total_home_delivery_sales",
   "total_visa_sales",
   "total_expenses",
   "\u062c\u062f\u0648\u0644_\u0627\u0644\u0645\u0633\u062d\u0648\u0628\u0627\u062a_section",
@@ -156,13 +157,18 @@
   {
    "fieldname": "column_break_legd",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "total_home_delivery_sales",
+   "fieldtype": "Currency",
+   "label": "Total Home Delivery Sales"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-06-04 02:44:17.703352",
+ "modified": "2026-06-05 10:19:00.925700",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Pharmacy Shift Closing",

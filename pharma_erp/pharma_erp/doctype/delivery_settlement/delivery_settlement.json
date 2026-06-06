@@ -1,0 +1,132 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-06-04 14:58:32.869317",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_m6e0",
+  "delivery_boy",
+  "shift_reference",
+  "pilot_float",
+  "column_break_gwiv",
+  "date",
+  "total_expected",
+  "section_break_reap",
+  "invoices",
+  "section_break_cgzj",
+  "paid_cash",
+  "paid_visa",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_m6e0",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "delivery_boy",
+   "fieldtype": "Link",
+   "label": "Delivery Boy",
+   "link_filters": "[\r\n  [\"Designation\", \"Designation\", \"=\", \"Delivery Boy\"]\r\n]",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "shift_reference",
+   "fieldtype": "Link",
+   "label": "Shift Reference",
+   "options": "Pharmacy Shift Closing"
+  },
+  {
+   "fieldname": "column_break_gwiv",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Now",
+   "fieldname": "date",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "in_preview": 1,
+   "label": "Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_expected",
+   "fieldtype": "Currency",
+   "label": "Total Expected",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_reap",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "invoices",
+   "fieldtype": "Table",
+   "label": "Invoices",
+   "options": "Delivery Settlement Item"
+  },
+  {
+   "fieldname": "section_break_cgzj",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "paid_cash",
+   "fieldtype": "Currency",
+   "hidden": 1,
+   "label": "Paid Cash"
+  },
+  {
+   "fieldname": "paid_visa",
+   "fieldtype": "Currency",
+   "hidden": 1,
+   "label": "Paid Visa"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Delivery Settlement",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "pilot_float",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Pilot Float"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-06-05 18:49:03.847339",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Delivery Settlement",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
