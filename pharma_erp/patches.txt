@@ -6,3 +6,4 @@
 # Patches added in this section will be executed after doctypes are migrated
 pharma_erp.patches.v1_0.remove_legacy_pharmacy_shift_page
 pharma_erp.patches.v1_0.remove_disabled_legacy_scripts
+pharma_erp.patches.v1_0.migrate_employee_financial_scripts_to_app
