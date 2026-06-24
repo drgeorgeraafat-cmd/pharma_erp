@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 import frappe
 from frappe import _
@@ -437,7 +438,7 @@ def get_bank_account_activity(bank_account_name, limit=20):
     """Return balance and latest ledger movements for an ERPNext Bank Account."""
     _validate_access()
 
-    bank_account_name = str(bank_account_name or "").strip()
+    bank_account_name = _clean_master_text(bank_account_name)
     if not bank_account_name or not frappe.db.exists("Bank Account", bank_account_name):
         frappe.throw(_("Bank Account was not found."))
 
@@ -512,7 +513,7 @@ def _prepare_bank_setup_payload(
     fee_account_name=None,
     fee_parent_account=None,
 ):
-    bank_name = str(bank_name or "").strip()
+    bank_name = _clean_master_text(bank_name)
     company = _resolve_company(company)
     bank_account_name = str(bank_account_name or "").strip()
     ledger_mode = str(ledger_mode or "Create New Account").strip()
@@ -567,7 +568,7 @@ def _prepare_bank_setup_payload(
             "account_type": account.account_type,
         }
     else:
-        ledger_account_name = str(ledger_account_name or "").strip()
+        ledger_account_name = _clean_master_text(ledger_account_name)
         bank_parent_account = str(bank_parent_account or "").strip()
         if not ledger_account_name:
             frappe.throw(_("Bank Ledger Account Name is required."))
@@ -656,6 +657,18 @@ def _prepare_bank_setup_payload(
     return payload
 
 
+
+def _clean_master_text(value):
+    """Normalize master-data names and remove hidden/combining Unicode marks."""
+    value = unicodedata.normalize("NFKC", str(value or ""))
+    cleaned = []
+    for char in value:
+        category = unicodedata.category(char)
+        if unicodedata.combining(char) or category in {"Cf", "Cc"}:
+            continue
+        cleaned.append(char)
+    return " ".join("".join(cleaned).split())
+
 def _plan_reusable_account(
     account_name,
     company,
@@ -664,7 +677,7 @@ def _plan_reusable_account(
     root_type,
     account_type="",
 ):
-    account_name = str(account_name or "").strip()
+    account_name = _clean_master_text(account_name)
     if not account_name:
         frappe.throw(_("Account Name is required."))
 
