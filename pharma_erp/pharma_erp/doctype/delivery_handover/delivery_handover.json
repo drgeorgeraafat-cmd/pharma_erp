@@ -1,0 +1,185 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "naming_series:",
+ "creation": "2026-06-18 21:30:17.603277",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_d9mi",
+  "delivery_settlement",
+  "naming_series",
+  "delivery_boy",
+  "shift_reference",
+  "handover_type",
+  "handover_method",
+  "amount",
+  "reference_number",
+  "payment_proof",
+  "received_by",
+  "received_at",
+  "notes",
+  "payment_entry",
+  "journal_entry",
+  "amended_from",
+  "driver_shortage"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_d9mi",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "delivery_settlement",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Delivery Settlement",
+   "options": "Delivery Settlement",
+   "reqd": 1
+  },
+  {
+   "fieldname": "shift_reference",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Shift Reference",
+   "options": "Pharmacy Shift Closing",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "delivery_boy",
+   "fieldtype": "Link",
+   "label": "Delivery Boy",
+   "options": "Employee",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "handover_type",
+   "fieldtype": "Select",
+   "label": "Handover Type",
+   "options": "Partial Handover\nFinal Settlement",
+   "reqd": 1
+  },
+  {
+   "fieldname": "handover_method",
+   "fieldtype": "Link",
+   "label": "Handover Method",
+   "options": "Mode of Payment",
+   "reqd": 1
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "label": "Amount",
+   "reqd": 1
+  },
+  {
+   "fieldname": "reference_number",
+   "fieldtype": "Data",
+   "label": "Reference Number"
+  },
+  {
+   "fieldname": "payment_proof",
+   "fieldtype": "Attach",
+   "label": "Payment Proof"
+  },
+  {
+   "fieldname": "received_by",
+   "fieldtype": "Link",
+   "label": "Received By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "received_at",
+   "fieldtype": "Datetime",
+   "label": "Received At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "payment_entry",
+   "fieldtype": "Link",
+   "label": "Payment Entry",
+   "options": "Payment Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "label": "Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1
+  },
+  {
+   "default": "DH-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Series",
+   "options": "DH-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Delivery Handover"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Delivery Handover"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "driver_shortage",
+   "fieldtype": "Link",
+   "label": "Driver Shortage",
+   "no_copy": 1,
+   "options": "Driver Shortage",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-06-20 21:01:38.315890",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Delivery Handover",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

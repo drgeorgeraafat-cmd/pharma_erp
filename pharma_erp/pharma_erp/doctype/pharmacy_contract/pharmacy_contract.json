@@ -1,0 +1,120 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "PC-.#####",
+ "creation": "2026-06-13 19:53:14.770356",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "contract_name",
+  "customer",
+  "is_active",
+  "section_break_bkpr",
+  "pharmacy_contract_discount",
+  "pricing_section",
+  "notes",
+  "billing_type",
+  "credit_days",
+  "max_credit",
+  "need_prescription",
+  "require_employee_code"
+ ],
+ "fields": [
+  {
+   "fieldname": "contract_name",
+   "fieldtype": "Data",
+   "label": "Contract Name",
+   "unique": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Customer"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active"
+  },
+  {
+   "fieldname": "pricing_section",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "section_break_bkpr",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "pharmacy_contract_discount",
+   "fieldtype": "Table",
+   "label": "Pharmacy Contract Discount",
+   "options": "Pharmacy Contract Discount"
+  },
+  {
+   "fieldname": "billing_type",
+   "fieldtype": "Select",
+   "label": "Billing Type",
+   "options": "Cash Discount\nMonthly Claim"
+  },
+  {
+   "fieldname": "credit_days",
+   "fieldtype": "Int",
+   "label": "Credit Days"
+  },
+  {
+   "fieldname": "max_credit",
+   "fieldtype": "Currency",
+   "label": "Max Credit"
+  },
+  {
+   "default": "0",
+   "fieldname": "need_prescription",
+   "fieldtype": "Check",
+   "label": "Need Prescription"
+  },
+  {
+   "default": "0",
+   "fieldname": "require_employee_code",
+   "fieldtype": "Check",
+   "label": "Require Employee Code"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-14 12:26:16.547430",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Contract",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "contract_name,customer",
+ "show_title_field_in_link": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "contract_name"
+}

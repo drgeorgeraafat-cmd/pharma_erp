@@ -1,0 +1,334 @@
+{
+ "actions": [],
+ "autoname": "format:DA-{#####}",
+ "creation": "2026-06-17 06:12:01.905920",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "attempt_information_section",
+  "parent_delivery_invoice",
+  "company",
+  "customer",
+  "customer_address",
+  "delivery_zone",
+  "attempt_number",
+  "attempt_type",
+  "delivery_boy",
+  "delivery_user",
+  "attempt_status",
+  "is_current_attempt",
+  "previous_attempt",
+  "attempt_timing_section",
+  "departure_time",
+  "return_started_at",
+  "returned_to_pharmacy_at",
+  "delivered_at",
+  "closed_at",
+  "delivery_duration_mins",
+  "return_duration_mins",
+  "total_attempt_duration_mins",
+  "attempt_result_section",
+  "attempt_outcome",
+  "delivery_issue",
+  "issue_reason",
+  "add_on_requested",
+  "add_on_request_notes",
+  "add_on_invoice",
+  "notes",
+  "financial_snapshot_section",
+  "order_amount_at_departure",
+  "prepaid_amount_at_departure",
+  "expected_collection_at_departure",
+  "item_count_at_departure",
+  "section_break_zhia",
+  "delivery_trip",
+  "delivery_trip_stop_row",
+  "trip_stop_sequence"
+ ],
+ "fields": [
+  {
+   "fieldname": "attempt_information_section",
+   "fieldtype": "Section Break",
+   "label": "Attempt Information"
+  },
+  {
+   "fieldname": "parent_delivery_invoice",
+   "fieldtype": "Link",
+   "label": "Parent Delivery Invoice",
+   "options": "Sales Invoice",
+   "read_only": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "read_only": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Customer",
+   "read_only": 1
+  },
+  {
+   "fieldname": "customer_address",
+   "fieldtype": "Link",
+   "label": "Customer Address",
+   "options": "Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_zone",
+   "fieldtype": "Link",
+   "label": "Delivery Zone",
+   "options": "Delivery Zone",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempt_number",
+   "fieldtype": "Int",
+   "label": "Attempt Number",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempt_type",
+   "fieldtype": "Select",
+   "label": "Attempt Type",
+   "options": "Initial Delivery\nRedelivery After Add-on\nRedelivery After Issue\nManager Retry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_boy",
+   "fieldtype": "Link",
+   "label": "Delivery Boy",
+   "options": "Employee",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_user",
+   "fieldtype": "Link",
+   "label": "Delivery User",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempt_status",
+   "fieldtype": "Select",
+   "label": "Attempt Status",
+   "options": "Out for Delivery\nReturning to Pharmacy\nReturned to Pharmacy\nDelivered\nFailed\nCancelled",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_current_attempt",
+   "fieldtype": "Check",
+   "label": "Is Current Attempt",
+   "read_only": 1
+  },
+  {
+   "fieldname": "previous_attempt",
+   "fieldtype": "Link",
+   "label": "Previous Attempt",
+   "options": "Delivery Attempt",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempt_timing_section",
+   "fieldtype": "Section Break",
+   "label": "Attempt Timing"
+  },
+  {
+   "fieldname": "departure_time",
+   "fieldtype": "Datetime",
+   "label": "Departure Time",
+   "read_only": 1
+  },
+  {
+   "fieldname": "return_started_at",
+   "fieldtype": "Datetime",
+   "label": "Return Started At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "returned_to_pharmacy_at",
+   "fieldtype": "Datetime",
+   "label": "Returned to Pharmacy At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivered_at",
+   "fieldtype": "Datetime",
+   "label": "Delivered At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "closed_at",
+   "fieldtype": "Datetime",
+   "label": "Closed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_duration_mins",
+   "fieldtype": "Float",
+   "label": "Delivery Duration Mins",
+   "read_only": 1
+  },
+  {
+   "fieldname": "return_duration_mins",
+   "fieldtype": "Float",
+   "label": "Return Duration Mins",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_attempt_duration_mins",
+   "fieldtype": "Float",
+   "label": "Total Attempt Duration Mins",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempt_result_section",
+   "fieldtype": "Section Break",
+   "label": "Attempt Result"
+  },
+  {
+   "fieldname": "attempt_outcome",
+   "fieldtype": "Select",
+   "label": "Attempt Outcome",
+   "options": "Pending\nDelivered\nReturned for Add-on\nCustomer Not Answering\nCustomer Refused Order\nWrong Address\nPayment Problem\nDelivery Failed\nCancelled\nOther",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_issue",
+   "fieldtype": "Select",
+   "label": "Delivery Issue",
+   "options": "None\nCustomer Requested Additional Items\nCustomer Not Answering\nCustomer Refused Order\nWrong Address\nPayment Problem\nOther",
+   "read_only": 1
+  },
+  {
+   "fieldname": "issue_reason",
+   "fieldtype": "Small Text",
+   "label": "Issue Reason",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "add_on_requested",
+   "fieldtype": "Check",
+   "label": "Add on Requested",
+   "read_only": 1
+  },
+  {
+   "fieldname": "add_on_request_notes",
+   "fieldtype": "Small Text",
+   "label": "Add on Request Notes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "add_on_invoice",
+   "fieldtype": "Link",
+   "label": "Add on Invoice",
+   "options": "Sales Invoice",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "financial_snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Financial Snapshot"
+  },
+  {
+   "fieldname": "order_amount_at_departure",
+   "fieldtype": "Currency",
+   "label": "Order Amount at Departure",
+   "read_only": 1
+  },
+  {
+   "fieldname": "prepaid_amount_at_departure",
+   "fieldtype": "Currency",
+   "label": "Prepaid Amount at Departure",
+   "read_only": 1
+  },
+  {
+   "fieldname": "expected_collection_at_departure",
+   "fieldtype": "Currency",
+   "label": "Expected Collection at Departure",
+   "read_only": 1
+  },
+  {
+   "fieldname": "item_count_at_departure",
+   "fieldtype": "Int",
+   "label": "Item Count at Departure",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_zhia",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "delivery_trip",
+   "fieldtype": "Link",
+   "label": "Delivery Trip",
+   "options": "Delivery Trip",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_trip_stop_row",
+   "fieldtype": "Data",
+   "label": "Delivery Trip Stop Row",
+   "read_only": 1
+  },
+  {
+   "fieldname": "trip_stop_sequence",
+   "fieldtype": "Int",
+   "label": "Trip Stop Sequence",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-17 22:48:15.530158",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Delivery Attempt",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "parent_delivery_invoice",
+ "track_changes": 1
+}

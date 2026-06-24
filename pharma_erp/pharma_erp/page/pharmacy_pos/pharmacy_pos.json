@@ -1,0 +1,20 @@
+{
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": "prescription",
+  "idx": 0,
+  "module": "Pharma Erp",
+  "name": "pharmacy-pos",
+  "page_name": "pharmacy-pos",
+  "roles": [
+    {"role": "System Manager"},
+    {"role": "Sales User"},
+    {"role": "POS User"}
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Pharmacy POS"
+}

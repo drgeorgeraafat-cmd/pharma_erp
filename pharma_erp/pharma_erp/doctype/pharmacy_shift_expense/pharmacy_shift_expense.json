@@ -51,7 +51,7 @@
    "label": "Reference"
   },
   {
-   "depends_on": "eval:doc.transactio_type==\"\u0633\u0644\u0641\u0629 \u0645\u0648\u0638\u0641\"",
+   "depends_on": "eval:doc.transaction_type==\"\u0633\u0644\u0641\u0629 \u0645\u0648\u0638\u0641\"",
    "fieldname": "employee",
    "fieldtype": "Link",
    "label": "Employee",
@@ -62,7 +62,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-06-03 22:44:16.890893",
+ "modified": "2026-06-20 21:17:33.554474",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Pharmacy Shift Expense",
