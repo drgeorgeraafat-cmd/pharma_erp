@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV3(page, wrapper);
+    new TreasuryManagementPageV4(page, wrapper);
 };
 
 
-class TreasuryManagementPageV3 {
+class TreasuryManagementPageV4 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -17,6 +17,7 @@ class TreasuryManagementPageV3 {
             ? $(page.main)
             : $(wrapper).find(".layout-main-section");
         this.canCreateCashDrawer = false;
+        this.canManageCashDrawer = false;
         this.autoAccountName = "";
 
         this.addStyles();
@@ -128,6 +129,26 @@ class TreasuryManagementPageV3 {
                     background: var(--yellow-50);
                     border: 1px solid var(--yellow-200);
                 }
+                .tmv3-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+                .tmv3-action-btn {
+                    border: 1px solid var(--border-color);
+                    background: var(--control-bg);
+                    color: var(--text-color);
+                    border-radius: 8px;
+                    padding: 5px 9px;
+                    cursor: pointer;
+                    font-size: 11px;
+                    font-weight: 700;
+                }
+                .tmv3-action-btn:hover { background: var(--subtle-fg); }
+                .tmv3-action-danger { color: var(--red-600); border-color: var(--red-200); }
+                .tmv3-action-success { color: var(--green-700); border-color: var(--green-200); }
+                .tmv3-balance-positive { color: var(--green-700); font-weight: 800; }
+                .tmv3-balance-negative { color: var(--red-600); font-weight: 800; }
+                .tmv3-activity-table { width: 100%; border-collapse: collapse; min-width: 760px; }
+                .tmv3-activity-table th, .tmv3-activity-table td {
+                    padding: 8px; border-bottom: 1px solid var(--border-color); text-align: right;
+                }
             </style>
         `);
     }
@@ -153,8 +174,10 @@ class TreasuryManagementPageV3 {
 
             const data = response.message || {};
             this.canCreateCashDrawer = Boolean(data.can_create_cash_drawer);
+            this.canManageCashDrawer = Boolean(data.can_manage_cash_drawer);
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             this.render(data);
+            this.bindDrawerActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -405,7 +428,7 @@ class TreasuryManagementPageV3 {
                 <div class="tmv3-hero">
                     <h2>${__("إدارة الخزائن والبنوك ووسائل الدفع")}</h2>
                     <p>
-                        ${__("تم اعتماد Cash Drawer الحالي ليكون سجل الخزنة التشغيلية، ويمكن الآن إنشاء خزنة وحسابها المحاسبي بعد المعاينة والتأكيد.")}
+                        ${__("يمكن إنشاء الخزائن وحساباتها، ومراجعة الرصيد والحركات الأخيرة، وتفعيل أو تعطيل الخزنة بأمان.")}
                     </p>
                     <div class="tmv3-status">
                         <span>●</span>
@@ -443,27 +466,56 @@ class TreasuryManagementPageV3 {
             `;
         }
 
-        const body = rows.map((row) => `
-            <tr>
-                <td>
-                    <a href="/app/cash-drawer/${encodeURIComponent(row.name)}">
-                        ${this.esc(row.drawer_name || row.name)}
-                    </a>
-                </td>
-                <td>${this.esc(row.drawer_code || "-")}</td>
-                <td>${this.esc(row.company || "-")}</td>
-                <td>${this.esc(row.branch || "-")}</td>
-                <td>${this.esc(row.cash_account || "-")}</td>
-                <td>${this.esc(row.account_currency || "-")}</td>
-                <td>${this.esc(row.current_responsible_user || "-")}</td>
-                <td>${this.esc(row.current_active_shift || "-")}</td>
-                <td>
-                    <span class="tmv3-badge ${row.enabled ? "tmv3-badge-on" : "tmv3-badge-off"}">
-                        ${row.enabled ? __("Active") : __("Disabled")}
-                    </span>
-                </td>
-            </tr>
-        `).join("");
+        const body = rows.map((row) => {
+            const balanceClass = Number(row.current_balance || 0) < 0
+                ? "tmv3-balance-negative"
+                : "tmv3-balance-positive";
+            const lastMovement = row.last_movement || {};
+            const toggleButton = this.canManageCashDrawer
+                ? `
+                    <button
+                        class="tmv3-action-btn tmv3-drawer-toggle ${row.enabled ? "tmv3-action-danger" : "tmv3-action-success"}"
+                        data-drawer="${this.esc(row.name)}"
+                        data-enabled="${row.enabled ? 1 : 0}"
+                    >
+                        ${row.enabled ? __("تعطيل") : __("تفعيل")}
+                    </button>
+                `
+                : "";
+
+            return `
+                <tr>
+                    <td>
+                        <a href="/app/cash-drawer/${encodeURIComponent(row.name)}">
+                            ${this.esc(row.drawer_name || row.name)}
+                        </a>
+                    </td>
+                    <td>${this.esc(row.drawer_code || "-")}</td>
+                    <td>${this.esc(row.company || "-")}</td>
+                    <td>${this.esc(row.cash_account || "-")}</td>
+                    <td class="${balanceClass}">
+                        ${this.formatMoney(row.current_balance, row.account_currency)}
+                    </td>
+                    <td>${this.esc(lastMovement.posting_date || "-")}</td>
+                    <td>${this.esc(row.current_responsible_user || "-")}</td>
+                    <td>${this.esc(row.current_active_shift || "-")}</td>
+                    <td>
+                        <span class="tmv3-badge ${row.enabled ? "tmv3-badge-on" : "tmv3-badge-off"}">
+                            ${row.enabled ? __("Active") : __("Disabled")}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="tmv3-actions">
+                            <button
+                                class="tmv3-action-btn tmv3-drawer-activity"
+                                data-drawer="${this.esc(row.name)}"
+                            >${__("الرصيد والحركات")}</button>
+                            ${toggleButton}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join("");
 
         return `
             <div class="tmv3-section">
@@ -475,12 +527,13 @@ class TreasuryManagementPageV3 {
                                 <th>${__("الخزنة")}</th>
                                 <th>${__("الكود")}</th>
                                 <th>${__("الشركة")}</th>
-                                <th>${__("الفرع")}</th>
                                 <th>${__("الحساب")}</th>
-                                <th>${__("العملة")}</th>
+                                <th>${__("الرصيد الحالي")}</th>
+                                <th>${__("آخر حركة")}</th>
                                 <th>${__("المسؤول الحالي")}</th>
                                 <th>${__("الوردية الحالية")}</th>
                                 <th>${__("الحالة")}</th>
+                                <th>${__("إجراءات")}</th>
                             </tr>
                         </thead>
                         <tbody>${body}</tbody>
@@ -488,6 +541,126 @@ class TreasuryManagementPageV3 {
                 </div>
             </div>
         `;
+    }
+
+    bindDrawerActions() {
+        this.$main.find(".tmv3-drawer-activity")
+            .off("click")
+            .on("click", (event) => {
+                this.openDrawerActivity($(event.currentTarget).attr("data-drawer"));
+            });
+
+        this.$main.find(".tmv3-drawer-toggle")
+            .off("click")
+            .on("click", (event) => {
+                const $button = $(event.currentTarget);
+                const drawer = $button.attr("data-drawer");
+                const isEnabled = Number($button.attr("data-enabled") || 0) === 1;
+                this.confirmDrawerToggle(drawer, isEnabled);
+            });
+    }
+
+    async openDrawerActivity(drawer) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_cash_drawer_activity",
+            args: { drawer_name: drawer, limit: 20 },
+            freeze: true,
+            freeze_message: __("جاري تحميل رصيد وحركات الخزنة..."),
+        });
+
+        const data = response.message || {};
+        const movements = data.movements || [];
+        const rows = movements.length
+            ? movements.map((row) => `
+                <tr>
+                    <td>${this.esc(row.posting_date || "-")}</td>
+                    <td>${this.esc(row.voucher_type || "-")}</td>
+                    <td>${this.esc(row.voucher_no || "-")}</td>
+                    <td>${this.formatMoney(row.debit, data.account_currency)}</td>
+                    <td>${this.formatMoney(row.credit, data.account_currency)}</td>
+                    <td>${this.esc(row.against || "-")}</td>
+                </tr>
+            `).join("")
+            : `<tr><td colspan="6" class="tmv3-empty">${__("لا توجد حركات دفتر أستاذ حتى الآن.")}</td></tr>`;
+
+        const dialog = new frappe.ui.Dialog({
+            title: `${__("رصيد وحركات الخزنة")}: ${this.esc(data.drawer_name || data.drawer || "")}`,
+            size: "extra-large",
+            fields: [{
+                fieldtype: "HTML",
+                options: `
+                    <div style="direction: rtl; text-align: right;">
+                        <div class="tmv3-preview" style="margin-bottom: 14px;">
+                            <div class="tmv3-preview-row">
+                                <div class="tmv3-preview-label">${__("الحساب")}</div>
+                                <div class="tmv3-preview-value">${this.esc(data.cash_account || "-")}</div>
+                            </div>
+                            <div class="tmv3-preview-row">
+                                <div class="tmv3-preview-label">${__("الرصيد الحالي")}</div>
+                                <div class="tmv3-preview-value">${this.formatMoney(data.current_balance, data.account_currency)}</div>
+                            </div>
+                            <div class="tmv3-preview-row">
+                                <div class="tmv3-preview-label">${__("الوردية الحالية")}</div>
+                                <div class="tmv3-preview-value">${this.esc(data.current_active_shift || "-")}</div>
+                            </div>
+                        </div>
+                        <div class="tmv3-table-wrap">
+                            <table class="tmv3-activity-table">
+                                <thead>
+                                    <tr>
+                                        <th>${__("التاريخ")}</th>
+                                        <th>${__("نوع المستند")}</th>
+                                        <th>${__("المستند")}</th>
+                                        <th>${__("مدين")}</th>
+                                        <th>${__("دائن")}</th>
+                                        <th>${__("الحساب المقابل")}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${rows}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                `,
+            }],
+        });
+        dialog.show();
+    }
+
+    confirmDrawerToggle(drawer, isEnabled) {
+        const action = isEnabled ? __("تعطيل") : __("تفعيل");
+        const message = isEnabled
+            ? __("سيتم تعطيل الخزنة فقط، ولن يتم تعطيل الحساب المحاسبي أو حذف الحركات السابقة. لا يمكن تعطيل خزنة عليها وردية مفتوحة. هل تريد المتابعة؟")
+            : __("سيتم التحقق من سلامة الحساب المحاسبي ثم تفعيل الخزنة. هل تريد المتابعة؟");
+
+        frappe.confirm(
+            `${message}<br><br><strong>${this.esc(drawer)}</strong>`,
+            async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.set_cash_drawer_enabled",
+                    args: {
+                        drawer_name: drawer,
+                        enabled: isEnabled ? 0 : 1,
+                    },
+                    freeze: true,
+                    freeze_message: `${action} ${__("الخزنة...")}`,
+                });
+                frappe.show_alert({
+                    message: response.message?.message || __("تم تحديث حالة الخزنة"),
+                    indicator: "green",
+                });
+                await this.refresh();
+            },
+        );
+    }
+
+    formatMoney(value, currency) {
+        const number = Number(value || 0);
+        if (typeof format_currency === "function") {
+            return format_currency(number, currency || undefined);
+        }
+        return `${number.toFixed(2)} ${this.esc(currency || "")}`.trim();
     }
 
     renderWarnings(rows) {

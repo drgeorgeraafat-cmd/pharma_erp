@@ -2,7 +2,9 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, nowdate
+
+from erpnext.accounts.utils import get_balance_on
 
 
 CREATE_ROLES = {"System Manager", "Accounts Manager"}
@@ -32,6 +34,7 @@ def get_overview():
         "cash_accounts": cash_accounts,
         "account_warnings": account_warnings,
         "can_create_cash_drawer": _can_create_cash_drawer(),
+        "can_manage_cash_drawer": _can_create_cash_drawer(),
     }
 
 
@@ -138,6 +141,108 @@ def create_cash_drawer(
         "drawer_name": drawer.drawer_name,
         "cash_account": account.name,
         "message": _("Cash drawer and cash account were created successfully."),
+    }
+
+
+@frappe.whitelist()
+def get_cash_drawer_activity(drawer_name, limit=20):
+    """Return the live balance and latest posted ledger movements for a drawer."""
+    _validate_access()
+
+    drawer_name = str(drawer_name or "").strip()
+    if not drawer_name or not frappe.db.exists("Cash Drawer", drawer_name):
+        frappe.throw(_("Cash Drawer was not found."))
+
+    drawer = frappe.get_doc("Cash Drawer", drawer_name)
+    if not drawer.cash_account:
+        frappe.throw(_("The Cash Drawer has no Cash Account."))
+
+    limit = max(1, min(cint(limit) or 20, 100))
+    account = _validate_drawer_account(drawer)
+    balance = _account_balance(drawer.cash_account, drawer.company)
+
+    rows = frappe.get_all(
+        "GL Entry",
+        filters={
+            "account": drawer.cash_account,
+            "is_cancelled": 0,
+        },
+        fields=[
+            "name",
+            "posting_date",
+            "creation",
+            "voucher_type",
+            "voucher_no",
+            "debit",
+            "credit",
+            "against",
+            "remarks",
+        ],
+        order_by="posting_date desc, creation desc",
+        limit_page_length=limit,
+    )
+
+    for row in rows:
+        row["debit"] = flt(row.get("debit"))
+        row["credit"] = flt(row.get("credit"))
+        row["net_movement"] = flt(row["debit"] - row["credit"])
+
+    return {
+        "drawer": drawer.name,
+        "drawer_name": drawer.drawer_name,
+        "company": drawer.company,
+        "cash_account": drawer.cash_account,
+        "account_currency": account.get("account_currency") or "",
+        "enabled": cint(drawer.enabled),
+        "current_active_shift": drawer.current_active_shift or "",
+        "current_responsible_user": drawer.current_responsible_user or "",
+        "current_balance": balance,
+        "movements": rows,
+    }
+
+
+@frappe.whitelist()
+def set_cash_drawer_enabled(drawer_name, enabled):
+    """Enable or disable a drawer without disabling its ledger account."""
+    _validate_create_access()
+
+    drawer_name = str(drawer_name or "").strip()
+    if not drawer_name or not frappe.db.exists("Cash Drawer", drawer_name):
+        frappe.throw(_("Cash Drawer was not found."))
+
+    drawer = frappe.get_doc("Cash Drawer", drawer_name)
+    enabled = cint(enabled)
+
+    if enabled:
+        _validate_drawer_account(drawer)
+    else:
+        open_shift = _find_open_shift_for_drawer(drawer)
+        if open_shift:
+            frappe.throw(
+                _("Cannot disable this drawer while shift {0} is still open.").format(
+                    open_shift
+                )
+            )
+
+        # Clear stale operational links only after proving that no open shift exists.
+        drawer.current_active_shift = None
+        drawer.current_responsible_user = None
+
+    if cint(drawer.enabled) != enabled:
+        drawer.enabled = enabled
+        drawer.flags.ignore_permissions = True
+        drawer.save(ignore_permissions=True)
+        drawer.add_comment(
+            "Comment",
+            _("Cash Drawer {0} from Treasury Management.").format(
+                _("enabled") if enabled else _("disabled")
+            ),
+        )
+
+    return {
+        "drawer": drawer.name,
+        "enabled": cint(drawer.enabled),
+        "message": _("Cash Drawer status was updated successfully."),
     }
 
 
@@ -362,12 +467,132 @@ def _get_cash_drawers():
             row["account_currency"] = account.get("account_currency") or ""
             row["account_disabled"] = cint(account.get("disabled"))
             row["account_root_type"] = account.get("root_type") or ""
+            row["current_balance"] = _account_balance(
+                row.cash_account, row.company
+            )
+            last_movement = frappe.get_all(
+                "GL Entry",
+                filters={
+                    "account": row.cash_account,
+                    "is_cancelled": 0,
+                },
+                fields=["posting_date", "creation", "voucher_type", "voucher_no"],
+                order_by="posting_date desc, creation desc",
+                limit_page_length=1,
+            )
+            row["last_movement"] = last_movement[0] if last_movement else {}
         else:
             row["account_currency"] = ""
             row["account_disabled"] = 0
             row["account_root_type"] = ""
+            row["current_balance"] = 0
+            row["last_movement"] = {}
 
     return rows
+
+
+def _account_balance(account, company):
+    if not account:
+        return 0
+    try:
+        return flt(
+            get_balance_on(
+                account=account,
+                date=nowdate(),
+                company=company,
+                in_account_currency=True,
+            )
+        )
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            "Treasury Management Cash Drawer Balance",
+        )
+        return 0
+
+
+def _validate_drawer_account(drawer):
+    account = frappe.db.get_value(
+        "Account",
+        drawer.cash_account,
+        [
+            "name",
+            "company",
+            "is_group",
+            "disabled",
+            "root_type",
+            "account_type",
+            "account_currency",
+        ],
+        as_dict=True,
+    )
+    if not account:
+        frappe.throw(_("Cash Account was not found."))
+    if account.company != drawer.company:
+        frappe.throw(_("Cash Account belongs to another company."))
+    if cint(account.is_group):
+        frappe.throw(_("Cash Account cannot be a group account."))
+    if cint(account.disabled):
+        frappe.throw(_("Cash Account is disabled."))
+    if account.root_type != "Asset" or account.account_type != "Cash":
+        frappe.throw(_("Linked account must be an active Asset Cash account."))
+    return account
+
+
+def _find_open_shift_for_drawer(drawer):
+    if not frappe.db.exists("DocType", "Pharmacy Shift Closing"):
+        return None
+
+    meta = frappe.get_meta("Pharmacy Shift Closing")
+    fields = ["name", "docstatus"]
+    for fieldname in (
+        "status",
+        "end_time",
+        "custom_shift_operational_status",
+        "custom_cash_drawer",
+    ):
+        if meta.has_field(fieldname):
+            fields.append(fieldname)
+
+    names = []
+    if drawer.current_active_shift and frappe.db.exists(
+        "Pharmacy Shift Closing", drawer.current_active_shift
+    ):
+        names.append(drawer.current_active_shift)
+
+    if meta.has_field("custom_cash_drawer"):
+        linked = frappe.get_all(
+            "Pharmacy Shift Closing",
+            filters={"custom_cash_drawer": drawer.name},
+            pluck="name",
+            order_by="modified desc",
+            limit_page_length=20,
+        )
+        for name in linked:
+            if name not in names:
+                names.append(name)
+
+    for name in names:
+        row = frappe.db.get_value(
+            "Pharmacy Shift Closing", name, fields, as_dict=True
+        )
+        if row and not _shift_is_clearly_closed(row):
+            return row.name
+
+    return None
+
+
+def _shift_is_clearly_closed(row):
+    if cint(row.get("docstatus")) == 2:
+        return True
+    if row.get("end_time"):
+        return True
+
+    statuses = {
+        str(row.get("status") or "").strip().lower(),
+        str(row.get("custom_shift_operational_status") or "").strip().lower(),
+    }
+    return bool(statuses.intersection({"closed", "completed", "cancelled"}))
 
 
 def _get_operational_cash_accounts():
