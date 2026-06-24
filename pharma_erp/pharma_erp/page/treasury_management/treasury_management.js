@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV4(page, wrapper);
+    new TreasuryManagementPageV5(page, wrapper);
 };
 
 
-class TreasuryManagementPageV4 {
+class TreasuryManagementPageV5 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -18,13 +18,20 @@ class TreasuryManagementPageV4 {
             : $(wrapper).find(".layout-main-section");
         this.canCreateCashDrawer = false;
         this.canManageCashDrawer = false;
+        this.canCreateBank = false;
         this.autoAccountName = "";
+        this.autoBankNames = {};
 
         this.addStyles();
         this.page.set_primary_action(
             __("إنشاء خزنة جديدة"),
             () => this.openCreateCashDrawerDialog(),
             "add",
+        );
+        this.$bankButton = this.page.add_inner_button(
+            __("إضافة بنك وحساب"),
+            () => this.openCreateBankDialog(),
+            __("البنوك"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -175,9 +182,12 @@ class TreasuryManagementPageV4 {
             const data = response.message || {};
             this.canCreateCashDrawer = Boolean(data.can_create_cash_drawer);
             this.canManageCashDrawer = Boolean(data.can_manage_cash_drawer);
+            this.canCreateBank = Boolean(data.can_create_bank);
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
+            if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
             this.render(data);
             this.bindDrawerActions();
+            this.bindBankActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -422,13 +432,337 @@ class TreasuryManagementPageV4 {
         `;
     }
 
+
+    async openCreateBankDialog() {
+        if (!this.canCreateBank) {
+            frappe.msgprint(__("ليس لديك صلاحية إنشاء أو ربط حساب بنكي."));
+            return;
+        }
+
+        const options = await this.getBankCreationOptions();
+        let dialog;
+        dialog = new frappe.ui.Dialog({
+            title: __("إضافة بنك وحساب بنكي"),
+            size: "extra-large",
+            fields: [
+                { fieldtype: "Section Break", label: __("بيانات البنك") },
+                {
+                    fieldname: "bank_name",
+                    label: __("اسم البنك"),
+                    fieldtype: "Data",
+                    reqd: 1,
+                    onchange: () => this.syncBankNames(dialog),
+                },
+                {
+                    fieldname: "swift_number",
+                    label: __("SWIFT Code"),
+                    fieldtype: "Data",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "company",
+                    label: __("الشركة"),
+                    fieldtype: "Link",
+                    options: "Company",
+                    reqd: 1,
+                    default: options.company,
+                    onchange: () => this.reloadBankCompanyDefaults(dialog),
+                },
+                {
+                    fieldname: "website",
+                    label: __("موقع البنك"),
+                    fieldtype: "Data",
+                },
+                { fieldtype: "Section Break", label: __("الحساب داخل Chart of Accounts") },
+                {
+                    fieldname: "ledger_mode",
+                    label: __("طريقة ربط الحساب"),
+                    fieldtype: "Select",
+                    options: "Use Existing Account\nCreate New Account",
+                    default: (options.unlinked_bank_accounts || []).length
+                        ? "Use Existing Account"
+                        : "Create New Account",
+                    reqd: 1,
+                },
+                {
+                    fieldname: "existing_ledger_account",
+                    label: __("حساب بنكي موجود"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    depends_on: "eval:doc.ledger_mode=='Use Existing Account'",
+                    mandatory_depends_on: "eval:doc.ledger_mode=='Use Existing Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            account_type: "Bank",
+                            root_type: "Asset",
+                            is_group: 0,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "ledger_account_name",
+                    label: __("اسم الحساب البنكي الجديد"),
+                    fieldtype: "Data",
+                    depends_on: "eval:doc.ledger_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.ledger_mode=='Create New Account'",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "bank_parent_account",
+                    label: __("الحساب الأب للبنك"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: options.default_bank_parent_account,
+                    depends_on: "eval:doc.ledger_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.ledger_mode=='Create New Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 1,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "account_currency",
+                    label: __("العملة"),
+                    fieldtype: "Data",
+                    read_only: 1,
+                    default: options.account_currency,
+                },
+                { fieldtype: "Section Break", label: __("Bank Account داخل ERPNext") },
+                {
+                    fieldname: "bank_account_name",
+                    label: __("اسم Bank Account"),
+                    fieldtype: "Data",
+                    reqd: 1,
+                },
+                {
+                    fieldname: "bank_account_no",
+                    label: __("رقم الحساب"),
+                    fieldtype: "Data",
+                },
+                {
+                    fieldname: "iban",
+                    label: __("IBAN"),
+                    fieldtype: "Data",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "branch_code",
+                    label: __("كود فرع البنك"),
+                    fieldtype: "Data",
+                },
+                { fieldtype: "Section Break", label: __("الحسابات الوسيطة المقترحة") },
+                {
+                    fieldname: "create_card_clearing",
+                    label: __("إنشاء أو استخدام Card Clearing"),
+                    fieldtype: "Check",
+                    default: 1,
+                },
+                {
+                    fieldname: "card_clearing_name",
+                    label: __("اسم حساب Card Clearing"),
+                    fieldtype: "Data",
+                    depends_on: "create_card_clearing",
+                    mandatory_depends_on: "create_card_clearing",
+                },
+                {
+                    fieldname: "create_instapay_clearing",
+                    label: __("إنشاء أو استخدام InstaPay Clearing"),
+                    fieldtype: "Check",
+                    default: 0,
+                },
+                {
+                    fieldname: "instapay_clearing_name",
+                    label: __("اسم حساب InstaPay Clearing"),
+                    fieldtype: "Data",
+                    depends_on: "create_instapay_clearing",
+                    mandatory_depends_on: "create_instapay_clearing",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "clearing_parent_account",
+                    label: __("الحساب الأب للحسابات الوسيطة"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: options.default_clearing_parent_account,
+                    depends_on: "eval:doc.create_card_clearing || doc.create_instapay_clearing",
+                    mandatory_depends_on: "eval:doc.create_card_clearing || doc.create_instapay_clearing",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 1,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "create_fee_account",
+                    label: __("إنشاء أو استخدام حساب رسوم البنك"),
+                    fieldtype: "Check",
+                    default: 1,
+                },
+                {
+                    fieldname: "fee_account_name",
+                    label: __("اسم حساب رسوم البنك"),
+                    fieldtype: "Data",
+                    depends_on: "create_fee_account",
+                    mandatory_depends_on: "create_fee_account",
+                },
+                {
+                    fieldname: "fee_parent_account",
+                    label: __("الحساب الأب للرسوم"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: options.default_fee_parent_account,
+                    depends_on: "create_fee_account",
+                    mandatory_depends_on: "create_fee_account",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Expense",
+                            is_group: 1,
+                            disabled: 0,
+                        },
+                    }),
+                },
+            ],
+            primary_action_label: __("معاينة الإنشاء"),
+            primary_action: async (values) => this.previewBankSetup(dialog, values),
+        });
+        dialog.show();
+    }
+
+    async getBankCreationOptions(company = null) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_bank_creation_options",
+            args: { company },
+            freeze: true,
+            freeze_message: __("جاري تجهيز بيانات البنك..."),
+        });
+        return response.message || {};
+    }
+
+    async reloadBankCompanyDefaults(dialog) {
+        const company = dialog.get_value("company");
+        if (!company) return;
+        const options = await this.getBankCreationOptions(company);
+        dialog.set_value("account_currency", options.account_currency || "");
+        dialog.set_value("bank_parent_account", options.default_bank_parent_account || "");
+        dialog.set_value("clearing_parent_account", options.default_clearing_parent_account || "");
+        dialog.set_value("fee_parent_account", options.default_fee_parent_account || "");
+        dialog.set_value("existing_ledger_account", "");
+    }
+
+    syncBankNames(dialog) {
+        const bankName = String(dialog.get_value("bank_name") || "").trim();
+        const suggestions = {
+            ledger_account_name: `${bankName} Current Account`,
+            bank_account_name: `${bankName} Current Account`,
+            card_clearing_name: `${bankName} Card Clearing`,
+            instapay_clearing_name: `${bankName} InstaPay Clearing`,
+            fee_account_name: `${bankName} Bank Charges`,
+        };
+        Object.entries(suggestions).forEach(([fieldname, value]) => {
+            const current = String(dialog.get_value(fieldname) || "").trim();
+            if (!current || current === this.autoBankNames[fieldname]) {
+                this.autoBankNames[fieldname] = value;
+                dialog.set_value(fieldname, value);
+            }
+        });
+    }
+
+    async previewBankSetup(sourceDialog, values) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_bank_setup",
+            args: values,
+            freeze: true,
+            freeze_message: __("جاري مراجعة بيانات البنك والحسابات..."),
+        });
+        this.showBankConfirmation(sourceDialog, values, response.message || {});
+    }
+
+    showBankConfirmation(sourceDialog, sourceValues, preview) {
+        const confirmDialog = new frappe.ui.Dialog({
+            title: __("تأكيد إنشاء البنك والحسابات"),
+            size: "extra-large",
+            fields: [{ fieldtype: "HTML", options: this.renderBankPreview(preview) }],
+            primary_action_label: __("إنشاء البنك والحسابات"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.create_bank_setup",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: __("جاري إنشاء وربط البنك والحسابات..."),
+                });
+                confirmDialog.hide();
+                sourceDialog.hide();
+                const result = response.message || {};
+                frappe.msgprint({
+                    title: __("تم إنشاء إعداد البنك"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction: rtl; text-align: right;">
+                            <div>${this.esc(result.message || __("تم الإنشاء بنجاح"))}</div>
+                            <div><strong>${__("البنك")}:</strong> ${this.esc(result.bank || "-")}</div>
+                            <div><strong>${__("Bank Account")}:</strong> ${this.esc(result.bank_account || "-")}</div>
+                            <div><strong>${__("حساب الأستاذ")}:</strong> ${this.esc(result.ledger_account || "-")}</div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
+    }
+
+    renderBankPreview(preview) {
+        const accountRows = [
+            [__("الحساب البنكي"), preview.ledger_account],
+            [__("Card Clearing"), preview.card_clearing_account],
+            [__("InstaPay Clearing"), preview.instapay_clearing_account],
+            [__("رسوم البنك"), preview.fee_account],
+        ].filter(([, plan]) => plan);
+        const actionLabel = (plan) => plan?.action === "reuse" ? __("استخدام الموجود") : __("إنشاء جديد");
+        return `
+            <div class="tmv3-preview">
+                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("البنك")}</div><div class="tmv3-preview-value">${this.esc(preview.bank_name || "-")} — ${preview.bank_master_action === "reuse" ? __("موجود") : __("سيتم إنشاؤه")}</div></div>
+                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الشركة")}</div><div class="tmv3-preview-value">${this.esc(preview.company || "-")}</div></div>
+                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("Bank Account")}</div><div class="tmv3-preview-value">${this.esc(preview.bank_account_name || "-")}</div></div>
+                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("رقم الحساب / IBAN")}</div><div class="tmv3-preview-value">${this.esc(preview.bank_account_no || "-")} / ${this.esc(preview.iban || "-")}</div></div>
+                ${accountRows.map(([label, plan]) => `
+                    <div class="tmv3-preview-row">
+                        <div class="tmv3-preview-label">${this.esc(label)}</div>
+                        <div class="tmv3-preview-value">
+                            ${this.esc(plan.document_name || plan.account_name || "-")}
+                            — ${this.esc(actionLabel(plan))}
+                            <br><small>${this.esc(plan.parent_account || "-")}</small>
+                        </div>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="tmv3-preview-note">
+                <strong>${__("مهم")}:</strong>
+                ${__("لن يتم إنشاء أي قيد محاسبي. سيتم فقط إنشاء أو ربط سجلات البنك والحسابات، مع إعادة استخدام الحسابات الموجودة المطابقة بدل تكرارها.")}
+            </div>
+        `;
+    }
+
     render(data) {
         this.$main.html(`
             <div class="tmv3">
                 <div class="tmv3-hero">
                     <h2>${__("إدارة الخزائن والبنوك ووسائل الدفع")}</h2>
                     <p>
-                        ${__("يمكن إنشاء الخزائن وحساباتها، ومراجعة الرصيد والحركات الأخيرة، وتفعيل أو تعطيل الخزنة بأمان.")}
+                        ${__("يمكن إدارة الخزائن والبنوك وحساباتها، ومراجعة الأرصدة والحركات، وإنشاء الحسابات بعد المعاينة والتأكيد.")}
                     </p>
                     <div class="tmv3-status">
                         <span>●</span>
@@ -442,6 +776,7 @@ class TreasuryManagementPageV4 {
                     ${this.card(__("الشركات"), data.companies, __("Company"))}
                     ${this.card(__("الخزائن التشغيلية"), data.cash_drawers, __("Cash Drawer"))}
                     ${this.card(__("حسابات النقدية"), data.cash_ledger_accounts, __("Asset Cash Accounts"))}
+                    ${this.card(__("البنوك المسجلة"), data.bank_institutions, __("Bank"))}
                     ${this.card(__("حسابات البنوك"), data.bank_ledger_accounts, __("Bank Ledger Accounts"))}
                     ${this.card(__("Bank Accounts"), data.bank_accounts, __("ERPNext Bank Account"))}
                     ${this.card(__("ماكينات الفيزا"), data.card_terminals, __("Card POS Terminal"))}
@@ -449,6 +784,8 @@ class TreasuryManagementPageV4 {
                 </div>
 
                 ${this.renderDrawers(data.drawers || [])}
+                ${this.renderBanks(data.banks || [])}
+                ${this.renderUnlinkedBankLedgers(data.unlinked_bank_ledgers || [])}
                 ${this.renderWarnings(data.account_warnings || [])}
             </div>
         `);
@@ -541,6 +878,123 @@ class TreasuryManagementPageV4 {
                 </div>
             </div>
         `;
+    }
+
+
+    renderBanks(rows) {
+        if (!rows.length) {
+            return `
+                <div class="tmv3-section">
+                    <h4>${__("البنوك والحسابات البنكية")}</h4>
+                    <div class="tmv3-empty">${__("لا توجد Bank Accounts مسجلة حتى الآن. استخدم زر إضافة بنك وحساب لربط الحسابات الحالية أو إنشاء حساب جديد.")}</div>
+                </div>
+            `;
+        }
+        const body = rows.map((row) => {
+            const balanceClass = Number(row.current_balance || 0) < 0
+                ? "tmv3-balance-negative"
+                : "tmv3-balance-positive";
+            const lastMovement = row.last_movement || {};
+            return `
+                <tr>
+                    <td><a href="/app/bank/${encodeURIComponent(row.bank || "")}">${this.esc(row.bank || "-")}</a></td>
+                    <td><a href="/app/bank-account/${encodeURIComponent(row.name)}">${this.esc(row.account_name || row.name)}</a></td>
+                    <td>${this.esc(row.company || "-")}</td>
+                    <td>${this.esc(row.account || "-")}</td>
+                    <td class="${balanceClass}">${this.formatMoney(row.current_balance, row.account_currency)}</td>
+                    <td>${this.esc(row.bank_account_no || "-")}</td>
+                    <td>${this.esc(row.iban || "-")}</td>
+                    <td>${this.esc(lastMovement.posting_date || "-")}</td>
+                    <td><span class="tmv3-badge ${row.disabled ? "tmv3-badge-off" : "tmv3-badge-on"}">${row.disabled ? __("Disabled") : __("Active")}</span></td>
+                    <td><button class="tmv3-action-btn tmv3-bank-activity" data-bank-account="${this.esc(row.name)}">${__("الرصيد والحركات")}</button></td>
+                </tr>
+            `;
+        }).join("");
+        return `
+            <div class="tmv3-section">
+                <h4>${__("البنوك والحسابات البنكية")}</h4>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table">
+                        <thead><tr>
+                            <th>${__("البنك")}</th><th>${__("Bank Account")}</th><th>${__("الشركة")}</th>
+                            <th>${__("حساب الأستاذ")}</th><th>${__("الرصيد")}</th><th>${__("رقم الحساب")}</th>
+                            <th>${__("IBAN")}</th><th>${__("آخر حركة")}</th><th>${__("الحالة")}</th><th>${__("إجراءات")}</th>
+                        </tr></thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    renderUnlinkedBankLedgers(rows) {
+        if (!rows.length) return "";
+        return `
+            <div class="tmv3-section tmv3-warning">
+                <h4>${__("حسابات Bank غير مربوطة بـ Bank Account")}</h4>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table">
+                        <thead><tr><th>${__("الحساب")}</th><th>${__("الشركة")}</th><th>${__("الحساب الأب")}</th><th>${__("الرصيد")}</th></tr></thead>
+                        <tbody>${rows.map((row) => `
+                            <tr>
+                                <td><a href="/app/account/${encodeURIComponent(row.name)}">${this.esc(row.name)}</a></td>
+                                <td>${this.esc(row.company || "-")}</td>
+                                <td>${this.esc(row.parent_account || "-")}</td>
+                                <td>${this.formatMoney(row.current_balance, row.account_currency)}</td>
+                            </tr>
+                        `).join("")}</tbody>
+                    </table>
+                </div>
+                <div class="tmv3-preview-note">${__("هذه الحسابات موجودة في Chart of Accounts لكنها غير مربوطة بسجل Bank وBank Account. يمكن ربطها بدون إنشاء حساب محاسبي مكرر.")}</div>
+            </div>
+        `;
+    }
+
+    bindBankActions() {
+        this.$main.find(".tmv3-bank-activity")
+            .off("click")
+            .on("click", (event) => {
+                this.openBankActivity($(event.currentTarget).attr("data-bank-account"));
+            });
+    }
+
+    async openBankActivity(bankAccount) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_bank_account_activity",
+            args: { bank_account_name: bankAccount, limit: 20 },
+            freeze: true,
+            freeze_message: __("جاري تحميل رصيد وحركات الحساب البنكي..."),
+        });
+        const data = response.message || {};
+        const rows = (data.movements || []).length
+            ? data.movements.map((row) => `
+                <tr><td>${this.esc(row.posting_date || "-")}</td><td>${this.esc(row.voucher_type || "-")}</td>
+                <td>${this.esc(row.voucher_no || "-")}</td><td>${this.formatMoney(row.debit, data.account_currency)}</td>
+                <td>${this.formatMoney(row.credit, data.account_currency)}</td><td>${this.esc(row.against || "-")}</td></tr>
+            `).join("")
+            : `<tr><td colspan="6" class="tmv3-empty">${__("لا توجد حركات دفتر أستاذ حتى الآن.")}</td></tr>`;
+        const dialog = new frappe.ui.Dialog({
+            title: `${__("رصيد وحركات الحساب البنكي")}: ${this.esc(data.account_name || data.bank_account || "")}`,
+            size: "extra-large",
+            fields: [{
+                fieldtype: "HTML",
+                options: `
+                    <div style="direction: rtl; text-align: right;">
+                        <div class="tmv3-preview" style="margin-bottom:14px;">
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("البنك")}</div><div class="tmv3-preview-value">${this.esc(data.bank || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("حساب الأستاذ")}</div><div class="tmv3-preview-value">${this.esc(data.ledger_account || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الرصيد الحالي")}</div><div class="tmv3-preview-value">${this.formatMoney(data.current_balance, data.account_currency)}</div></div>
+                        </div>
+                        <div class="tmv3-table-wrap"><table class="tmv3-activity-table">
+                            <thead><tr><th>${__("التاريخ")}</th><th>${__("نوع المستند")}</th><th>${__("المستند")}</th><th>${__("مدين")}</th><th>${__("دائن")}</th><th>${__("الحساب المقابل")}</th></tr></thead>
+                            <tbody>${rows}</tbody>
+                        </table></div>
+                    </div>
+                `,
+            }],
+        });
+        dialog.show();
     }
 
     bindDrawerActions() {

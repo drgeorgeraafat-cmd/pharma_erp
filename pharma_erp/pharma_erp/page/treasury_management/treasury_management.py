@@ -18,6 +18,9 @@ def get_overview():
     drawers = _get_cash_drawers()
     cash_accounts = _get_operational_cash_accounts()
     account_warnings = _get_cash_account_warnings()
+    banks = _get_bank_accounts()
+    bank_ledger_accounts = _get_bank_ledger_accounts()
+    unlinked_bank_ledgers = _get_unlinked_bank_ledgers(bank_ledger_accounts, banks)
 
     return {
         "ok": True,
@@ -26,15 +29,20 @@ def get_overview():
         "companies": frappe.db.count("Company"),
         "cash_drawers": len(drawers),
         "cash_ledger_accounts": len(cash_accounts),
-        "bank_accounts": frappe.db.count("Bank Account"),
-        "bank_ledger_accounts": _count_leaf_accounts("Bank"),
+        "bank_institutions": frappe.db.count("Bank"),
+        "bank_accounts": len(banks),
+        "bank_ledger_accounts": len(bank_ledger_accounts),
         "card_terminals": _safe_count("Card POS Terminal"),
         "clearing_setups": _safe_count("Payment Method Clearing Setup"),
         "drawers": drawers,
         "cash_accounts": cash_accounts,
         "account_warnings": account_warnings,
+        "banks": banks,
+        "bank_ledger_accounts_list": bank_ledger_accounts,
+        "unlinked_bank_ledgers": unlinked_bank_ledgers,
         "can_create_cash_drawer": _can_create_cash_drawer(),
         "can_manage_cash_drawer": _can_create_cash_drawer(),
+        "can_create_bank": _can_create_cash_drawer(),
     }
 
 
@@ -245,6 +253,531 @@ def set_cash_drawer_enabled(drawer_name, enabled):
         "message": _("Cash Drawer status was updated successfully."),
     }
 
+
+
+@frappe.whitelist()
+def get_bank_creation_options(company=None):
+    """Return safe defaults for registering a bank and its accounting records."""
+    _validate_create_access()
+
+    company = _resolve_company(company)
+    currency = frappe.db.get_value("Company", company, "default_currency") or ""
+    bank_parents = _bank_parent_accounts(company)
+    clearing_parents = _clearing_parent_accounts(company)
+    fee_parents = _fee_parent_accounts(company)
+
+    return {
+        "company": company,
+        "account_currency": currency,
+        "default_bank_parent_account": bank_parents[0]["name"] if bank_parents else "",
+        "default_clearing_parent_account": clearing_parents[0]["name"] if clearing_parents else "",
+        "default_fee_parent_account": fee_parents[0]["name"] if fee_parents else "",
+        "unlinked_bank_accounts": _get_unlinked_bank_ledgers(),
+    }
+
+
+@frappe.whitelist()
+def preview_bank_setup(
+    bank_name,
+    company,
+    bank_account_name,
+    ledger_mode="Create New Account",
+    existing_ledger_account=None,
+    ledger_account_name=None,
+    bank_parent_account=None,
+    swift_number=None,
+    website=None,
+    bank_account_no=None,
+    iban=None,
+    branch_code=None,
+    create_card_clearing=1,
+    card_clearing_name=None,
+    create_instapay_clearing=0,
+    instapay_clearing_name=None,
+    clearing_parent_account=None,
+    create_fee_account=1,
+    fee_account_name=None,
+    fee_parent_account=None,
+    **kwargs,
+):
+    """Validate and preview a bank setup without writing any records."""
+    _validate_create_access()
+    return _prepare_bank_setup_payload(
+        bank_name=bank_name,
+        company=company,
+        bank_account_name=bank_account_name,
+        ledger_mode=ledger_mode,
+        existing_ledger_account=existing_ledger_account,
+        ledger_account_name=ledger_account_name,
+        bank_parent_account=bank_parent_account,
+        swift_number=swift_number,
+        website=website,
+        bank_account_no=bank_account_no,
+        iban=iban,
+        branch_code=branch_code,
+        create_card_clearing=create_card_clearing,
+        card_clearing_name=card_clearing_name,
+        create_instapay_clearing=create_instapay_clearing,
+        instapay_clearing_name=instapay_clearing_name,
+        clearing_parent_account=clearing_parent_account,
+        create_fee_account=create_fee_account,
+        fee_account_name=fee_account_name,
+        fee_parent_account=fee_parent_account,
+    )
+
+
+@frappe.whitelist()
+def create_bank_setup(
+    bank_name,
+    company,
+    bank_account_name,
+    ledger_mode="Create New Account",
+    existing_ledger_account=None,
+    ledger_account_name=None,
+    bank_parent_account=None,
+    swift_number=None,
+    website=None,
+    bank_account_no=None,
+    iban=None,
+    branch_code=None,
+    create_card_clearing=1,
+    card_clearing_name=None,
+    create_instapay_clearing=0,
+    instapay_clearing_name=None,
+    clearing_parent_account=None,
+    create_fee_account=1,
+    fee_account_name=None,
+    fee_parent_account=None,
+    **kwargs,
+):
+    """Create or reuse the bank master, then create its linked company Bank Account."""
+    _validate_create_access()
+    payload = _prepare_bank_setup_payload(
+        bank_name=bank_name,
+        company=company,
+        bank_account_name=bank_account_name,
+        ledger_mode=ledger_mode,
+        existing_ledger_account=existing_ledger_account,
+        ledger_account_name=ledger_account_name,
+        bank_parent_account=bank_parent_account,
+        swift_number=swift_number,
+        website=website,
+        bank_account_no=bank_account_no,
+        iban=iban,
+        branch_code=branch_code,
+        create_card_clearing=create_card_clearing,
+        card_clearing_name=card_clearing_name,
+        create_instapay_clearing=create_instapay_clearing,
+        instapay_clearing_name=instapay_clearing_name,
+        clearing_parent_account=clearing_parent_account,
+        create_fee_account=create_fee_account,
+        fee_account_name=fee_account_name,
+        fee_parent_account=fee_parent_account,
+    )
+
+    if payload["bank_master_action"] == "create":
+        bank = frappe.new_doc("Bank")
+        bank.bank_name = payload["bank_name"]
+        bank.swift_number = payload["swift_number"] or None
+        bank.website = payload["website"] or None
+        bank.flags.ignore_permissions = True
+        bank.insert(ignore_permissions=True)
+        bank_name_value = bank.name
+    else:
+        bank_name_value = payload["bank_name"]
+
+    if payload["ledger_account"]["action"] == "create":
+        ledger_account = _create_account_from_plan(payload["ledger_account"])
+    else:
+        ledger_account = payload["ledger_account"]["document_name"]
+
+    bank_account = frappe.new_doc("Bank Account")
+    bank_account.account_name = payload["bank_account_name"]
+    bank_account.bank = bank_name_value
+    bank_account.account = ledger_account
+    bank_account.company = payload["company"]
+    bank_account.is_company_account = 1
+    bank_account.disabled = 0
+    bank_account.bank_account_no = payload["bank_account_no"] or None
+    bank_account.iban = payload["iban"] or None
+    bank_account.branch_code = payload["branch_code"] or None
+    bank_account.flags.ignore_permissions = True
+    bank_account.insert(ignore_permissions=True)
+
+    created_accounts = {"bank_ledger_account": ledger_account}
+    for key in ("card_clearing_account", "instapay_clearing_account", "fee_account"):
+        plan = payload.get(key)
+        if not plan:
+            continue
+        created_accounts[key] = (
+            _create_account_from_plan(plan)
+            if plan["action"] == "create"
+            else plan["document_name"]
+        )
+
+    bank_account.add_comment(
+        "Comment",
+        _("Created from Treasury Management and linked to ledger account {0}.").format(
+            ledger_account
+        ),
+    )
+
+    return {
+        "ok": True,
+        "bank": bank_name_value,
+        "bank_account": bank_account.name,
+        "ledger_account": ledger_account,
+        "accounts": created_accounts,
+        "message": _("Bank setup was created successfully."),
+    }
+
+
+@frappe.whitelist()
+def get_bank_account_activity(bank_account_name, limit=20):
+    """Return balance and latest ledger movements for an ERPNext Bank Account."""
+    _validate_access()
+
+    bank_account_name = str(bank_account_name or "").strip()
+    if not bank_account_name or not frappe.db.exists("Bank Account", bank_account_name):
+        frappe.throw(_("Bank Account was not found."))
+
+    bank_account = frappe.get_doc("Bank Account", bank_account_name)
+    if not bank_account.account:
+        frappe.throw(_("The Bank Account is not linked to a company ledger account."))
+
+    account = _validate_company_account(
+        bank_account.account,
+        bank_account.company,
+        expected_root="Asset",
+        expected_type="Bank",
+        label=_("Bank Ledger Account"),
+    )
+    limit = max(1, min(cint(limit) or 20, 100))
+    movements = frappe.get_all(
+        "GL Entry",
+        filters={"account": bank_account.account, "is_cancelled": 0},
+        fields=[
+            "name",
+            "posting_date",
+            "creation",
+            "voucher_type",
+            "voucher_no",
+            "debit",
+            "credit",
+            "against",
+            "remarks",
+        ],
+        order_by="posting_date desc, creation desc",
+        limit_page_length=limit,
+    )
+    for row in movements:
+        row["debit"] = flt(row.get("debit"))
+        row["credit"] = flt(row.get("credit"))
+        row["net_movement"] = flt(row["debit"] - row["credit"])
+
+    return {
+        "bank_account": bank_account.name,
+        "account_name": bank_account.account_name,
+        "bank": bank_account.bank,
+        "company": bank_account.company,
+        "ledger_account": bank_account.account,
+        "account_currency": account.get("account_currency") or "",
+        "current_balance": _account_balance(bank_account.account, bank_account.company),
+        "disabled": cint(bank_account.disabled),
+        "bank_account_no": bank_account.bank_account_no or "",
+        "iban": bank_account.iban or "",
+        "movements": movements,
+    }
+
+
+def _prepare_bank_setup_payload(
+    bank_name,
+    company,
+    bank_account_name,
+    ledger_mode="Create New Account",
+    existing_ledger_account=None,
+    ledger_account_name=None,
+    bank_parent_account=None,
+    swift_number=None,
+    website=None,
+    bank_account_no=None,
+    iban=None,
+    branch_code=None,
+    create_card_clearing=1,
+    card_clearing_name=None,
+    create_instapay_clearing=0,
+    instapay_clearing_name=None,
+    clearing_parent_account=None,
+    create_fee_account=1,
+    fee_account_name=None,
+    fee_parent_account=None,
+):
+    bank_name = str(bank_name or "").strip()
+    company = _resolve_company(company)
+    bank_account_name = str(bank_account_name or "").strip()
+    ledger_mode = str(ledger_mode or "Create New Account").strip()
+    swift_number = str(swift_number or "").strip()
+    website = str(website or "").strip()
+    bank_account_no = str(bank_account_no or "").strip()
+    iban = str(iban or "").strip().replace(" ", "").upper()
+    branch_code = str(branch_code or "").strip()
+    account_currency = frappe.db.get_value("Company", company, "default_currency") or ""
+
+    if not bank_name:
+        frappe.throw(_("Bank Name is required."))
+    if not bank_account_name:
+        frappe.throw(_("Bank Account Name is required."))
+
+    if frappe.db.exists("Bank Account", {"company": company, "account_name": bank_account_name}):
+        frappe.throw(_("A Bank Account with this name already exists for the company."))
+    if bank_account_no and frappe.db.exists(
+        "Bank Account", {"bank": bank_name, "bank_account_no": bank_account_no}
+    ):
+        frappe.throw(_("This bank account number is already registered."))
+    if iban and frappe.db.exists("Bank Account", {"iban": iban}):
+        frappe.throw(_("This IBAN is already registered."))
+
+    bank_master_action = "reuse" if frappe.db.exists("Bank", bank_name) else "create"
+
+    use_existing = ledger_mode.lower().startswith("use") or ledger_mode.lower() == "existing"
+    if use_existing:
+        existing_ledger_account = str(existing_ledger_account or "").strip()
+        if not existing_ledger_account:
+            frappe.throw(_("Select an existing Bank ledger account."))
+        account = _validate_company_account(
+            existing_ledger_account,
+            company,
+            expected_root="Asset",
+            expected_type="Bank",
+            label=_("Bank Ledger Account"),
+        )
+        linked = frappe.db.get_value("Bank Account", {"account": existing_ledger_account}, "name")
+        if linked:
+            frappe.throw(
+                _("This ledger account is already linked to Bank Account {0}.").format(linked)
+            )
+        ledger_plan = {
+            "action": "reuse",
+            "document_name": account.name,
+            "account_name": account.account_name,
+            "company": company,
+            "parent_account": account.parent_account,
+            "account_currency": account.account_currency or account_currency,
+            "root_type": account.root_type,
+            "account_type": account.account_type,
+        }
+    else:
+        ledger_account_name = str(ledger_account_name or "").strip()
+        bank_parent_account = str(bank_parent_account or "").strip()
+        if not ledger_account_name:
+            frappe.throw(_("Bank Ledger Account Name is required."))
+        if not bank_parent_account:
+            frappe.throw(_("Bank Parent Account is required."))
+        duplicate = frappe.db.get_value(
+            "Account", {"company": company, "account_name": ledger_account_name}, "name"
+        )
+        if duplicate:
+            frappe.throw(
+                _("Account {0} already exists. Choose Use Existing Account instead.").format(
+                    duplicate
+                )
+            )
+        _validate_parent_account(bank_parent_account, company, "Asset")
+        ledger_plan = {
+            "action": "create",
+            "document_name": "",
+            "account_name": ledger_account_name,
+            "company": company,
+            "parent_account": bank_parent_account,
+            "account_currency": account_currency,
+            "root_type": "Asset",
+            "account_type": "Bank",
+        }
+
+    payload = {
+        "bank_name": bank_name,
+        "bank_master_action": bank_master_action,
+        "swift_number": swift_number,
+        "website": website,
+        "company": company,
+        "account_currency": account_currency,
+        "bank_account_name": bank_account_name,
+        "bank_account_no": bank_account_no,
+        "iban": iban,
+        "branch_code": branch_code,
+        "ledger_mode": "existing" if use_existing else "create",
+        "ledger_account": ledger_plan,
+    }
+
+    create_card_clearing = cint(create_card_clearing)
+    create_instapay_clearing = cint(create_instapay_clearing)
+    create_fee_account = cint(create_fee_account)
+
+    if create_card_clearing or create_instapay_clearing:
+        clearing_parent_account = str(clearing_parent_account or "").strip()
+        if not clearing_parent_account:
+            frappe.throw(_("Clearing Parent Account is required."))
+        _validate_parent_account(clearing_parent_account, company, "Asset")
+
+    if create_card_clearing:
+        payload["card_clearing_account"] = _plan_reusable_account(
+            card_clearing_name or f"{bank_name} Card Clearing",
+            company,
+            clearing_parent_account,
+            account_currency,
+            root_type="Asset",
+            account_type="",
+        )
+
+    if create_instapay_clearing:
+        payload["instapay_clearing_account"] = _plan_reusable_account(
+            instapay_clearing_name or f"{bank_name} InstaPay Clearing",
+            company,
+            clearing_parent_account,
+            account_currency,
+            root_type="Asset",
+            account_type="",
+        )
+
+    if create_fee_account:
+        fee_parent_account = str(fee_parent_account or "").strip()
+        if not fee_parent_account:
+            frappe.throw(_("Fee Parent Account is required."))
+        _validate_parent_account(fee_parent_account, company, "Expense")
+        payload["fee_account"] = _plan_reusable_account(
+            fee_account_name or f"{bank_name} Bank Charges",
+            company,
+            fee_parent_account,
+            account_currency,
+            root_type="Expense",
+            account_type="",
+        )
+
+    return payload
+
+
+def _plan_reusable_account(
+    account_name,
+    company,
+    parent_account,
+    account_currency,
+    root_type,
+    account_type="",
+):
+    account_name = str(account_name or "").strip()
+    if not account_name:
+        frappe.throw(_("Account Name is required."))
+
+    existing = frappe.db.get_value(
+        "Account", {"company": company, "account_name": account_name}, "name"
+    )
+    if existing:
+        account = _validate_company_account(
+            existing,
+            company,
+            expected_root=root_type,
+            expected_type=None,
+            label=_("Account"),
+        )
+        return {
+            "action": "reuse",
+            "document_name": account.name,
+            "account_name": account.account_name,
+            "company": company,
+            "parent_account": account.parent_account,
+            "account_currency": account.account_currency or account_currency,
+            "root_type": account.root_type,
+            "account_type": account.account_type or "",
+        }
+
+    return {
+        "action": "create",
+        "document_name": "",
+        "account_name": account_name,
+        "company": company,
+        "parent_account": parent_account,
+        "account_currency": account_currency,
+        "root_type": root_type,
+        "account_type": account_type,
+    }
+
+
+def _create_account_from_plan(plan):
+    account = frappe.new_doc("Account")
+    account.account_name = plan["account_name"]
+    account.company = plan["company"]
+    account.parent_account = plan["parent_account"]
+    account.is_group = 0
+    account.account_type = plan.get("account_type") or ""
+    account.account_currency = plan.get("account_currency") or ""
+    account.flags.ignore_permissions = True
+    account.insert(ignore_permissions=True)
+    return account.name
+
+
+def _validate_parent_account(account_name, company, root_type):
+    account = frappe.db.get_value(
+        "Account",
+        account_name,
+        ["name", "company", "is_group", "disabled", "root_type"],
+        as_dict=True,
+    )
+    if not account:
+        frappe.throw(_("Parent Account was not found."))
+    if account.company != company:
+        frappe.throw(_("Parent Account belongs to another company."))
+    if not cint(account.is_group):
+        frappe.throw(_("Parent Account must be a group account."))
+    if cint(account.disabled):
+        frappe.throw(_("Parent Account is disabled."))
+    if account.root_type != root_type:
+        frappe.throw(
+            _("Parent Account must be under the {0} root.").format(root_type)
+        )
+    return account
+
+
+def _validate_company_account(
+    account_name,
+    company,
+    expected_root=None,
+    expected_type=None,
+    label=None,
+):
+    account = frappe.db.get_value(
+        "Account",
+        account_name,
+        [
+            "name",
+            "account_name",
+            "company",
+            "parent_account",
+            "is_group",
+            "disabled",
+            "root_type",
+            "account_type",
+            "account_currency",
+        ],
+        as_dict=True,
+    )
+    label = label or _("Account")
+    if not account:
+        frappe.throw(_("{0} was not found.").format(label))
+    if account.company != company:
+        frappe.throw(_("{0} belongs to another company.").format(label))
+    if cint(account.is_group):
+        frappe.throw(_("{0} cannot be a group account.").format(label))
+    if cint(account.disabled):
+        frappe.throw(_("{0} is disabled.").format(label))
+    if expected_root and account.root_type != expected_root:
+        frappe.throw(
+            _("{0} must be under the {1} root.").format(label, expected_root)
+        )
+    if expected_type and account.account_type != expected_type:
+        frappe.throw(
+            _("{0} must have Account Type {1}.").format(label, expected_type)
+        )
+    return account
 
 def _prepare_cash_drawer_payload(
     drawer_name,
@@ -639,6 +1172,165 @@ def _get_cash_account_warnings():
         limit_page_length=100,
     )
 
+
+
+
+def _get_bank_accounts():
+    if not frappe.db.exists("DocType", "Bank Account"):
+        return []
+
+    rows = frappe.get_all(
+        "Bank Account",
+        fields=[
+            "name",
+            "account_name",
+            "account",
+            "bank",
+            "company",
+            "disabled",
+            "is_default",
+            "bank_account_no",
+            "iban",
+            "branch_code",
+        ],
+        order_by="company asc, bank asc, account_name asc",
+        limit_page_length=500,
+    )
+    for row in rows:
+        row["disabled"] = cint(row.get("disabled"))
+        row["is_default"] = cint(row.get("is_default"))
+        row["current_balance"] = 0
+        row["account_currency"] = ""
+        row["last_movement"] = {}
+        if row.get("account"):
+            account = frappe.db.get_value(
+                "Account",
+                row.account,
+                ["account_currency", "disabled", "account_type", "root_type"],
+                as_dict=True,
+            ) or {}
+            row["account_currency"] = account.get("account_currency") or ""
+            row["ledger_disabled"] = cint(account.get("disabled"))
+            row["account_type"] = account.get("account_type") or ""
+            row["root_type"] = account.get("root_type") or ""
+            row["current_balance"] = _account_balance(row.account, row.company)
+            movement = frappe.get_all(
+                "GL Entry",
+                filters={"account": row.account, "is_cancelled": 0},
+                fields=["posting_date", "creation", "voucher_type", "voucher_no"],
+                order_by="posting_date desc, creation desc",
+                limit_page_length=1,
+            )
+            row["last_movement"] = movement[0] if movement else {}
+        if row.get("bank"):
+            bank = frappe.db.get_value(
+                "Bank", row.bank, ["swift_number", "website"], as_dict=True
+            ) or {}
+            row["swift_number"] = bank.get("swift_number") or ""
+            row["website"] = bank.get("website") or ""
+    return rows
+
+
+def _get_bank_ledger_accounts():
+    return frappe.get_all(
+        "Account",
+        filters={"account_type": "Bank", "is_group": 0, "disabled": 0},
+        fields=[
+            "name",
+            "account_name",
+            "company",
+            "parent_account",
+            "account_currency",
+            "root_type",
+            "disabled",
+        ],
+        order_by="company asc, account_name asc",
+        limit_page_length=500,
+    )
+
+
+def _get_unlinked_bank_ledgers(bank_ledgers=None, bank_accounts=None):
+    bank_ledgers = bank_ledgers if bank_ledgers is not None else _get_bank_ledger_accounts()
+    bank_accounts = bank_accounts if bank_accounts is not None else _get_bank_accounts()
+    linked = {str(row.get("account") or "") for row in bank_accounts}
+    rows = []
+    for row in bank_ledgers:
+        if row.name in linked:
+            continue
+        item = dict(row)
+        item["current_balance"] = _account_balance(row.name, row.company)
+        rows.append(item)
+    return rows
+
+
+def _bank_parent_accounts(company):
+    rows = frappe.get_all(
+        "Account",
+        filters={
+            "company": company,
+            "root_type": "Asset",
+            "is_group": 1,
+            "disabled": 0,
+        },
+        fields=["name", "account_name", "account_type", "parent_account"],
+        order_by="lft asc",
+        limit_page_length=500,
+    )
+    rows.sort(
+        key=lambda row: (
+            0 if str(row.get("account_name") or "").lower() == "bank accounts" else
+            1 if str(row.get("account_type") or "").lower() == "bank" else
+            2 if "bank" in str(row.get("account_name") or "").lower() else 3,
+            row.get("name") or "",
+        )
+    )
+    return rows
+
+
+def _clearing_parent_accounts(company):
+    rows = frappe.get_all(
+        "Account",
+        filters={
+            "company": company,
+            "root_type": "Asset",
+            "is_group": 1,
+            "disabled": 0,
+        },
+        fields=["name", "account_name", "parent_account"],
+        order_by="lft asc",
+        limit_page_length=500,
+    )
+    rows.sort(
+        key=lambda row: (
+            0 if "payment clearing" in str(row.get("account_name") or "").lower() else
+            1 if str(row.get("account_name") or "").lower() == "current assets" else 2,
+            row.get("name") or "",
+        )
+    )
+    return rows
+
+
+def _fee_parent_accounts(company):
+    rows = frappe.get_all(
+        "Account",
+        filters={
+            "company": company,
+            "root_type": "Expense",
+            "is_group": 1,
+            "disabled": 0,
+        },
+        fields=["name", "account_name", "parent_account"],
+        order_by="lft asc",
+        limit_page_length=500,
+    )
+    rows.sort(
+        key=lambda row: (
+            0 if "indirect expense" in str(row.get("account_name") or "").lower() else
+            1 if str(row.get("account_name") or "").lower() == "expenses" else 2,
+            row.get("name") or "",
+        )
+    )
+    return rows
 
 def _count_leaf_accounts(account_type):
     return frappe.db.count(
