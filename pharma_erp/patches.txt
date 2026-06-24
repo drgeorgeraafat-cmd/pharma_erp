@@ -9,3 +9,4 @@ pharma_erp.patches.v1_0.remove_legacy_pharmacy_shift_page
 pharma_erp.patches.v1_0.remove_disabled_legacy_scripts
 pharma_erp.patches.v1_0.migrate_employee_financial_scripts_to_app
 pharma_erp.patches.v1_0.migrate_delivery_settlement_handover_scripts_to_app
+pharma_erp.patches.v1_0.migrate_card_shift_financial_scripts_to_app
