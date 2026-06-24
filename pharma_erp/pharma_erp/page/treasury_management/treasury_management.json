@@ -1,0 +1,22 @@
+{
+ "content": null,
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "octicon octicon-credit-card",
+ "module": "Pharma Erp",
+ "name": "treasury-management",
+ "page_name": "treasury-management",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Accounts Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Payment, Banks & Treasury Management"
+}
