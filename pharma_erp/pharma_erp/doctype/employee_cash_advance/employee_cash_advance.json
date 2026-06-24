@@ -1,0 +1,323 @@
+{
+ "actions": [],
+ "autoname": "format:ECA-{YYYY}-{#####}",
+ "creation": "2026-06-20 14:25:36.202240",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_vbgb",
+  "amended_from",
+  "section_break_rxuy",
+  "company",
+  "employee",
+  "employee_name",
+  "shift_reference",
+  "advance_date",
+  "currency",
+  "accounts_section",
+  "cash_account",
+  "employee_advance_account",
+  "journal_entry",
+  "advance_amount_section",
+  "advance_amount",
+  "recovered_amount",
+  "outstanding_amount",
+  "purpose",
+  "recovery_details_section",
+  "recovery_method",
+  "payroll_date",
+  "number_of_installments",
+  "installment_amount",
+  "status",
+  "column_break_ebdb",
+  "approved_by",
+  "approved_at",
+  "disbursed_by",
+  "disbursed_at",
+  "notes",
+  "recovery_reference_section",
+  "recovery_reference_doctype",
+  "recovery_reference",
+  "section_break_pnnp",
+  "payroll_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_vbgb",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Employee Cash Advance",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "advance_amount_section",
+   "fieldtype": "Section Break",
+   "label": "Advance Amount"
+  },
+  {
+   "fieldname": "advance_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Advance Amount",
+   "options": "currency",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "recovered_amount",
+   "fieldtype": "Currency",
+   "label": "Recovered Amount",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "outstanding_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Outstanding Amount",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "purpose",
+   "fieldtype": "Small Text",
+   "label": "Purpose",
+   "reqd": 1
+  },
+  {
+   "fieldname": "recovery_details_section",
+   "fieldtype": "Section Break",
+   "label": "Recovery Details"
+  },
+  {
+   "fieldname": "recovery_method",
+   "fieldtype": "Select",
+   "label": "Recovery Method",
+   "options": "Salary Deduction\nCash Repayment\nMultiple Installments",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.recovery_method==\"Salary Deduction\" || doc.recovery_method==\"Multiple Installments\"",
+   "fieldname": "payroll_date",
+   "fieldtype": "Date",
+   "label": "Payroll Date"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.recovery_method==\"Multiple Installments\"",
+   "fieldname": "number_of_installments",
+   "fieldtype": "Int",
+   "label": "Number of Installments"
+  },
+  {
+   "fieldname": "installment_amount",
+   "fieldtype": "Currency",
+   "label": "Installment Amount",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "default": "Pending Disbursement",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Pending Disbursement\nDisbursed\nPartially Recovered\nRecovered\nWaived",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "label": "Approved By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_at",
+   "fieldtype": "Datetime",
+   "label": "Approved At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "disbursed_by",
+   "fieldtype": "Link",
+   "label": "Disbursed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "disbursed_at",
+   "fieldtype": "Datetime",
+   "label": "Disbursed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "column_break_ebdb",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "recovery_reference_section",
+   "fieldtype": "Section Break",
+   "label": "Recovery Reference"
+  },
+  {
+   "fieldname": "recovery_reference_doctype",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Recovery Reference Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "recovery_reference",
+   "fieldtype": "Dynamic Link",
+   "label": "Recovery Reference",
+   "no_copy": 1,
+   "options": "recovery_reference_doctype",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_rxuy",
+   "fieldtype": "Section Break",
+   "label": "General Information"
+  },
+  {
+   "default": "Cure",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employee",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "label": "Employee Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "shift_reference",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Shift Reference",
+   "options": "Pharmacy Shift Closing",
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "advance_date",
+   "fieldtype": "Date",
+   "label": "Advance Date",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "company.default_currency",
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "accounts_section",
+   "fieldtype": "Section Break",
+   "label": "Accounts"
+  },
+  {
+   "default": "Cashier Till - C",
+   "fieldname": "cash_account",
+   "fieldtype": "Link",
+   "label": "Cash Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "default": "Employee Advances - C",
+   "fieldname": "employee_advance_account",
+   "fieldtype": "Link",
+   "label": "Employee Advance Account",
+   "options": "Account",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "label": "Journal Entry",
+   "no_copy": 1,
+   "options": "Journal Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_pnnp",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "Not Scheduled",
+   "depends_on": "eval:doc.recovery_method==\"Salary Deduction\" || doc.recovery_method==\"Multiple Installments\"",
+   "fieldname": "payroll_status",
+   "fieldtype": "Select",
+   "label": "Payroll Status",
+   "options": "Not Applicable\nNot Scheduled\nScheduled\nPartially Deducted\nFully Deducted",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-06-20 16:18:37.418102",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Employee Cash Advance",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "employee,employee_name,shift_reference,status",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name",
+ "track_changes": 1
+}

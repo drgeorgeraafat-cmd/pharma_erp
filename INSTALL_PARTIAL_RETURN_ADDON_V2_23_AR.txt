@@ -1,0 +1,16 @@
+تحديث المرتجع الجزئي لفاتورة الأصل + فواتير الإضافة V2.23
+
+1) فك الملفات من داخل مجلد التطبيق:
+   cd ~/pharma-bench/apps/pharma_erp
+   tar -xzf "/mnt/c/Users/drmar/Downloads/Compressed/delivery_partial_return_addon_v2_23.tar.gz"
+
+2) تشغيل تحديث حقول Delivery Return Item:
+   cd ~/pharma-bench
+   bench --site cure.local execute pharma_erp.pharma_erp.install_delivery_partial_return_v2_23.install
+
+3) إعادة البناء وتنظيف الكاش:
+   bench build --app pharma_erp
+   bench --site cure.local clear-cache
+   bench restart
+
+4) افتح Delivery Management و Pharmacy POS ثم Ctrl + Shift + R.

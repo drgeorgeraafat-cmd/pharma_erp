@@ -5,3 +5,29 @@
 tags
 node_modules
 __pycache__
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local backup and temporary files
+*.bak
+*.backup
+*.tmp
+*~
+# Editor files
+.vscode/
+.idea/
+# Node dependencies and build caches
+node_modules/
+.yarn/
+.cache/
+# Local archives and database backups
+*.tar
+*.tar.gz
+*.zip
+*.sql
+*.sql.gz
+# Frappe local/runtime files
+logs/
+sites/

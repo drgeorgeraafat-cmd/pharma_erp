@@ -1,0 +1,27 @@
+{
+ "content": null,
+ "creation": "2026-06-16 17:29:37.349304",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "truck",
+ "idx": 0,
+ "modified": "2026-06-16 17:29:37.349304",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "my-deliveries",
+ "owner": "Administrator",
+ "page_name": "my-deliveries",
+ "roles": [
+  {
+   "role": "Delivery"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "My Deliveries"
+}

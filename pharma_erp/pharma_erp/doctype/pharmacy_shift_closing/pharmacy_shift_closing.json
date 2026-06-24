@@ -9,6 +9,7 @@
   "section_break_jpgc",
   "status",
   "cashier",
+  "company",
   "column_break_legd",
   "start_time",
   "end_time",
@@ -28,7 +29,11 @@
   "amended_from",
   "section_break_jyxn",
   "payment_summary",
-  "detailed_report"
+  "detailed_report",
+  "cash_account",
+  "difference_reason",
+  "closed_by",
+  "closed_at"
  ],
  "fields": [
   {
@@ -48,7 +53,8 @@
    "fieldname": "cashier",
    "fieldtype": "Link",
    "label": "Cashier",
-   "options": "User"
+   "options": "User",
+   "reqd": 1
   },
   {
    "fieldname": "start_time",
@@ -161,14 +167,50 @@
   {
    "fieldname": "total_home_delivery_sales",
    "fieldtype": "Currency",
-   "label": "Total Home Delivery Sales"
+   "label": "Total Home Delivery Sales",
+   "read_only": 1
+  },
+  {
+   "default": "Cure",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "default": "Cashier Till - C",
+   "fieldname": "cash_account",
+   "fieldtype": "Link",
+   "label": "Cash Account",
+   "options": "Account",
+   "read_only": 1
+  },
+  {
+   "fieldname": "difference_reason",
+   "fieldtype": "Small Text",
+   "label": "Difference Reason"
+  },
+  {
+   "fieldname": "closed_by",
+   "fieldtype": "Link",
+   "label": "Closed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "closed_at",
+   "fieldtype": "Datetime",
+   "label": "Closed At",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-06-05 10:19:00.925700",
+ "modified": "2026-06-20 21:17:33.393833",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Pharmacy Shift Closing",

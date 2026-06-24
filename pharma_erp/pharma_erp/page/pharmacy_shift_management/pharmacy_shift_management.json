@@ -1,0 +1,19 @@
+{
+ "content": null,
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "octicon octicon-credit-card",
+ "module": "Pharma Erp",
+ "name": "pharmacy-shift-management",
+ "page_name": "pharmacy-shift-management",
+ "roles": [
+  {
+   "role": "System Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Pharmacy Shift Management"
+}

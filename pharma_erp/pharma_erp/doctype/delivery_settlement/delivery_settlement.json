@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "DS-.YYYY.-.MM.-.DD.-.####",
  "creation": "2026-06-04 14:58:32.869317",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -9,9 +10,22 @@
   "delivery_boy",
   "shift_reference",
   "pilot_float",
-  "column_break_gwiv",
   "date",
   "total_expected",
+  "settlement_status",
+  "column_break_gwiv",
+  "total_collected_by_driver",
+  "total_handed_over",
+  "remaining_with_driver",
+  "handover_count",
+  "last_handover_at",
+  "final_difference",
+  "column_break_ibmg",
+  "difference_reason",
+  "settled_at",
+  "settled_by",
+  "driver_leaving",
+  "settlement_notes",
   "section_break_reap",
   "invoices",
   "section_break_cgzj",
@@ -29,13 +43,15 @@
    "fieldtype": "Link",
    "label": "Delivery Boy",
    "link_filters": "[\r\n  [\"Designation\", \"Designation\", \"=\", \"Delivery Boy\"]\r\n]",
-   "options": "Employee"
+   "options": "Employee",
+   "reqd": 1
   },
   {
    "fieldname": "shift_reference",
    "fieldtype": "Link",
    "label": "Shift Reference",
-   "options": "Pharmacy Shift Closing"
+   "options": "Pharmacy Shift Closing",
+   "reqd": 1
   },
   {
    "fieldname": "column_break_gwiv",
@@ -74,13 +90,94 @@
    "fieldname": "paid_cash",
    "fieldtype": "Currency",
    "hidden": 1,
-   "label": "Paid Cash"
+   "label": "Total Cash Handed Over",
+   "read_only": 1
   },
   {
    "fieldname": "paid_visa",
    "fieldtype": "Currency",
    "hidden": 1,
-   "label": "Paid Visa"
+   "label": "Total Non-Cash Handed Over",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "pilot_float",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Pilot Float"
+  },
+  {
+   "default": "Open",
+   "fieldname": "settlement_status",
+   "fieldtype": "Select",
+   "label": "Settlement Status",
+   "options": "Open\nPartial Handover\nAwaiting Final Settlement\nSettled\nDisputed\nCancelled",
+   "reqd": 1
+  },
+  {
+   "fieldname": "total_collected_by_driver",
+   "fieldtype": "Currency",
+   "label": "Total Collected by Driver",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_handed_over",
+   "fieldtype": "Currency",
+   "label": "Total Handed Over",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remaining_with_driver",
+   "fieldtype": "Currency",
+   "label": "Remaining With Driver",
+   "read_only": 1
+  },
+  {
+   "fieldname": "handover_count",
+   "fieldtype": "Int",
+   "label": "Handover Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_handover_at",
+   "fieldtype": "Datetime",
+   "label": "Last Handover At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "final_difference",
+   "fieldtype": "Currency",
+   "label": "Final Difference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_ibmg",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "settled_at",
+   "fieldtype": "Datetime",
+   "label": "Settled At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "settled_by",
+   "fieldtype": "Link",
+   "label": "Settled By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "driver_leaving",
+   "fieldtype": "Check",
+   "label": "Driver Leaving"
+  },
+  {
+   "fieldname": "settlement_notes",
+   "fieldtype": "Small Text",
+   "label": "Settlement Notes"
   },
   {
    "fieldname": "amended_from",
@@ -93,21 +190,20 @@
    "search_index": 1
   },
   {
-   "default": "0",
-   "fieldname": "pilot_float",
-   "fieldtype": "Currency",
-   "in_list_view": 1,
-   "label": "Pilot Float"
+   "fieldname": "difference_reason",
+   "fieldtype": "Small Text",
+   "label": "Difference Reason"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-06-05 18:49:03.847339",
+ "modified": "2026-06-20 21:13:58.892283",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Delivery Settlement",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
