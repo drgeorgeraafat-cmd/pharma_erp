@@ -8,10 +8,19 @@
  "page_name": "treasury-management",
  "roles": [
   {
-   "role": "System Manager"
+   "role": "Treasury Viewer"
+  },
+  {
+   "role": "Treasury Operator"
+  },
+  {
+   "role": "Treasury Manager"
   },
   {
    "role": "Accounts Manager"
+  },
+  {
+   "role": "System Manager"
   }
  ],
  "script": null,

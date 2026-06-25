@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV12(page, wrapper);
+    new TreasuryManagementPageV13(page, wrapper);
 };
 
 
-class TreasuryManagementPageV12 {
+class TreasuryManagementPageV13 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -21,8 +21,12 @@ class TreasuryManagementPageV12 {
         this.canCreateBank = false;
         this.canManageCardTerminal = false;
         this.canManagePaymentSetup = false;
+        this.canPrepareSettlement = false;
         this.canExecuteSettlement = false;
         this.canManageInternalTransfer = false;
+        this.canApproveInternalTransfer = false;
+        this.canEmergencySubmitInternalTransfer = false;
+        this.accessProfile = {};
         this.transferAccounts = {};
         this.autoAccountName = "";
         this.autoBankNames = {};
@@ -238,13 +242,17 @@ class TreasuryManagementPageV12 {
             this.canCreateBank = Boolean(data.can_create_bank);
             this.canManageCardTerminal = Boolean(data.can_manage_card_terminal);
             this.canManagePaymentSetup = Boolean(data.can_manage_payment_setup);
+            this.canPrepareSettlement = Boolean(data.can_prepare_settlement);
             this.canExecuteSettlement = Boolean(data.can_execute_settlement);
             this.canManageInternalTransfer = Boolean(data.can_manage_internal_transfer);
+            this.canApproveInternalTransfer = Boolean(data.can_approve_internal_transfer);
+            this.canEmergencySubmitInternalTransfer = Boolean(data.can_emergency_submit_internal_transfer);
+            this.accessProfile = data.access_profile || {};
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
             if (this.$terminalButton) this.$terminalButton.toggle(this.canManageCardTerminal);
             if (this.$paymentSetupButton) this.$paymentSetupButton.toggle(this.canManagePaymentSetup);
-            if (this.$cardSettlementButton) this.$cardSettlementButton.toggle(this.canExecuteSettlement);
+            if (this.$cardSettlementButton) this.$cardSettlementButton.toggle(this.canPrepareSettlement);
             if (this.$internalTransferButton) this.$internalTransferButton.toggle(this.canManageInternalTransfer);
             this.render(data);
             this.bindDrawerActions();
@@ -1489,10 +1497,15 @@ class TreasuryManagementPageV12 {
                     fieldname: "transfer_action",
                     fieldtype: "Select",
                     label: __("إجراء التحويل"),
-                    options: "Create Draft\nSubmit Now",
-                    default: "Submit Now",
+                    options: this.canEmergencySubmitInternalTransfer
+                        ? "Create Draft\nSubmit Now"
+                        : "Create Draft",
+                    default: "Create Draft",
                     reqd: 1,
-                    description: __("Create Draft يحفظ طلبًا للمراجعة، وSubmit Now ينشئ ويعتمد التحويل فورًا."),
+                    read_only: !this.canEmergencySubmitInternalTransfer,
+                    description: this.canEmergencySubmitInternalTransfer
+                        ? __("الحفظ كمسودة هو المسار الطبيعي. Submit Now مخصص لتجاوز الطوارئ بواسطة System Manager ويُسجل في التدقيق.")
+                        : __("سيُحفظ الطلب كمسودة، ويجب أن يعتمده مدير خزينة مختلف عن طالب التحويل."),
                 },
                 { fieldtype: "Section Break", label: __("الحساب المصدر والوجهة") },
                 {
@@ -1708,45 +1721,60 @@ class TreasuryManagementPageV12 {
                 const docstatus = Number(row.docstatus || 0);
                 const badgeClass = docstatus === 1
                     ? "tmv3-badge-on"
-                    : docstatus === 2
-                        ? "tmv3-badge-off"
-                        : "tmv3-badge-off";
-                const submitButton = this.canManageInternalTransfer && docstatus === 0
+                    : "tmv3-badge-off";
+                const canApprove = this.canApproveInternalTransfer
+                    && docstatus === 0
+                    && Boolean(row.can_current_user_approve);
+                const submitButton = canApprove
                     ? `<button class="tmv3-action-btn tmv3-action-success tmv3-transfer-submit" data-payment-entry="${this.esc(row.name)}">${__("اعتماد وتنفيذ")}</button>`
+                    : "";
+                const separationNote = this.canApproveInternalTransfer
+                    && docstatus === 0
+                    && !Boolean(row.can_current_user_approve)
+                    ? `<small class="text-muted">${__("ينتظر مديرًا مختلفًا عن طالب التحويل")}</small>`
+                    : "";
+                const canOpenDocument = this.canManageInternalTransfer || this.canApproveInternalTransfer;
+                const documentLabel = canOpenDocument
+                    ? `<a href="/app/payment-entry/${encodeURIComponent(row.name)}">${this.esc(row.name)}</a>`
+                    : this.esc(row.name);
+                const openButton = canOpenDocument
+                    ? `<a class="tmv3-action-btn" href="/app/payment-entry/${encodeURIComponent(row.name)}">${__("فتح")}</a>`
                     : "";
                 return `
                     <tr>
-                        <td><a href="/app/payment-entry/${encodeURIComponent(row.name)}">${this.esc(row.name)}</a></td>
+                        <td>${documentLabel}</td>
                         <td>${this.esc(row.posting_date || "-")}</td>
                         <td>${this.esc(row.paid_from || "-")}</td>
                         <td>${this.esc(row.paid_to || "-")}</td>
                         <td>${this.formatMoney(row.paid_amount, row.account_currency)}</td>
                         <td>${this.esc(row.reference_no || "-")}</td>
                         <td><span class="tmv3-badge ${badgeClass}">${this.esc(row.display_status || row.status || "-")}</span></td>
-                        <td>${this.esc(row.owner || "-")}</td>
+                        <td>${this.esc(row.requested_by || row.owner || "-")}<br><small>${this.esc(row.requested_at || "-")}</small></td>
+                        <td>${this.esc(row.approved_by || "-")}<br><small>${this.esc(row.approved_at || "-")}</small></td>
                         <td><div class="tmv3-actions">
-                            <a class="tmv3-action-btn" href="/app/payment-entry/${encodeURIComponent(row.name)}">${__("فتح")}</a>
+                            ${openButton}
                             ${submitButton}
-                        </div></td>
+                        </div>${separationNote}</td>
                     </tr>
                 `;
             }).join("")
-            : `<tr><td colspan="9" class="tmv3-empty">${__("لا توجد تحويلات داخلية مسجلة حتى الآن.")}</td></tr>`;
+            : `<tr><td colspan="10" class="tmv3-empty">${__("لا توجد تحويلات داخلية مسجلة حتى الآن.")}</td></tr>`;
 
         return `
             <div class="tmv3-section">
                 <h4>${__("التحويلات بين الخزائن والبنوك")}</h4>
                 <div class="tmv3-table-wrap">
-                    <table class="tmv3-table" style="min-width:1100px;">
+                    <table class="tmv3-table" style="min-width:1450px;">
                         <thead><tr>
                             <th>${__("Payment Entry")}</th><th>${__("التاريخ")}</th>
                             <th>${__("من")}</th><th>${__("إلى")}</th><th>${__("المبلغ")}</th>
-                            <th>${__("المرجع")}</th><th>${__("الحالة")}</th><th>${__("أنشأ بواسطة")}</th><th>${__("إجراءات")}</th>
+                            <th>${__("المرجع")}</th><th>${__("الحالة")}</th>
+                            <th>${__("طلب بواسطة")}</th><th>${__("اعتمد بواسطة")}</th><th>${__("إجراءات")}</th>
                         </tr></thead>
                         <tbody>${body}</tbody>
                     </table>
                 </div>
-                <div class="tmv3-preview-note">${__("التحويل يُسجل كمستند Payment Entry من نوع Internal Transfer. المسودة تمثل طلبًا للمراجعة، والاعتماد هو الذي ينشئ أثر دفتر الأستاذ.")}</div>
+                <div class="tmv3-preview-note">${__("المشغل ينشئ الطلب كمسودة، ولا ينشأ الأثر المحاسبي إلا بعد اعتماد مدير خزينة مختلف. System Manager فقط يملك تجاوز الطوارئ المسجل.")}</div>
             </div>
         `;
     }
@@ -1789,6 +1817,11 @@ class TreasuryManagementPageV12 {
                         ${frappe.utils.escape_html(
                             data.message || __("Page is ready"),
                         )}
+                    </div>
+                    <div class="tmv3-preview-note" style="margin-top:12px;">
+                        <strong>${__("مستوى الصلاحية")}:</strong>
+                        ${this.esc((data.access_profile || {}).role_label || "-")}
+                        — ${this.esc(data.user || "-")}
                     </div>
                 </div>
 
@@ -1863,10 +1896,10 @@ class TreasuryManagementPageV12 {
                         </div>
                         <div class="tmv3-actions">
                             ${route ? `<a class="tmv3-action-btn" href="${route}">${__("فتح")}</a>` : ""}
-                            ${this.canExecuteSettlement && row.doctype === "Shift Payment Reconciliation"
+                            ${this.canPrepareSettlement && row.doctype === "Shift Payment Reconciliation"
                                 ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-reconciliation" data-reconciliation="${this.esc(row.document || "")}">${__("تسوية")}</button>`
                                 : ""}
-                            ${this.canExecuteSettlement && row.doctype === "Card Settlement Batch"
+                            ${this.canPrepareSettlement && row.doctype === "Card Settlement Batch"
                                 ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-card-batch" data-batch="${this.esc(row.document || "")}">${__("تسوية بنكية")}</button>`
                                 : ""}
                         </div>
@@ -1911,7 +1944,7 @@ class TreasuryManagementPageV12 {
                     <td>${this.esc(row.age_days || 0)} ${__("يوم")}</td>
                     <td><span class="tmv3-badge ${row.overdue ? "tmv3-badge-off" : "tmv3-badge-on"}">${row.overdue ? __("متأخرة") : __("معلّقة اليوم")}</span></td>
                     <td>
-                        ${this.canExecuteSettlement
+                        ${this.canPrepareSettlement
                             ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-card-batch" data-batch="${this.esc(row.name || "")}">${__("تسوية بنكية")}</button>`
                             : ""}
                     </td>
@@ -1931,7 +1964,7 @@ class TreasuryManagementPageV12 {
                     <td>${this.esc(row.age_days || 0)} ${__("يوم")}</td>
                     <td><span class="tmv3-badge ${row.overdue ? "tmv3-badge-off" : "tmv3-badge-on"}">${row.overdue ? __("متأخرة") : __("معلّقة اليوم")}</span></td>
                     <td>
-                        ${this.canExecuteSettlement
+                        ${this.canPrepareSettlement
                             ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-reconciliation" data-reconciliation="${this.esc(row.name || "")}">${__("تسوية")}</button>`
                             : ""}
                     </td>
@@ -2439,6 +2472,7 @@ class TreasuryManagementPageV12 {
     }
 
     showCardBankSettlementConfirmation(sourceDialog, sourceValues, preview) {
+        const canExecute = this.canExecuteSettlement;
         const allocationRows = (preview.allocations || []).map((row) => `
             <tr>
                 <td>${this.esc(row.card_settlement_batch || "-")}</td>
@@ -2449,7 +2483,9 @@ class TreasuryManagementPageV12 {
             </tr>
         `).join("");
         const confirmDialog = new frappe.ui.Dialog({
-            title: __("تأكيد التسوية البنكية لدفعات الفيزا"),
+            title: canExecute
+                ? __("تأكيد التسوية البنكية لدفعات الفيزا")
+                : __("معاينة التسوية البنكية لدفعات الفيزا"),
             size: "extra-large",
             fields: [{
                 fieldtype: "HTML",
@@ -2467,12 +2503,18 @@ class TreasuryManagementPageV12 {
                             <thead><tr><th>${__("الدفعة")}</th><th>${__("الماكينة")}</th><th>${__("الوردية")}</th><th>${__("المتاح")}</th><th>${__("المخصص")}</th></tr></thead>
                             <tbody>${allocationRows}</tbody>
                         </table></div>
-                        <div class="tmv3-preview-note"><strong>${__("مهم")}:</strong> ${__("سيتم إنشاء واعتماد Card Bank Settlement، وسيقوم المستند بإنشاء Journal Entry وتحديث المبالغ المتبقية وحالة كل Batch تلقائيًا.")}</div>
+                        <div class="tmv3-preview-note"><strong>${__("مهم")}:</strong> ${canExecute
+                            ? __("سيتم إنشاء واعتماد Card Bank Settlement، وسيقوم المستند بإنشاء Journal Entry وتحديث المبالغ المتبقية وحالة كل Batch تلقائيًا.")
+                            : __("هذه معاينة فقط. يلزم Treasury Manager أو Accounts Manager لتنفيذ التسوية وإنشاء القيد المحاسبي.")}</div>
                     </div>
                 `,
             }],
-            primary_action_label: __("تنفيذ التسوية البنكية"),
+            primary_action_label: canExecute ? __("تنفيذ التسوية البنكية") : __("إغلاق المعاينة"),
             primary_action: async () => {
+                if (!canExecute) {
+                    confirmDialog.hide();
+                    return;
+                }
                 const response = await frappe.call({
                     method:
                         "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_card_bank_settlement",
@@ -2605,6 +2647,7 @@ class TreasuryManagementPageV12 {
     }
 
     showReconciliationSettlementConfirmation(sourceDialog, sourceValues, preview) {
+        const canExecute = this.canExecuteSettlement;
         const createNew = preview.settlement_action === "Create New Journal Entry";
         const rows = [
             [__("التسوية"), preview.reconciliation],
@@ -2622,7 +2665,7 @@ class TreasuryManagementPageV12 {
             [__("رصيد Clearing بعد"), this.formatMoney(preview.clearing_balance_after, "")],
         ];
         const confirmDialog = new frappe.ui.Dialog({
-            title: __("تأكيد تنفيذ التسوية"),
+            title: canExecute ? __("تأكيد تنفيذ التسوية") : __("معاينة تسوية الدفع"),
             size: "large",
             fields: [{
                 fieldtype: "HTML",
@@ -2637,14 +2680,20 @@ class TreasuryManagementPageV12 {
                     </div>
                     <div class="tmv3-preview-note">
                         <strong>${__("مهم")}:</strong>
-                        ${createNew
-                            ? __("سيتم إنشاء واعتماد قيد محاسبي، ثم ربطه بمستند التسوية وإغلاق التنبيه.")
-                            : __("لن يتم إنشاء قيد جديد. سيتم التحقق من القيد الموجود وربطه بالمستند فقط لمنع التكرار.")}
+                        ${canExecute
+                            ? (createNew
+                                ? __("سيتم إنشاء واعتماد قيد محاسبي، ثم ربطه بمستند التسوية وإغلاق التنبيه.")
+                                : __("لن يتم إنشاء قيد جديد. سيتم التحقق من القيد الموجود وربطه بالمستند فقط لمنع التكرار."))
+                            : __("هذه معاينة فقط. يلزم Treasury Manager أو Accounts Manager لتنفيذ التسوية.")}
                     </div>
                 `,
             }],
-            primary_action_label: __("تنفيذ التسوية"),
+            primary_action_label: canExecute ? __("تنفيذ التسوية") : __("إغلاق المعاينة"),
             primary_action: async () => {
+                if (!canExecute) {
+                    confirmDialog.hide();
+                    return;
+                }
                 const response = await frappe.call({
                     method:
                         "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_payment_reconciliation_settlement",

@@ -7,14 +7,21 @@ from frappe.utils import cint, date_diff, flt, getdate, now_datetime, nowdate
 
 from erpnext.accounts.utils import get_balance_on
 
-
-CREATE_ROLES = {"System Manager", "Accounts Manager"}
+from pharma_erp.treasury_access import (
+    can_emergency_submit_treasury,
+    can_manage_treasury,
+    can_operate_treasury,
+    can_view_treasury,
+    get_treasury_access_profile,
+    validate_internal_transfer_approver,
+)
 
 
 @frappe.whitelist()
 def get_overview():
     """Return the treasury summary and current cash drawer setup."""
     _validate_access()
+    access_profile = get_treasury_access_profile()
 
     drawers = _get_cash_drawers()
     cash_accounts = _get_operational_cash_accounts()
@@ -55,13 +62,17 @@ def get_overview():
         "payment_setups": payment_setups,
         "internal_transfer_rows": internal_transfers,
         "pending_dashboard": pending_dashboard,
-        "can_create_cash_drawer": _can_create_cash_drawer(),
-        "can_manage_cash_drawer": _can_create_cash_drawer(),
-        "can_create_bank": _can_create_cash_drawer(),
-        "can_manage_card_terminal": _can_create_cash_drawer(),
-        "can_manage_payment_setup": _can_create_cash_drawer(),
-        "can_execute_settlement": _can_create_cash_drawer(),
-        "can_manage_internal_transfer": _can_create_cash_drawer(),
+        "access_profile": access_profile,
+        "can_create_cash_drawer": access_profile["can_manage"],
+        "can_manage_cash_drawer": access_profile["can_manage"],
+        "can_create_bank": access_profile["can_manage"],
+        "can_manage_card_terminal": access_profile["can_manage"],
+        "can_manage_payment_setup": access_profile["can_manage"],
+        "can_prepare_settlement": access_profile["can_operate"],
+        "can_execute_settlement": access_profile["can_manage"],
+        "can_manage_internal_transfer": access_profile["can_operate"],
+        "can_approve_internal_transfer": access_profile["can_manage"],
+        "can_emergency_submit_internal_transfer": access_profile["can_emergency_submit"],
     }
 
 
@@ -75,7 +86,7 @@ def get_pending_settlement_dashboard():
 @frappe.whitelist()
 def get_payment_reconciliation_settlement_details(reconciliation_name):
     """Return validated details for settling one electronic reconciliation."""
-    _validate_create_access()
+    _validate_operator_access()
     doc = _get_open_payment_reconciliation(reconciliation_name)
     return _reconciliation_settlement_details(doc)
 
@@ -91,7 +102,7 @@ def preview_payment_reconciliation_settlement(
     notes=None,
 ):
     """Validate and preview a settlement without changing accounting data."""
-    _validate_create_access()
+    _validate_operator_access()
     return _prepare_payment_reconciliation_settlement(
         reconciliation_name=reconciliation_name,
         settlement_action=settlement_action,
@@ -114,7 +125,7 @@ def execute_payment_reconciliation_settlement(
     notes=None,
 ):
     """Create or link the Journal Entry and close one reconciliation."""
-    _validate_create_access()
+    _validate_manager_access()
     plan = _prepare_payment_reconciliation_settlement(
         reconciliation_name=reconciliation_name,
         settlement_action=settlement_action,
@@ -211,7 +222,7 @@ def execute_payment_reconciliation_settlement(
 @frappe.whitelist()
 def get_card_bank_settlement_options(batch_name):
     """Return compatible open card batches and bank-settlement defaults."""
-    _validate_create_access()
+    _validate_operator_access()
     return _card_bank_settlement_options(batch_name)
 
 
@@ -226,7 +237,7 @@ def preview_card_bank_settlement(
     notes=None,
 ):
     """Validate a card bank settlement without creating accounting documents."""
-    _validate_create_access()
+    _validate_operator_access()
     return _prepare_card_bank_settlement(
         batch_name=batch_name,
         allocations=allocations,
@@ -249,7 +260,7 @@ def execute_card_bank_settlement(
     notes=None,
 ):
     """Create and submit Card Bank Settlement for selected open batches."""
-    _validate_create_access()
+    _validate_manager_access()
     plan = _prepare_card_bank_settlement(
         batch_name=batch_name,
         allocations=allocations,
@@ -344,7 +355,7 @@ def execute_card_bank_settlement(
 @frappe.whitelist()
 def get_internal_transfer_options(company=None):
     """Return eligible Asset Cash/Bank accounts and live balances."""
-    _validate_create_access()
+    _validate_operator_access()
     company = _resolve_company(company)
     return {
         "company": company,
@@ -365,10 +376,11 @@ def preview_internal_transfer(
     reference_no=None,
     reference_date=None,
     remarks=None,
-    transfer_action="Submit Now",
+    transfer_action="Create Draft",
 ):
     """Validate and preview a Cash/Bank internal transfer without writing data."""
-    _validate_create_access()
+    _validate_operator_access()
+    _validate_internal_transfer_action_access(transfer_action)
     return _prepare_internal_transfer(
         company=company,
         paid_from=paid_from,
@@ -392,10 +404,11 @@ def execute_internal_transfer(
     reference_no=None,
     reference_date=None,
     remarks=None,
-    transfer_action="Submit Now",
+    transfer_action="Create Draft",
 ):
-    """Create a Payment Entry Internal Transfer as Draft or Submitted."""
-    _validate_create_access()
+    """Create a Treasury Internal Transfer request or emergency submission."""
+    _validate_operator_access()
+    _validate_internal_transfer_action_access(transfer_action)
     plan = _prepare_internal_transfer(
         company=company,
         paid_from=paid_from,
@@ -425,6 +438,14 @@ def execute_internal_transfer(
     payment.remarks = plan["remarks"] or (
         f"Treasury internal transfer from {plan['paid_from']} to {plan['paid_to']}"
     )
+    if payment.meta.has_field("custom_treasury_internal_transfer"):
+        payment.custom_treasury_internal_transfer = 1
+    if payment.meta.has_field("custom_treasury_request_status"):
+        payment.custom_treasury_request_status = "Pending Approval"
+    if payment.meta.has_field("custom_treasury_requested_by"):
+        payment.custom_treasury_requested_by = frappe.session.user
+    if payment.meta.has_field("custom_treasury_requested_at"):
+        payment.custom_treasury_requested_at = now_datetime()
     payment.flags.ignore_permissions = True
     payment.insert(ignore_permissions=True)
 
@@ -438,7 +459,9 @@ def execute_internal_transfer(
         "message": _("Internal transfer was created successfully."),
         "payment_entry": payment.name,
         "docstatus": payment.docstatus,
-        "status": "Submitted" if payment.docstatus == 1 else "Draft",
+        "status": "Submitted" if payment.docstatus == 1 else "Pending Approval",
+        "requested_by": getattr(payment, "custom_treasury_requested_by", None) or payment.owner,
+        "approved_by": getattr(payment, "custom_treasury_approved_by", None),
         "paid_from": plan["paid_from"],
         "paid_to": plan["paid_to"],
         "amount": plan["amount"],
@@ -449,7 +472,7 @@ def execute_internal_transfer(
 @frappe.whitelist()
 def submit_internal_transfer(payment_entry_name):
     """Approve and submit an existing Draft Internal Transfer."""
-    _validate_create_access()
+    _validate_manager_access()
     payment_entry_name = str(payment_entry_name or "").strip()
     if not payment_entry_name or not frappe.db.exists("Payment Entry", payment_entry_name):
         frappe.throw(_("Payment Entry was not found."))
@@ -469,9 +492,10 @@ def submit_internal_transfer(payment_entry_name):
         reference_no=payment.reference_no,
         reference_date=payment.reference_date,
         remarks=payment.remarks,
-        transfer_action="Submit Now",
+        transfer_action="Create Draft",
         exclude_payment_entry=payment.name,
     )
+    validate_internal_transfer_approver(payment)
 
     payment.flags.ignore_permissions = True
     payment.submit()
@@ -481,6 +505,8 @@ def submit_internal_transfer(payment_entry_name):
         "message": _("Internal transfer was submitted successfully."),
         "payment_entry": payment.name,
         "status": "Submitted",
+        "requested_by": getattr(payment, "custom_treasury_requested_by", None) or payment.owner,
+        "approved_by": getattr(payment, "custom_treasury_approved_by", None) or frappe.session.user,
     }
 
 
@@ -2403,28 +2429,41 @@ def _get_internal_transfer_accounts(company):
 def _get_internal_transfers(limit=50):
     if not frappe.db.exists("DocType", "Payment Entry"):
         return []
+
+    fields = [
+        "name",
+        "docstatus",
+        "status",
+        "posting_date",
+        "company",
+        "paid_from",
+        "paid_to",
+        "paid_amount",
+        "received_amount",
+        "paid_from_account_currency",
+        "paid_to_account_currency",
+        "reference_no",
+        "reference_date",
+        "remarks",
+        "owner",
+        "creation",
+        "modified",
+    ]
+    meta = frappe.get_meta("Payment Entry")
+    audit_fields = [
+        "custom_treasury_request_status",
+        "custom_treasury_requested_by",
+        "custom_treasury_requested_at",
+        "custom_treasury_approved_by",
+        "custom_treasury_approved_at",
+        "custom_treasury_approval_note",
+    ]
+    fields.extend(fieldname for fieldname in audit_fields if meta.has_field(fieldname))
+
     rows = frappe.get_all(
         "Payment Entry",
         filters={"payment_type": "Internal Transfer"},
-        fields=[
-            "name",
-            "docstatus",
-            "status",
-            "posting_date",
-            "company",
-            "paid_from",
-            "paid_to",
-            "paid_amount",
-            "received_amount",
-            "paid_from_account_currency",
-            "paid_to_account_currency",
-            "reference_no",
-            "reference_date",
-            "remarks",
-            "owner",
-            "creation",
-            "modified",
-        ],
+        fields=fields,
         order_by="creation desc",
         limit_page_length=cint(limit) or 50,
     )
@@ -2432,12 +2471,29 @@ def _get_internal_transfers(limit=50):
     for row in rows:
         row["paid_amount"] = flt(row.get("paid_amount"))
         row["received_amount"] = flt(row.get("received_amount"))
-        row["display_status"] = status_by_docstatus.get(cint(row.get("docstatus")), row.get("status") or "")
+        row["requested_by"] = row.get("custom_treasury_requested_by") or row.get("owner")
+        row["requested_at"] = row.get("custom_treasury_requested_at") or row.get("creation")
+        row["approved_by"] = row.get("custom_treasury_approved_by") or ""
+        row["approved_at"] = row.get("custom_treasury_approved_at") or ""
+        row["approval_note"] = row.get("custom_treasury_approval_note") or ""
+        row["request_status"] = (
+            row.get("custom_treasury_request_status")
+            or status_by_docstatus.get(cint(row.get("docstatus")), row.get("status") or "")
+        )
+        row["display_status"] = row["request_status"]
         row["account_currency"] = (
             row.get("paid_from_account_currency")
             or row.get("paid_to_account_currency")
             or frappe.db.get_value("Company", row.company, "default_currency")
             or ""
+        )
+        row["can_current_user_approve"] = bool(
+            can_manage_treasury()
+            and cint(row.get("docstatus")) == 0
+            and (
+                can_emergency_submit_treasury()
+                or row.get("requested_by") != frappe.session.user
+            )
         )
     return rows
 
@@ -2483,7 +2539,7 @@ def _prepare_internal_transfer(
     reference_no=None,
     reference_date=None,
     remarks=None,
-    transfer_action="Submit Now",
+    transfer_action="Create Draft",
     exclude_payment_entry=None,
 ):
     company = _resolve_company(company)
@@ -4187,25 +4243,44 @@ def _safe_count(doctype):
 
 
 def _can_create_cash_drawer():
-    return bool(CREATE_ROLES.intersection(set(frappe.get_roles(frappe.session.user))))
+    return can_manage_treasury()
 
 
 def _validate_create_access():
-    if _can_create_cash_drawer():
+    _validate_manager_access()
+
+
+def _validate_operator_access():
+    if can_operate_treasury():
         return
     frappe.throw(
-        _("Only System Manager or Accounts Manager can manage Treasury settings."),
+        _("Only Treasury Operator, Treasury Manager, Accounts Manager, or System Manager can prepare Treasury operations."),
         frappe.PermissionError,
     )
 
 
-def _validate_access():
-    roles = set(frappe.get_roles(frappe.session.user))
-    if roles.intersection(CREATE_ROLES):
+def _validate_manager_access():
+    if can_manage_treasury():
         return
+    frappe.throw(
+        _("Only Treasury Manager, Accounts Manager, or System Manager can execute or manage Treasury operations."),
+        frappe.PermissionError,
+    )
 
-    if not frappe.has_permission("Account", ptype="read"):
+
+def _validate_internal_transfer_action_access(transfer_action):
+    action = str(transfer_action or "Create Draft").strip()
+    if action == "Submit Now" and not can_emergency_submit_treasury():
         frappe.throw(
-            _("You are not permitted to view Treasury Management."),
+            _("Immediate submission is reserved for System Manager emergency override. Save the transfer as a Draft for separate approval."),
             frappe.PermissionError,
         )
+
+
+def _validate_access():
+    if can_view_treasury():
+        return
+    frappe.throw(
+        _("You are not permitted to view Treasury Management."),
+        frappe.PermissionError,
+    )

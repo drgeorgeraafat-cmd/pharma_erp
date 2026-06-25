@@ -250,5 +250,10 @@ app_license = "mit"
 doc_events = {
     "Customer": {
         "before_insert": "pharma_erp.customer_events.set_customer_code"
-    }
+    },
+    "Payment Entry": {
+        "validate": "pharma_erp.treasury_access.validate_payment_entry",
+        "before_submit": "pharma_erp.treasury_access.before_submit_payment_entry",
+        "before_cancel": "pharma_erp.treasury_access.before_cancel_payment_entry",
+    },
 }
