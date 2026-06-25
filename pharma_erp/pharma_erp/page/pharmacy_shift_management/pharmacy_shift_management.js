@@ -141,6 +141,8 @@ class PharmacyShiftManagementV24 {
                 <div class="psm24-section">
                     <div class="psm24-grid">
                         ${this.infoCard(__("رقم الوردية"), shift.name)}
+                        ${this.infoCard(__("الخزنة النقدية"), shift.cash_drawer || "-")}
+                        ${this.infoCard(__("حساب الخزنة"), shift.cash_account || "-")}
                         ${this.infoCard(__("الكاشير"), shift.cashier || "-")}
                         ${this.infoCard(
                             __("وقت البداية"),
@@ -194,23 +196,55 @@ class PharmacyShiftManagementV24 {
     }
 
     renderNoShift() {
+        const drawers = (this.data.cash_drawers || []).filter(
+            (row) => !cint(row.is_busy),
+        );
+        const drawerOptions = [
+            drawers.length > 1
+                ? `<option value="">${__("اختر الخزنة النقدية")}</option>`
+                : "",
+            ...drawers.map((row) => `
+                <option
+                    value="${frappe.utils.escape_html(row.name)}"
+                    ${drawers.length === 1 ? "selected" : ""}
+                >
+                    ${frappe.utils.escape_html(row.label || row.drawer_name || row.name)}
+                </option>
+            `),
+        ].join("");
+
         this.$main.html(`
             <div class="psm24">
                 <div class="psm24-section">
                     <h4>${__("فتح وردية جديدة")}</h4>
-                    <div class="form-group" style="max-width:320px">
-                        <label>${__("رصيد أول الوردية")}</label>
-                        <input
-                            class="form-control psm24-opening"
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value="0"
-                        >
-                    </div>
-                    <button class="btn btn-primary psm24-create-shift">
-                        ${__("فتح الوردية")}
-                    </button>
+                    ${drawers.length ? `
+                        <div class="form-group" style="max-width:440px">
+                            <label>${__("الخزنة النقدية")}</label>
+                            <select class="form-control psm24-cash-drawer" required>
+                                ${drawerOptions}
+                            </select>
+                            <div class="small text-muted mt-1">
+                                ${__("سيتم ربط الوردية وحركات النقدية بالحساب الخاص بالخزنة المختارة.")}
+                            </div>
+                        </div>
+                        <div class="form-group" style="max-width:320px">
+                            <label>${__("رصيد أول الوردية")}</label>
+                            <input
+                                class="form-control psm24-opening"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value="0"
+                            >
+                        </div>
+                        <button class="btn btn-primary psm24-create-shift">
+                            ${__("فتح الوردية")}
+                        </button>
+                    ` : `
+                        <div class="alert alert-warning mb-0">
+                            ${__("لا توجد خزنة نقدية مفعلة ومتاحة لفتح الوردية. فعّل Cash Drawer واربطها بحساب Cash أولًا.")}
+                        </div>
+                    `}
                 </div>
                 ${this.renderUnderReviewShifts(this.data.under_review_shifts || [], "")}
             </div>
@@ -1202,15 +1236,31 @@ class PharmacyShiftManagementV24 {
     }
 
     async createShift() {
-        await frappe.call({
+        const cashDrawer =
+            this.$main.find(".psm24-cash-drawer").val() || "";
+        if (!cashDrawer) {
+            frappe.msgprint(__("اختر الخزنة النقدية قبل فتح الوردية."));
+            return;
+        }
+
+        const response = await frappe.call({
             method:
                 "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.create_shift",
             args: {
+                cash_drawer: cashDrawer,
                 opening_balance: flt(
                     this.$main.find(".psm24-opening").val(),
                 ),
             },
             freeze: true,
+            freeze_message: __("جاري فتح الوردية وربطها بالخزنة..."),
+        });
+
+        frappe.show_alert({
+            message: __("تم فتح الوردية على الخزنة {0}", [
+                response.message?.cash_drawer || cashDrawer,
+            ]),
+            indicator: "green",
         });
         await this.refresh();
     }

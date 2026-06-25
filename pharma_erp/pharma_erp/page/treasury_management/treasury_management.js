@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV13(page, wrapper);
+    new TreasuryManagementPageV14(page, wrapper);
 };
 
 
-class TreasuryManagementPageV13 {
+class TreasuryManagementPageV14 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -26,8 +26,14 @@ class TreasuryManagementPageV13 {
         this.canManageInternalTransfer = false;
         this.canApproveInternalTransfer = false;
         this.canEmergencySubmitInternalTransfer = false;
+        this.canManageShiftCashMovement = false;
+        this.canApproveShiftCashMovement = false;
+        this.canCancelShiftCashMovement = false;
+        this.canEmergencySubmitShiftCashMovement = false;
         this.accessProfile = {};
         this.transferAccounts = {};
+        this.cashMovementDrawers = {};
+        this.cashMovementTypes = {};
         this.autoAccountName = "";
         this.autoBankNames = {};
         this.autoTerminalNames = {};
@@ -63,6 +69,11 @@ class TreasuryManagementPageV13 {
             __("تحويل مالي جديد"),
             () => this.openInternalTransferDialog(),
             __("التحويلات"),
+        );
+        this.$cashMovementButton = this.page.add_inner_button(
+            __("حركة نقدية جديدة"),
+            () => this.openShiftCashMovementDialog(),
+            __("حركات الوردية"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -247,6 +258,10 @@ class TreasuryManagementPageV13 {
             this.canManageInternalTransfer = Boolean(data.can_manage_internal_transfer);
             this.canApproveInternalTransfer = Boolean(data.can_approve_internal_transfer);
             this.canEmergencySubmitInternalTransfer = Boolean(data.can_emergency_submit_internal_transfer);
+            this.canManageShiftCashMovement = Boolean(data.can_manage_shift_cash_movement);
+            this.canApproveShiftCashMovement = Boolean(data.can_approve_shift_cash_movement);
+            this.canCancelShiftCashMovement = Boolean(data.can_cancel_shift_cash_movement);
+            this.canEmergencySubmitShiftCashMovement = Boolean(data.can_emergency_submit_shift_cash_movement);
             this.accessProfile = data.access_profile || {};
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
@@ -254,6 +269,7 @@ class TreasuryManagementPageV13 {
             if (this.$paymentSetupButton) this.$paymentSetupButton.toggle(this.canManagePaymentSetup);
             if (this.$cardSettlementButton) this.$cardSettlementButton.toggle(this.canPrepareSettlement);
             if (this.$internalTransferButton) this.$internalTransferButton.toggle(this.canManageInternalTransfer);
+            if (this.$cashMovementButton) this.$cashMovementButton.toggle(this.canManageShiftCashMovement);
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
@@ -261,6 +277,7 @@ class TreasuryManagementPageV13 {
             this.bindPaymentSetupActions();
             this.bindSettlementActions();
             this.bindInternalTransferActions();
+            this.bindShiftCashMovementActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -1460,6 +1477,459 @@ class TreasuryManagementPageV13 {
     }
 
 
+    async getShiftCashMovementOptions(company = null) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_shift_cash_movement_options",
+            args: { company },
+            freeze: true,
+            freeze_message: __("جاري تحميل الخزائن والورديات المفتوحة..."),
+        });
+        return response.message || {};
+    }
+
+    setShiftCashMovementMaps(options) {
+        this.cashMovementDrawers = {};
+        (options.drawers || []).forEach((row) => {
+            this.cashMovementDrawers[row.name] = row;
+        });
+        this.cashMovementTypes = {};
+        (options.movement_types || []).forEach((row) => {
+            this.cashMovementTypes[row.value] = row;
+        });
+    }
+
+    async openShiftCashMovementDialog() {
+        if (!this.canManageShiftCashMovement) {
+            frappe.msgprint(__("ليس لديك صلاحية إنشاء حركات نقدية للوردية."));
+            return;
+        }
+
+        const options = await this.getShiftCashMovementOptions();
+        this.setShiftCashMovementMaps(options);
+        const openDrawers = (options.drawers || []).filter((row) => row.available);
+        if (!openDrawers.length) {
+            frappe.msgprint({
+                title: __("لا توجد وردية مفتوحة"),
+                indicator: "orange",
+                message: __("يجب فتح وردية وربطها بخزنة مفعلة قبل تسجيل حركة نقدية."),
+            });
+            return;
+        }
+
+        let dialog;
+        dialog = new frappe.ui.Dialog({
+            title: __("حركة نقدية مرتبطة بالوردية"),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "company",
+                    fieldtype: "Link",
+                    options: "Company",
+                    label: __("الشركة"),
+                    reqd: 1,
+                    default: options.company,
+                    onchange: async () => this.reloadShiftCashMovementCompany(dialog),
+                },
+                {
+                    fieldname: "movement_action",
+                    fieldtype: "Select",
+                    label: __("إجراء الحركة"),
+                    options: this.canEmergencySubmitShiftCashMovement
+                        ? "Create Draft\nSubmit Now"
+                        : "Create Draft",
+                    default: "Create Draft",
+                    reqd: 1,
+                    read_only: !this.canEmergencySubmitShiftCashMovement,
+                    description: this.canEmergencySubmitShiftCashMovement
+                        ? __("المسار الطبيعي هو حفظ طلب للمراجعة. Submit Now مخصص لطوارئ System Manager ويُسجل في التدقيق.")
+                        : __("سيُحفظ الطلب كمسودة ويعتمده مدير خزينة مختلف عن طالب الحركة."),
+                },
+                { fieldtype: "Section Break", label: __("الوردية والخزنة") },
+                {
+                    fieldname: "cash_drawer",
+                    fieldtype: "Select",
+                    label: __("الخزنة"),
+                    options: openDrawers.map((row) => row.name).join("\n"),
+                    reqd: 1,
+                    default: options.default_cash_drawer || openDrawers[0].name,
+                    onchange: () => this.updateShiftCashDrawerInfo(dialog),
+                },
+                {
+                    fieldname: "shift_reference",
+                    fieldtype: "Link",
+                    options: "Pharmacy Shift Closing",
+                    label: __("الوردية المفتوحة"),
+                    reqd: 1,
+                    read_only: 1,
+                },
+                {
+                    fieldname: "drawer_balance",
+                    fieldtype: "Currency",
+                    label: __("رصيد الخزنة الحالي"),
+                    options: "currency",
+                    read_only: 1,
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "movement_type",
+                    fieldtype: "Select",
+                    label: __("نوع الحركة"),
+                    options: (options.movement_types || []).map((row) => row.value).join("\n"),
+                    reqd: 1,
+                    default: "Operating Expense",
+                    onchange: () => this.updateShiftCashMovementType(dialog),
+                },
+                {
+                    fieldname: "direction",
+                    fieldtype: "Select",
+                    label: __("الاتجاه بالنسبة للخزنة"),
+                    options: "In\nOut",
+                    reqd: 1,
+                    read_only: 1,
+                },
+                {
+                    fieldname: "currency",
+                    fieldtype: "Data",
+                    label: __("العملة"),
+                    read_only: 1,
+                    default: options.company_currency || "",
+                },
+                { fieldtype: "Section Break", label: __("الحساب والمبلغ") },
+                {
+                    fieldname: "counter_account",
+                    fieldtype: "Link",
+                    options: "Account",
+                    label: __("الحساب المقابل"),
+                    reqd: 1,
+                    get_query: () => this.shiftCashCounterAccountQuery(dialog),
+                },
+                {
+                    fieldname: "amount",
+                    fieldtype: "Currency",
+                    label: __("المبلغ"),
+                    options: "currency",
+                    reqd: 1,
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "movement_date",
+                    fieldtype: "Datetime",
+                    label: __("تاريخ ووقت الحركة"),
+                    reqd: 1,
+                    default: frappe.datetime.now_datetime(),
+                },
+                {
+                    fieldname: "reference_no",
+                    fieldtype: "Data",
+                    label: __("رقم المرجع"),
+                    description: __("رقم إيصال أو فاتورة أو مرجع داخلي. عند إدخاله يجب ألا يتكرر."),
+                },
+                {
+                    fieldname: "reference_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ المرجع"),
+                    default: options.reference_date || frappe.datetime.get_today(),
+                },
+                { fieldtype: "Section Break", label: __("بيانات مرتبطة") },
+                {
+                    fieldname: "supplier",
+                    fieldtype: "Link",
+                    options: "Supplier",
+                    label: __("المورد"),
+                    depends_on: "eval:doc.movement_type=='Supplier Payment'",
+                    mandatory_depends_on: "eval:doc.movement_type=='Supplier Payment'",
+                    onchange: () => dialog.set_value("purchase_invoice", ""),
+                },
+                {
+                    fieldname: "purchase_invoice",
+                    fieldtype: "Link",
+                    options: "Purchase Invoice",
+                    label: __("فاتورة المشتريات"),
+                    depends_on: "eval:doc.movement_type=='Supplier Payment'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            supplier: dialog.get_value("supplier"),
+                            docstatus: 1,
+                            outstanding_amount: [">", 0],
+                        },
+                    }),
+                },
+                {
+                    fieldname: "employee",
+                    fieldtype: "Link",
+                    options: "Employee",
+                    label: __("الموظف"),
+                    depends_on: "eval:doc.movement_type=='Employee Advance'",
+                    mandatory_depends_on: "eval:doc.movement_type=='Employee Advance'",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "receipt_attachment",
+                    fieldtype: "Attach",
+                    label: __("صورة الإيصال أو الإثبات"),
+                },
+                { fieldtype: "Section Break", label: __("البيان") },
+                {
+                    fieldname: "description",
+                    fieldtype: "Small Text",
+                    label: __("سبب الحركة ووصفها"),
+                    reqd: 1,
+                },
+            ],
+            primary_action_label: __("معاينة الحركة"),
+            primary_action: async (values) => this.previewShiftCashMovement(dialog, values),
+        });
+        dialog.show();
+        this.updateShiftCashDrawerInfo(dialog);
+        this.updateShiftCashMovementType(dialog);
+    }
+
+    async reloadShiftCashMovementCompany(dialog) {
+        const company = dialog.get_value("company");
+        if (!company) return;
+        const options = await this.getShiftCashMovementOptions(company);
+        this.setShiftCashMovementMaps(options);
+        const openDrawers = (options.drawers || []).filter((row) => row.available);
+        dialog.set_df_property("cash_drawer", "options", openDrawers.map((row) => row.name).join("\n"));
+        dialog.set_value("cash_drawer", openDrawers[0]?.name || "");
+        dialog.set_value("currency", options.company_currency || "");
+        dialog.set_value("counter_account", "");
+        this.updateShiftCashDrawerInfo(dialog);
+    }
+
+    updateShiftCashDrawerInfo(dialog) {
+        const drawer = this.cashMovementDrawers[dialog.get_value("cash_drawer")] || {};
+        dialog.set_value("shift_reference", drawer.open_shift || "");
+        dialog.set_value("drawer_balance", Number(drawer.current_balance || 0));
+        dialog.set_value("currency", drawer.currency || dialog.get_value("currency") || "");
+    }
+
+    updateShiftCashMovementType(dialog) {
+        const rule = this.cashMovementTypes[dialog.get_value("movement_type")] || {};
+        const fixedDirection = rule.direction || "";
+        dialog.set_df_property("direction", "read_only", fixedDirection ? 1 : 0);
+        if (fixedDirection) dialog.set_value("direction", fixedDirection);
+        dialog.set_value("counter_account", "");
+        if (dialog.layout?.refresh_dependencies) dialog.layout.refresh_dependencies();
+    }
+
+    shiftCashCounterAccountQuery(dialog) {
+        const company = dialog.get_value("company");
+        const drawer = this.cashMovementDrawers[dialog.get_value("cash_drawer")] || {};
+        const rule = this.cashMovementTypes[dialog.get_value("movement_type")] || {};
+        const filters = {
+            company,
+            is_group: 0,
+            disabled: 0,
+        };
+        if (drawer.cash_account) filters.name = ["!=", drawer.cash_account];
+
+        if (rule.counter_kind === "cash_bank") {
+            filters.root_type = "Asset";
+            filters.account_type = ["in", ["Cash", "Bank"]];
+        } else if (rule.counter_kind === "expense") {
+            filters.root_type = "Expense";
+        } else if (rule.counter_kind === "payable") {
+            filters.root_type = "Liability";
+            filters.account_type = "Payable";
+        } else if (rule.counter_kind === "employee_advance") {
+            filters.root_type = "Asset";
+            filters.account_type = ["not in", ["Cash", "Bank"]];
+        } else if (rule.counter_kind === "receipt") {
+            filters.root_type = ["in", ["Income", "Liability", "Equity", "Asset"]];
+        } else if (rule.counter_kind === "payment") {
+            filters.root_type = ["in", ["Expense", "Asset", "Liability"]];
+        }
+        return { filters };
+    }
+
+    async previewShiftCashMovement(sourceDialog, values) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_shift_cash_movement",
+            args: values,
+            freeze: true,
+            freeze_message: __("جاري مراجعة الحركة والرصيد والوردية..."),
+        });
+        this.showShiftCashMovementConfirmation(sourceDialog, values, response.message || {});
+    }
+
+    showShiftCashMovementConfirmation(sourceDialog, sourceValues, preview) {
+        const submitNow = preview.movement_action === "Submit Now";
+        const confirmDialog = new frappe.ui.Dialog({
+            title: submitNow ? __("تأكيد التنفيذ الفوري") : __("تأكيد حفظ طلب الحركة"),
+            size: "large",
+            fields: [{ fieldtype: "HTML", options: this.renderShiftCashMovementPreview(preview) }],
+            primary_action_label: submitNow ? __("تنفيذ واعتماد") : __("حفظ كمسودة"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_shift_cash_movement",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: submitNow
+                        ? __("جاري إنشاء واعتماد الحركة المحاسبية...")
+                        : __("جاري حفظ طلب الحركة..."),
+                });
+                const result = response.message || {};
+                confirmDialog.hide();
+                sourceDialog.hide();
+                frappe.msgprint({
+                    title: submitNow ? __("تم تنفيذ الحركة") : __("تم حفظ طلب الحركة"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction:rtl;text-align:right;">
+                            <div>${this.esc(result.message || __("تم الحفظ بنجاح"))}</div>
+                            <div><strong>${__("Shift Cash Movement")}:</strong> <a href="/app/shift-cash-movement/${encodeURIComponent(result.shift_cash_movement || "")}">${this.esc(result.shift_cash_movement || "-")}</a></div>
+                            <div><strong>${__("الحالة")}:</strong> ${this.esc(result.status || "-")}</div>
+                            <div><strong>${__("المبلغ")}:</strong> ${this.formatMoney(result.amount, result.currency)}</div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
+    }
+
+    renderShiftCashMovementPreview(preview) {
+        const rows = [
+            [__("الإجراء"), preview.movement_action === "Submit Now" ? __("تنفيذ واعتماد فورًا") : __("حفظ كمسودة للمراجعة")],
+            [__("الشركة"), preview.company],
+            [__("الخزنة"), preview.cash_drawer],
+            [__("الوردية"), preview.shift_reference],
+            [__("نوع الحركة"), preview.movement_type],
+            [__("الاتجاه"), preview.direction],
+            [__("المبلغ"), this.formatMoney(preview.amount, preview.currency)],
+            [__("الحساب المصدر"), preview.source_account],
+            [__("رصيد المصدر قبل"), this.formatMoney(preview.source_balance_before, preview.currency)],
+            [__("رصيد المصدر بعد"), this.formatMoney(preview.source_balance_after, preview.currency)],
+            [__("الحساب المستهدف"), preview.target_account],
+            [__("رصيد المستهدف قبل"), this.formatMoney(preview.target_balance_before, preview.currency)],
+            [__("رصيد المستهدف بعد"), this.formatMoney(preview.target_balance_after, preview.currency)],
+            [__("المرجع"), preview.reference_no || "-"],
+            [__("الوصف"), preview.description || "-"],
+        ];
+        const journalRows = (preview.journal_preview || []).map((row) => `
+            <tr>
+                <td>${this.esc(row.account || "-")}</td>
+                <td>${this.formatMoney(row.debit || 0, preview.currency)}</td>
+                <td>${this.formatMoney(row.credit || 0, preview.currency)}</td>
+            </tr>
+        `).join("");
+        return `
+            <div class="tmv3-preview">
+                ${rows.map(([label, value]) => `
+                    <div class="tmv3-preview-row">
+                        <div class="tmv3-preview-label">${this.esc(label)}</div>
+                        <div class="tmv3-preview-value">${this.esc(value || "-")}</div>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="tmv3-table-wrap" style="margin-top:12px;">
+                <table class="tmv3-table">
+                    <thead><tr><th>${__("الحساب")}</th><th>${__("مدين")}</th><th>${__("دائن")}</th></tr></thead>
+                    <tbody>${journalRows}</tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    renderShiftCashMovements(rows) {
+        const body = (rows || []).length
+            ? rows.map((row) => {
+                const docstatus = Number(row.docstatus || 0);
+                const badgeClass = docstatus === 1 ? "tmv3-badge-on" : docstatus === 2 ? "tmv3-badge-off" : "tmv3-badge-warn";
+                const canApprove = this.canApproveShiftCashMovement && docstatus === 0 && row.can_self_approve;
+                const canCancel = this.canCancelShiftCashMovement && docstatus === 1;
+                const approvalNote = docstatus === 0 && !row.can_self_approve
+                    ? `<small class="text-muted">${__("ينتظر مديرًا مختلفًا عن طالب الحركة")}</small>`
+                    : "";
+                return `
+                    <tr>
+                        <td><a href="/app/shift-cash-movement/${encodeURIComponent(row.name || "")}">${this.esc(row.name || "-")}</a></td>
+                        <td>${this.esc(row.movement_date || "-")}</td>
+                        <td>${this.esc(row.movement_type || "-")}</td>
+                        <td>${this.esc(row.direction || "-")}</td>
+                        <td>${this.esc(row.cash_drawer || "-")}</td>
+                        <td><a href="/app/pharmacy-shift-closing/${encodeURIComponent(row.shift_reference || "")}">${this.esc(row.shift_reference || "-")}</a></td>
+                        <td>${this.formatMoney(row.amount, "")}</td>
+                        <td><span class="tmv3-badge ${badgeClass}">${this.esc(row.request_status || row.status || "-")}</span></td>
+                        <td>${this.esc(row.requested_by || "-")}<br>${approvalNote}</td>
+                        <td>${row.journal_entry ? `<a href="/app/journal-entry/${encodeURIComponent(row.journal_entry)}">${this.esc(row.journal_entry)}</a>` : "-"}</td>
+                        <td>
+                            ${canApprove ? `<button class="btn btn-xs btn-primary tmv3-cash-movement-submit" data-movement="${this.esc(row.name)}">${__("اعتماد وتنفيذ")}</button>` : ""}
+                            ${canCancel ? `<button class="btn btn-xs btn-danger tmv3-cash-movement-cancel" data-movement="${this.esc(row.name)}">${__("إلغاء")}</button>` : ""}
+                        </td>
+                    </tr>
+                `;
+            }).join("")
+            : `<tr><td colspan="11" class="tmv3-empty">${__("لا توجد حركات نقدية مسجلة حتى الآن.")}</td></tr>`;
+
+        return `
+            <div class="tmv3-section">
+                <h4>${__("حركات النقدية المرتبطة بالورديات")}</h4>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table">
+                        <thead>
+                            <tr>
+                                <th>${__("المستند")}</th><th>${__("التاريخ")}</th><th>${__("النوع")}</th>
+                                <th>${__("الاتجاه")}</th><th>${__("الخزنة")}</th><th>${__("الوردية")}</th>
+                                <th>${__("المبلغ")}</th><th>${__("الحالة")}</th><th>${__("طالب الحركة")}</th>
+                                <th>${__("Journal Entry")}</th><th>${__("إجراءات")}</th>
+                            </tr>
+                        </thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    bindShiftCashMovementActions() {
+        this.$main.find(".tmv3-cash-movement-submit")
+            .off("click.tmv3-cash-movement")
+            .on("click.tmv3-cash-movement", (event) => {
+                const movement = $(event.currentTarget).attr("data-movement");
+                frappe.confirm(
+                    `${__("سيتم اعتماد الحركة وإنشاء Journal Entry. هل تريد المتابعة؟")}<br><br><strong>${this.esc(movement)}</strong>`,
+                    async () => {
+                        const response = await frappe.call({
+                            method:
+                                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.submit_shift_cash_movement",
+                            args: { movement_name: movement },
+                            freeze: true,
+                            freeze_message: __("جاري اعتماد الحركة النقدية..."),
+                        });
+                        frappe.show_alert({ message: response.message?.message || __("تم اعتماد الحركة"), indicator: "green" });
+                        await this.refresh();
+                    },
+                );
+            });
+
+        this.$main.find(".tmv3-cash-movement-cancel")
+            .off("click.tmv3-cash-movement-cancel")
+            .on("click.tmv3-cash-movement-cancel", (event) => {
+                const movement = $(event.currentTarget).attr("data-movement");
+                frappe.confirm(
+                    `${__("سيتم إلغاء الحركة والقيد المحاسبي المرتبط بها. هل تريد المتابعة؟")}<br><br><strong>${this.esc(movement)}</strong>`,
+                    async () => {
+                        const response = await frappe.call({
+                            method:
+                                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.cancel_shift_cash_movement",
+                            args: { movement_name: movement },
+                            freeze: true,
+                            freeze_message: __("جاري إلغاء الحركة النقدية..."),
+                        });
+                        frappe.show_alert({ message: response.message?.message || __("تم إلغاء الحركة"), indicator: "green" });
+                        await this.refresh();
+                    },
+                );
+            });
+    }
+
     async getInternalTransferOptions(company = null) {
         const response = await frappe.call({
             method:
@@ -1810,7 +2280,7 @@ class TreasuryManagementPageV13 {
                 <div class="tmv3-hero">
                     <h2>${__("إدارة الخزائن والبنوك ووسائل الدفع")}</h2>
                     <p>
-                        ${__("يمكن إدارة الخزائن والبنوك وحساباتها، ومراجعة الأرصدة والحركات، وإنشاء الحسابات بعد المعاينة والتأكيد.")}
+                        ${__("يمكن إدارة الخزائن والبنوك ووسائل الدفع والتحويلات وحركات النقدية المرتبطة بالورديات مع المراجعة والاعتماد.")}
                     </p>
                     <div class="tmv3-status">
                         <span>●</span>
@@ -1838,6 +2308,8 @@ class TreasuryManagementPageV13 {
                     ${this.card(__("تسويات دفع مفتوحة"), data.open_payment_reconciliations, __("Shift Reconciliation"))}
                     ${this.card(__("التحويلات المالية"), data.internal_transfers, __("Internal Transfer"))}
                     ${this.card(__("طلبات تحويل مسودة"), data.draft_internal_transfers, __("Awaiting Approval"))}
+                    ${this.card(__("حركات نقدية"), data.shift_cash_movements, __("Shift Cash Movement"))}
+                    ${this.card(__("حركات تنتظر الاعتماد"), data.draft_shift_cash_movements, __("Pending Approval"))}
                 </div>
 
                 ${this.renderPendingDashboard(data.pending_dashboard || {})}
@@ -1845,6 +2317,7 @@ class TreasuryManagementPageV13 {
                 ${this.renderBanks(data.banks || [])}
                 ${this.renderTerminals(data.terminals || [])}
                 ${this.renderPaymentSetups(data.payment_setups || [])}
+                ${this.renderShiftCashMovements(data.shift_cash_movement_rows || [])}
                 ${this.renderInternalTransfers(data.internal_transfer_rows || [])}
                 ${this.renderUnlinkedBankLedgers(data.unlinked_bank_ledgers || [])}
                 ${this.renderWarnings(data.account_warnings || [])}

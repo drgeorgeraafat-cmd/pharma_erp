@@ -3,9 +3,13 @@ import unicodedata
 
 import frappe
 from frappe import _
-from frappe.utils import cint, date_diff, flt, getdate, now_datetime, nowdate
+from frappe.utils import cint, date_diff, flt, get_datetime, getdate, now_datetime, nowdate
 
 from erpnext.accounts.utils import get_balance_on
+
+from pharma_erp.pharma_erp.doctype.shift_cash_movement.shift_cash_movement import (
+    MOVEMENT_RULES as SHIFT_CASH_MOVEMENT_RULES,
+)
 
 from pharma_erp.treasury_access import (
     can_emergency_submit_treasury,
@@ -32,6 +36,7 @@ def get_overview():
     terminals = _get_card_terminals()
     payment_setups = _get_payment_method_setups()
     internal_transfers = _get_internal_transfers()
+    shift_cash_movements = _get_shift_cash_movements()
     pending_dashboard = _get_pending_settlement_dashboard(
         terminals=terminals, payment_setups=payment_setups
     )
@@ -52,6 +57,8 @@ def get_overview():
         "open_payment_reconciliations": sum(cint(row.get("open_reconciliation_count")) for row in payment_setups),
         "internal_transfers": len(internal_transfers),
         "draft_internal_transfers": sum(1 for row in internal_transfers if cint(row.get("docstatus")) == 0),
+        "shift_cash_movements": len(shift_cash_movements),
+        "draft_shift_cash_movements": sum(1 for row in shift_cash_movements if cint(row.get("docstatus")) == 0),
         "drawers": drawers,
         "cash_accounts": cash_accounts,
         "account_warnings": account_warnings,
@@ -61,6 +68,7 @@ def get_overview():
         "terminals": terminals,
         "payment_setups": payment_setups,
         "internal_transfer_rows": internal_transfers,
+        "shift_cash_movement_rows": shift_cash_movements,
         "pending_dashboard": pending_dashboard,
         "access_profile": access_profile,
         "can_create_cash_drawer": access_profile["can_manage"],
@@ -73,6 +81,10 @@ def get_overview():
         "can_manage_internal_transfer": access_profile["can_operate"],
         "can_approve_internal_transfer": access_profile["can_manage"],
         "can_emergency_submit_internal_transfer": access_profile["can_emergency_submit"],
+        "can_manage_shift_cash_movement": access_profile["can_operate"],
+        "can_approve_shift_cash_movement": access_profile["can_manage"],
+        "can_cancel_shift_cash_movement": access_profile["can_manage"],
+        "can_emergency_submit_shift_cash_movement": access_profile["can_emergency_submit"],
     }
 
 
@@ -507,6 +519,195 @@ def submit_internal_transfer(payment_entry_name):
         "status": "Submitted",
         "requested_by": getattr(payment, "custom_treasury_requested_by", None) or payment.owner,
         "approved_by": getattr(payment, "custom_treasury_approved_by", None) or frappe.session.user,
+    }
+
+
+@frappe.whitelist()
+def get_shift_cash_movement_options(company=None):
+    """Return open drawers, movement rules and defaults for a shift cash request."""
+    _validate_operator_access()
+    company = _resolve_company(company)
+    drawers = _get_shift_cash_movement_drawers(company)
+    return {
+        "company": company,
+        "company_currency": frappe.db.get_value("Company", company, "default_currency") or "",
+        "movement_date": now_datetime().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+        "reference_date": nowdate(),
+        "drawers": drawers,
+        "movement_types": _get_shift_cash_movement_type_options(),
+        "default_cash_drawer": drawers[0]["name"] if len(drawers) == 1 else "",
+    }
+
+
+@frappe.whitelist()
+def preview_shift_cash_movement(
+    company,
+    cash_drawer,
+    shift_reference,
+    movement_type,
+    amount,
+    counter_account,
+    movement_date=None,
+    direction=None,
+    reference_no=None,
+    reference_date=None,
+    description=None,
+    supplier=None,
+    purchase_invoice=None,
+    employee=None,
+    receipt_attachment=None,
+    movement_action="Create Draft",
+):
+    """Validate and preview one shift cash movement without writing data."""
+    _validate_operator_access()
+    _validate_shift_cash_movement_action_access(movement_action)
+    return _prepare_shift_cash_movement(
+        company=company,
+        cash_drawer=cash_drawer,
+        shift_reference=shift_reference,
+        movement_type=movement_type,
+        amount=amount,
+        counter_account=counter_account,
+        movement_date=movement_date,
+        direction=direction,
+        reference_no=reference_no,
+        reference_date=reference_date,
+        description=description,
+        supplier=supplier,
+        purchase_invoice=purchase_invoice,
+        employee=employee,
+        receipt_attachment=receipt_attachment,
+        movement_action=movement_action,
+    )
+
+
+@frappe.whitelist()
+def execute_shift_cash_movement(
+    company,
+    cash_drawer,
+    shift_reference,
+    movement_type,
+    amount,
+    counter_account,
+    movement_date=None,
+    direction=None,
+    reference_no=None,
+    reference_date=None,
+    description=None,
+    supplier=None,
+    purchase_invoice=None,
+    employee=None,
+    receipt_attachment=None,
+    movement_action="Create Draft",
+):
+    """Create a draft cash movement request or emergency-submit it."""
+    _validate_operator_access()
+    _validate_shift_cash_movement_action_access(movement_action)
+    plan = _prepare_shift_cash_movement(
+        company=company,
+        cash_drawer=cash_drawer,
+        shift_reference=shift_reference,
+        movement_type=movement_type,
+        amount=amount,
+        counter_account=counter_account,
+        movement_date=movement_date,
+        direction=direction,
+        reference_no=reference_no,
+        reference_date=reference_date,
+        description=description,
+        supplier=supplier,
+        purchase_invoice=purchase_invoice,
+        employee=employee,
+        receipt_attachment=receipt_attachment,
+        movement_action=movement_action,
+    )
+
+    movement = frappe.new_doc("Shift Cash Movement")
+    for fieldname in (
+        "company",
+        "cash_drawer",
+        "shift_reference",
+        "movement_type",
+        "direction",
+        "amount",
+        "movement_date",
+        "source_account",
+        "target_account",
+        "expense_account",
+        "supplier",
+        "purchase_invoice",
+        "employee",
+        "reference_no",
+        "reference_date",
+        "description",
+        "receipt_attachment",
+    ):
+        if fieldname in plan:
+            setattr(movement, fieldname, plan.get(fieldname))
+
+    movement.flags.ignore_permissions = True
+    movement.insert(ignore_permissions=True)
+    if plan["movement_action"] == "Submit Now":
+        movement.flags.ignore_permissions = True
+        movement.submit()
+
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Shift cash movement was created successfully."),
+        "shift_cash_movement": movement.name,
+        "docstatus": movement.docstatus,
+        "status": "Posted" if movement.docstatus == 1 else "Pending Approval",
+        "journal_entry": frappe.db.get_value("Shift Cash Movement", movement.name, "journal_entry"),
+        "amount": flt(movement.amount),
+        "currency": plan["currency"],
+        "requested_by": movement.requested_by or movement.owner,
+        "approved_by": movement.approved_by,
+    }
+
+
+@frappe.whitelist()
+def submit_shift_cash_movement(movement_name):
+    """Approve and submit an existing draft shift cash movement."""
+    _validate_manager_access()
+    movement_name = str(movement_name or "").strip()
+    if not movement_name or not frappe.db.exists("Shift Cash Movement", movement_name):
+        frappe.throw(_("Shift Cash Movement was not found."))
+
+    movement = frappe.get_doc("Shift Cash Movement", movement_name)
+    if movement.docstatus != 0:
+        frappe.throw(_("Only a Draft Shift Cash Movement can be submitted."))
+    movement.flags.ignore_permissions = True
+    movement.submit()
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Shift cash movement was approved and posted successfully."),
+        "shift_cash_movement": movement.name,
+        "journal_entry": movement.journal_entry,
+        "status": "Posted",
+    }
+
+
+@frappe.whitelist()
+def cancel_shift_cash_movement(movement_name):
+    """Cancel a posted shift cash movement and its generated Journal Entry."""
+    _validate_manager_access()
+    movement_name = str(movement_name or "").strip()
+    if not movement_name or not frappe.db.exists("Shift Cash Movement", movement_name):
+        frappe.throw(_("Shift Cash Movement was not found."))
+
+    movement = frappe.get_doc("Shift Cash Movement", movement_name)
+    if movement.docstatus != 1:
+        frappe.throw(_("Only a submitted Shift Cash Movement can be cancelled."))
+    movement.flags.ignore_permissions = True
+    movement.cancel()
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Shift cash movement and its Journal Entry were cancelled."),
+        "shift_cash_movement": movement.name,
+        "status": "Cancelled",
     }
 
 
@@ -2625,6 +2826,279 @@ def _prepare_internal_transfer(
             {"account": source.name, "debit": 0, "credit": amount},
         ],
     }
+
+def _get_shift_cash_movement_type_options():
+    labels = {
+        "Opening Float": _("Opening Float"),
+        "Till Refill": _("Till Refill"),
+        "Return Opening Float": _("Return Opening Float"),
+        "Cash Sales Deposit": _("Cash Sales Deposit"),
+        "Unused Till Refill Return": _("Unused Till Refill Return"),
+        "Other Cash Return": _("Other Cash Return"),
+        "Under Review Driver Cash Deposit": _("Under Review Driver Cash Deposit"),
+        "Transfer to Main Safe": _("Transfer to Main Safe"),
+        "Supplier Payment": _("Supplier Payment"),
+        "Operating Expense": _("Operating Expense"),
+        "Employee Advance": _("Employee Advance"),
+        "Other Cash Receipt": _("Other Cash Receipt"),
+        "Other Cash Payment": _("Other Cash Payment"),
+        "Other": _("Other"),
+    }
+    rows = []
+    for value, rule in SHIFT_CASH_MOVEMENT_RULES.items():
+        rows.append(
+            {
+                "value": value,
+                "label": labels.get(value, value),
+                "direction": rule.get("direction") or "",
+                "counter_kind": rule.get("counter_kind") or "other",
+                "requires_supplier": cint(rule.get("requires_supplier")),
+                "requires_employee": cint(rule.get("requires_employee")),
+            }
+        )
+    return rows
+
+
+def _get_shift_cash_movement_drawers(company):
+    rows = []
+    for drawer in _get_cash_drawers():
+        if drawer.get("company") != company or not cint(drawer.get("enabled")):
+            continue
+        open_shift = _find_open_shift_for_drawer(frappe._dict(drawer))
+        rows.append(
+            {
+                "name": drawer.get("name"),
+                "drawer_name": drawer.get("drawer_name") or drawer.get("name"),
+                "cash_account": drawer.get("cash_account"),
+                "current_balance": flt(drawer.get("current_balance")),
+                "currency": drawer.get("account_currency") or "",
+                "open_shift": open_shift or "",
+                "available": bool(open_shift),
+            }
+        )
+    rows.sort(key=lambda row: (not row["available"], row["drawer_name"]))
+    return rows
+
+
+def _prepare_shift_cash_movement(
+    *,
+    company,
+    cash_drawer,
+    shift_reference,
+    movement_type,
+    amount,
+    counter_account,
+    movement_date=None,
+    direction=None,
+    reference_no=None,
+    reference_date=None,
+    description=None,
+    supplier=None,
+    purchase_invoice=None,
+    employee=None,
+    receipt_attachment=None,
+    movement_action="Create Draft",
+):
+    company = _resolve_company(company)
+    cash_drawer = str(cash_drawer or "").strip()
+    shift_reference = str(shift_reference or "").strip()
+    movement_type = str(movement_type or "").strip()
+    counter_account = str(counter_account or "").strip()
+    movement_action = str(movement_action or "Create Draft").strip()
+
+    if movement_type not in SHIFT_CASH_MOVEMENT_RULES:
+        frappe.throw(_("Select a valid Movement Type."))
+    if not cash_drawer:
+        frappe.throw(_("Cash Drawer is required."))
+    if not shift_reference:
+        frappe.throw(_("An open Shift Reference is required."))
+    if not counter_account:
+        frappe.throw(_("Counter Account is required."))
+
+    drawer = frappe.db.get_value(
+        "Cash Drawer",
+        cash_drawer,
+        ["name", "company", "enabled", "cash_account", "current_active_shift"],
+        as_dict=True,
+    )
+    if not drawer:
+        frappe.throw(_("Cash Drawer was not found."))
+    if drawer.company != company:
+        frappe.throw(_("Cash Drawer belongs to another company."))
+    if not cint(drawer.enabled):
+        frappe.throw(_("Cash Drawer is disabled."))
+    if not drawer.cash_account:
+        frappe.throw(_("Cash Drawer does not have a linked Cash Account."))
+
+    rule = SHIFT_CASH_MOVEMENT_RULES[movement_type]
+    resolved_direction = rule.get("direction") or str(direction or "").strip()
+    if resolved_direction not in ("In", "Out"):
+        frappe.throw(_("Direction is required for Other cash movements."))
+
+    if resolved_direction == "In":
+        source_account = counter_account
+        target_account = drawer.cash_account
+    else:
+        source_account = drawer.cash_account
+        target_account = counter_account
+
+    movement_datetime = get_datetime(movement_date or now_datetime()).replace(microsecond=0)
+    movement_date_value = movement_datetime.strftime("%Y-%m-%d %H:%M:%S")
+    reference_date_value = str(getdate(reference_date)) if reference_date else None
+
+    movement = frappe.new_doc("Shift Cash Movement")
+    movement.company = company
+    movement.cash_drawer = cash_drawer
+    movement.shift_reference = shift_reference
+    movement.movement_type = movement_type
+    movement.direction = resolved_direction
+    movement.amount = flt(amount)
+    movement.movement_date = movement_date_value
+    movement.source_account = source_account
+    movement.target_account = target_account
+    movement.expense_account = counter_account if movement_type == "Operating Expense" else None
+    movement.supplier = str(supplier or "").strip() or None
+    movement.purchase_invoice = str(purchase_invoice or "").strip() or None
+    movement.employee = str(employee or "").strip() or None
+    movement.reference_no = str(reference_no or "").strip()
+    movement.reference_date = reference_date_value
+    movement.description = str(description or "").strip()
+    movement.receipt_attachment = str(receipt_attachment or "").strip() or None
+    movement._validate_and_normalize(check_live_balance=True)
+
+    source = frappe.db.get_value(
+        "Account",
+        movement.source_account,
+        ["name", "account_currency", "root_type", "account_type"],
+        as_dict=True,
+    ) or {}
+    target = frappe.db.get_value(
+        "Account",
+        movement.target_account,
+        ["name", "account_currency", "root_type", "account_type"],
+        as_dict=True,
+    ) or {}
+    source_balance = _account_balance_on_date(
+        movement.source_account, company, movement_datetime.date()
+    )
+    target_balance = _account_balance_on_date(
+        movement.target_account, company, movement_datetime.date()
+    )
+    currency = source.get("account_currency") or target.get("account_currency") or ""
+
+    return {
+        "company": company,
+        "cash_drawer": cash_drawer,
+        "cash_drawer_account": drawer.cash_account,
+        "shift_reference": shift_reference,
+        "movement_type": movement_type,
+        "direction": resolved_direction,
+        "amount": flt(movement.amount),
+        "movement_date": movement_date_value,
+        "source_account": movement.source_account,
+        "source_account_type": source.get("account_type") or source.get("root_type") or "",
+        "target_account": movement.target_account,
+        "target_account_type": target.get("account_type") or target.get("root_type") or "",
+        "counter_account": counter_account,
+        "expense_account": movement.expense_account,
+        "supplier": movement.supplier,
+        "purchase_invoice": movement.purchase_invoice,
+        "employee": movement.employee,
+        "reference_no": movement.reference_no,
+        "reference_date": movement.reference_date,
+        "description": movement.description,
+        "receipt_attachment": movement.receipt_attachment,
+        "movement_action": movement_action,
+        "currency": currency,
+        "source_balance_before": source_balance,
+        "source_balance_after": flt(source_balance - movement.amount),
+        "target_balance_before": target_balance,
+        "target_balance_after": flt(target_balance + movement.amount),
+        "journal_preview": [
+            {"account": movement.target_account, "debit": flt(movement.amount), "credit": 0},
+            {"account": movement.source_account, "debit": 0, "credit": flt(movement.amount)},
+        ],
+    }
+
+
+def _account_balance_on_date(account, company, posting_date):
+    try:
+        return flt(
+            get_balance_on(
+                account=account,
+                date=posting_date,
+                company=company,
+                in_account_currency=True,
+            )
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Treasury Shift Cash Movement Balance")
+        return 0
+
+
+def _get_shift_cash_movements(limit=50):
+    if not frappe.db.exists("DocType", "Shift Cash Movement"):
+        return []
+    meta = frappe.get_meta("Shift Cash Movement")
+    fields = [
+        "name",
+        "docstatus",
+        "company",
+        "shift_reference",
+        "movement_date",
+        "movement_type",
+        "direction",
+        "amount",
+        "status",
+        "source_account",
+        "target_account",
+        "journal_entry",
+        "owner",
+        "creation",
+    ]
+    for fieldname in (
+        "cash_drawer",
+        "reference_no",
+        "receipt_attachment",
+        "request_status",
+        "requested_by",
+        "requested_at",
+        "approved_by",
+        "approved_at",
+        "approval_note",
+    ):
+        if meta.has_field(fieldname):
+            fields.append(fieldname)
+
+    rows = frappe.get_all(
+        "Shift Cash Movement",
+        fields=fields,
+        order_by="movement_date desc, creation desc",
+        limit_page_length=cint(limit) or 50,
+    )
+    for row in rows:
+        row["amount"] = flt(row.get("amount"))
+        row["request_status"] = row.get("request_status") or (
+            "Approved" if cint(row.get("docstatus")) == 1 else "Cancelled" if cint(row.get("docstatus")) == 2 else "Pending Approval"
+        )
+        row["requested_by"] = row.get("requested_by") or row.get("owner")
+        row["can_self_approve"] = bool(
+            can_emergency_submit_treasury()
+            or row.get("requested_by") != frappe.session.user
+        )
+    return rows
+
+
+def _validate_shift_cash_movement_action_access(movement_action):
+    movement_action = str(movement_action or "Create Draft").strip()
+    if movement_action not in ("Create Draft", "Submit Now"):
+        frappe.throw(_("Invalid cash movement action."))
+    if movement_action == "Submit Now" and not can_emergency_submit_treasury():
+        frappe.throw(
+            _("Submit Now is reserved for emergency System Manager use. Save the request as Draft for manager approval."),
+            frappe.PermissionError,
+        )
+
 
 def _get_cash_drawers():
     if not frappe.db.exists("DocType", "Cash Drawer"):

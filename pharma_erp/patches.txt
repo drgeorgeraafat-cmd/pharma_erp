@@ -14,3 +14,4 @@ pharma_erp.patches.v1_0.migrate_employee_financial_scripts_to_app
 pharma_erp.patches.v1_0.migrate_delivery_settlement_handover_scripts_to_app
 pharma_erp.patches.v1_0.migrate_card_shift_financial_scripts_to_app
 pharma_erp.patches.v1_0.setup_treasury_roles_and_approval
+pharma_erp.patches.v1_0.setup_shift_cash_movement_approval
