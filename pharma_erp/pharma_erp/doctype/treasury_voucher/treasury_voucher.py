@@ -9,6 +9,7 @@ from pharma_erp.treasury_access import (
     can_emergency_submit_treasury,
     can_manage_treasury,
     can_operate_treasury,
+    can_view_treasury,
 )
 
 
@@ -16,31 +17,116 @@ VOUCHER_RULES = {
     "General Expense": {
         "direction": "Out",
         "counter_root_type": "Expense",
-        "categories": (
-            "Rent",
-            "Utilities",
-            "Maintenance",
-            "Office Supplies",
-            "Transportation",
-            "Administrative Expense",
-            "Marketing Expense",
-            "Miscellaneous Expense",
-            "Other Expense",
-        ),
     },
     "General Receipt": {
         "direction": "In",
         "counter_root_type": "Income",
-        "categories": (
-            "Other Income",
-            "Cashback / Rebate",
-            "Insurance Reimbursement",
-            "Refund / Compensation",
-            "Miscellaneous Receipt",
-            "Other Receipt",
-        ),
     },
 }
+
+
+def get_enabled_category_options(company):
+    company = str(company or "").strip()
+    result = {voucher_type: [] for voucher_type in VOUCHER_RULES}
+    if not company or not frappe.db.exists("DocType", "Treasury Voucher Category"):
+        return result
+
+    rows = frappe.get_all(
+        "Treasury Voucher Category",
+        filters={"company": company, "enabled": 1},
+        fields=[
+            "name",
+            "category_name",
+            "voucher_type",
+            "default_account",
+            "display_order",
+        ],
+        order_by="display_order asc, category_name asc",
+    )
+    names = [row.name for row in rows]
+    accounts_by_category = {name: [] for name in names}
+    if names:
+        children = frappe.get_all(
+            "Treasury Voucher Category Account",
+            filters={
+                "parent": ["in", names],
+                "parenttype": "Treasury Voucher Category",
+                "parentfield": "allowed_accounts",
+            },
+            fields=["parent", "account", "idx"],
+            order_by="parent asc, idx asc",
+        )
+        for child in children:
+            if child.account and child.account not in accounts_by_category[child.parent]:
+                accounts_by_category[child.parent].append(child.account)
+
+    for row in rows:
+        if row.voucher_type not in result:
+            continue
+        allowed = accounts_by_category.get(row.name) or []
+        if row.default_account and row.default_account not in allowed:
+            allowed.insert(0, row.default_account)
+        result[row.voucher_type].append(
+            {
+                "name": row.name,
+                "category_name": row.category_name or row.name,
+                "default_account": row.default_account or "",
+                "allowed_accounts": allowed,
+            }
+        )
+    return result
+
+
+def get_category_configuration(category, company=None, voucher_type=None, throw=True):
+    category = str(category or "").strip()
+    company = str(company or "").strip()
+    voucher_type = str(voucher_type or "").strip()
+    if not category or not frappe.db.exists("Treasury Voucher Category", category):
+        if throw:
+            frappe.throw(_("Select a valid Treasury Voucher Category."))
+        return {}
+
+    doc = frappe.get_cached_doc("Treasury Voucher Category", category)
+    if not cint(doc.enabled):
+        if throw:
+            frappe.throw(_("Treasury Voucher Category {0} is disabled.").format(category))
+        return {}
+    if company and doc.company != company:
+        if throw:
+            frappe.throw(_("Treasury Voucher Category belongs to another company."))
+        return {}
+    if voucher_type and doc.voucher_type != voucher_type:
+        if throw:
+            frappe.throw(_("Treasury Voucher Category is not valid for the selected Voucher Type."))
+        return {}
+
+    allowed = []
+    for row in doc.allowed_accounts or []:
+        account = str(row.account or "").strip()
+        if account and account not in allowed:
+            allowed.append(account)
+    if doc.default_account and doc.default_account not in allowed:
+        allowed.insert(0, doc.default_account)
+    if not allowed:
+        if throw:
+            frappe.throw(_("Treasury Voucher Category has no allowed accounts."))
+        return {}
+    return {
+        "name": doc.name,
+        "category_name": doc.category_name or doc.name,
+        "company": doc.company,
+        "voucher_type": doc.voucher_type,
+        "default_account": doc.default_account or allowed[0],
+        "allowed_accounts": allowed,
+    }
+
+
+@frappe.whitelist()
+def get_category_configuration_for_form(category, company=None, voucher_type=None):
+    if not can_view_treasury():
+        frappe.throw(_("You do not have access to Treasury Voucher Categories."), frappe.PermissionError)
+    return get_category_configuration(category, company, voucher_type, throw=True)
+
 
 AUDIT_FIELDS = (
     "request_status",
@@ -200,17 +286,30 @@ class TreasuryVoucher(Document):
             frappe.throw(_("Description is required."))
         if not self.cash_bank_account:
             frappe.throw(_("Cash / Bank Account is required."))
-        if not self.counter_account:
-            frappe.throw(_("Expense / Income Account is required."))
         if self.cash_bank_account == self.counter_account:
             frappe.throw(_("Cash / Bank Account and Counter Account cannot be the same."))
 
         rule = VOUCHER_RULES[self.voucher_type]
-        allowed_categories = rule.get("categories") or ()
-        if not self.category:
-            self.category = allowed_categories[-1] if allowed_categories else "Other"
-        elif allowed_categories and self.category not in allowed_categories:
-            frappe.throw(_("Category is not valid for the selected Voucher Type."))
+        category_configuration = get_category_configuration(
+            self.category,
+            company=self.company,
+            voucher_type=self.voucher_type,
+            throw=True,
+        )
+        self.category = category_configuration["name"]
+        allowed_counter_accounts = category_configuration["allowed_accounts"]
+        if not self.counter_account:
+            self.counter_account = category_configuration["default_account"]
+        if not self.counter_account:
+            frappe.throw(_("Expense / Income Account is required."))
+        if self.counter_account not in allowed_counter_accounts:
+            frappe.throw(
+                _("Account {0} is not allowed for Treasury Voucher Category {1}. Allowed accounts: {2}.").format(
+                    self.counter_account,
+                    category_configuration["category_name"],
+                    ", ".join(allowed_counter_accounts),
+                )
+            )
 
         cash_account = self._validate_account(
             self.cash_bank_account,

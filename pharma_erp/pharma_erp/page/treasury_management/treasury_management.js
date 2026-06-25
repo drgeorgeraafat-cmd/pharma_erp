@@ -40,6 +40,7 @@ class TreasuryManagementPageV15 {
         this.cashMovementTypes = {};
         this.treasuryVoucherAccounts = {};
         this.treasuryVoucherCategories = {};
+        this.treasuryVoucherCategoryMap = {};
         this.autoAccountName = "";
         this.autoBankNames = {};
         this.autoTerminalNames = {};
@@ -84,6 +85,11 @@ class TreasuryManagementPageV15 {
         this.$treasuryVoucherButton = this.page.add_inner_button(
             __("مصروف أو مقبوض عام جديد"),
             () => this.openTreasuryVoucherDialog(),
+            __("المصروفات العامة"),
+        );
+        this.$treasuryCategoryButton = this.page.add_inner_button(
+            __("إدارة التصنيفات"),
+            () => frappe.set_route("List", "Treasury Voucher Category"),
             __("المصروفات العامة"),
         );
         this.page.add_inner_button(
@@ -286,6 +292,7 @@ class TreasuryManagementPageV15 {
             if (this.$internalTransferButton) this.$internalTransferButton.toggle(this.canManageInternalTransfer);
             if (this.$cashMovementButton) this.$cashMovementButton.toggle(this.canManageShiftCashMovement);
             if (this.$treasuryVoucherButton) this.$treasuryVoucherButton.toggle(this.canManageTreasuryVoucher);
+            if (this.$treasuryCategoryButton) this.$treasuryCategoryButton.toggle(this.canApproveTreasuryVoucher);
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
@@ -1511,6 +1518,12 @@ class TreasuryManagementPageV15 {
             this.treasuryVoucherAccounts[row.name] = row;
         });
         this.treasuryVoucherCategories = options.categories || {};
+        this.treasuryVoucherCategoryMap = {};
+        Object.values(this.treasuryVoucherCategories).forEach((rows) => {
+            (rows || []).forEach((row) => {
+                this.treasuryVoucherCategoryMap[row.name] = row;
+            });
+        });
     }
 
     async openTreasuryVoucherDialog() {
@@ -1574,6 +1587,7 @@ class TreasuryManagementPageV15 {
                     fieldtype: "Select",
                     label: __("التصنيف"),
                     reqd: 1,
+                    onchange: () => this.updateTreasuryVoucherCategory(dialog),
                 },
                 { fieldtype: "Column Break" },
                 {
@@ -1696,11 +1710,21 @@ class TreasuryManagementPageV15 {
     updateTreasuryVoucherType(dialog) {
         const voucherType = dialog.get_value("voucher_type") || "General Expense";
         const categories = this.treasuryVoucherCategories[voucherType] || [];
-        dialog.set_df_property("category", "options", categories.join("\n"));
-        if (!categories.includes(dialog.get_value("category"))) {
-            dialog.set_value("category", categories[0] || "");
+        const categoryNames = categories.map((row) => row.name);
+        dialog.set_df_property("category", "options", categoryNames.join("\n"));
+        if (!categoryNames.includes(dialog.get_value("category"))) {
+            dialog.set_value("category", categoryNames[0] || "");
         }
-        dialog.set_value("counter_account", "");
+        this.updateTreasuryVoucherCategory(dialog);
+    }
+
+    updateTreasuryVoucherCategory(dialog) {
+        const configuration = this.treasuryVoucherCategoryMap[dialog.get_value("category")] || {};
+        const allowed = configuration.allowed_accounts || [];
+        const current = dialog.get_value("counter_account");
+        if (!allowed.includes(current)) {
+            dialog.set_value("counter_account", configuration.default_account || allowed[0] || "");
+        }
     }
 
     updateTreasuryVoucherAccountInfo(dialog) {
@@ -1710,12 +1734,15 @@ class TreasuryManagementPageV15 {
     }
 
     treasuryVoucherCounterAccountQuery(dialog) {
+        const configuration = this.treasuryVoucherCategoryMap[dialog.get_value("category")] || {};
+        const allowed = configuration.allowed_accounts || [];
         return {
             filters: {
                 company: dialog.get_value("company"),
                 root_type: dialog.get_value("voucher_type") === "General Receipt" ? "Income" : "Expense",
                 is_group: 0,
                 disabled: 0,
+                name: ["in", allowed.length ? allowed : ["__NO_ALLOWED_ACCOUNT__"]],
             },
         };
     }

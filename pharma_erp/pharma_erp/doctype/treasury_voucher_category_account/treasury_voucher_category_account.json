@@ -1,0 +1,19 @@
+{
+ "doctype": "DocType",
+ "name": "Treasury Voucher Category Account",
+ "module": "Pharma Erp",
+ "istable": 1,
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {
+   "fieldname": "account",
+   "fieldtype": "Link",
+   "label": "Allowed Account",
+   "options": "Account",
+   "reqd": 1,
+   "in_list_view": 1
+  }
+ ],
+ "permissions": []
+}

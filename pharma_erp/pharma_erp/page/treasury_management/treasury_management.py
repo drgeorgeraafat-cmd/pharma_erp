@@ -11,7 +11,7 @@ from pharma_erp.pharma_erp.doctype.shift_cash_movement.shift_cash_movement impor
     MOVEMENT_RULES as SHIFT_CASH_MOVEMENT_RULES,
 )
 from pharma_erp.pharma_erp.doctype.treasury_voucher.treasury_voucher import (
-    VOUCHER_RULES as TREASURY_VOUCHER_RULES,
+    get_enabled_category_options,
 )
 
 from pharma_erp.treasury_access import (
@@ -742,10 +742,7 @@ def get_treasury_voucher_options(company=None):
         "default_cost_center": company_doc.get("cost_center") or "",
         "cash_bank_accounts": accounts,
         "default_cash_bank_account": accounts[0]["name"] if len(accounts) == 1 else "",
-        "categories": {
-            voucher_type: list(rule.get("categories") or [])
-            for voucher_type, rule in TREASURY_VOUCHER_RULES.items()
-        },
+        "categories": get_enabled_category_options(company),
     }
 
 

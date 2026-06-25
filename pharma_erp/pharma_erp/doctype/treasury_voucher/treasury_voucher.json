@@ -32,9 +32,9 @@
   },
   {
    "fieldname": "category",
-   "fieldtype": "Select",
+   "fieldtype": "Link",
    "label": "Category",
-   "options": "Rent\nUtilities\nMaintenance\nOffice Supplies\nTransportation\nAdministrative Expense\nMarketing Expense\nMiscellaneous Expense\nOther Expense\nOther Income\nCashback / Rebate\nInsurance Reimbursement\nRefund / Compensation\nMiscellaneous Receipt\nOther Receipt",
+   "options": "Treasury Voucher Category",
    "reqd": 1,
    "in_list_view": 1,
    "in_standard_filter": 1
