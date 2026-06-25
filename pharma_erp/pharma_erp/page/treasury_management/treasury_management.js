@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV14(page, wrapper);
+    new TreasuryManagementPageV15(page, wrapper);
 };
 
 
-class TreasuryManagementPageV14 {
+class TreasuryManagementPageV15 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -30,10 +30,16 @@ class TreasuryManagementPageV14 {
         this.canApproveShiftCashMovement = false;
         this.canCancelShiftCashMovement = false;
         this.canEmergencySubmitShiftCashMovement = false;
+        this.canManageTreasuryVoucher = false;
+        this.canApproveTreasuryVoucher = false;
+        this.canCancelTreasuryVoucher = false;
+        this.canEmergencySubmitTreasuryVoucher = false;
         this.accessProfile = {};
         this.transferAccounts = {};
         this.cashMovementDrawers = {};
         this.cashMovementTypes = {};
+        this.treasuryVoucherAccounts = {};
+        this.treasuryVoucherCategories = {};
         this.autoAccountName = "";
         this.autoBankNames = {};
         this.autoTerminalNames = {};
@@ -74,6 +80,11 @@ class TreasuryManagementPageV14 {
             __("حركة نقدية جديدة"),
             () => this.openShiftCashMovementDialog(),
             __("حركات الوردية"),
+        );
+        this.$treasuryVoucherButton = this.page.add_inner_button(
+            __("مصروف أو مقبوض عام جديد"),
+            () => this.openTreasuryVoucherDialog(),
+            __("المصروفات العامة"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -262,6 +273,10 @@ class TreasuryManagementPageV14 {
             this.canApproveShiftCashMovement = Boolean(data.can_approve_shift_cash_movement);
             this.canCancelShiftCashMovement = Boolean(data.can_cancel_shift_cash_movement);
             this.canEmergencySubmitShiftCashMovement = Boolean(data.can_emergency_submit_shift_cash_movement);
+            this.canManageTreasuryVoucher = Boolean(data.can_manage_treasury_voucher);
+            this.canApproveTreasuryVoucher = Boolean(data.can_approve_treasury_voucher);
+            this.canCancelTreasuryVoucher = Boolean(data.can_cancel_treasury_voucher);
+            this.canEmergencySubmitTreasuryVoucher = Boolean(data.can_emergency_submit_treasury_voucher);
             this.accessProfile = data.access_profile || {};
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
@@ -270,6 +285,7 @@ class TreasuryManagementPageV14 {
             if (this.$cardSettlementButton) this.$cardSettlementButton.toggle(this.canPrepareSettlement);
             if (this.$internalTransferButton) this.$internalTransferButton.toggle(this.canManageInternalTransfer);
             if (this.$cashMovementButton) this.$cashMovementButton.toggle(this.canManageShiftCashMovement);
+            if (this.$treasuryVoucherButton) this.$treasuryVoucherButton.toggle(this.canManageTreasuryVoucher);
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
@@ -278,6 +294,7 @@ class TreasuryManagementPageV14 {
             this.bindSettlementActions();
             this.bindInternalTransferActions();
             this.bindShiftCashMovementActions();
+            this.bindTreasuryVoucherActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -1477,6 +1494,426 @@ class TreasuryManagementPageV14 {
     }
 
 
+    async getTreasuryVoucherOptions(company = null) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_treasury_voucher_options",
+            args: { company },
+            freeze: true,
+            freeze_message: __("جاري تحميل حسابات الخزينة والبنوك..."),
+        });
+        return response.message || {};
+    }
+
+    setTreasuryVoucherMaps(options) {
+        this.treasuryVoucherAccounts = {};
+        (options.cash_bank_accounts || []).forEach((row) => {
+            this.treasuryVoucherAccounts[row.name] = row;
+        });
+        this.treasuryVoucherCategories = options.categories || {};
+    }
+
+    async openTreasuryVoucherDialog() {
+        if (!this.canManageTreasuryVoucher) {
+            frappe.msgprint(__("ليس لديك صلاحية إنشاء مصروفات أو مقبوضات عامة."));
+            return;
+        }
+
+        const options = await this.getTreasuryVoucherOptions();
+        this.setTreasuryVoucherMaps(options);
+        const accounts = options.cash_bank_accounts || [];
+        if (!accounts.length) {
+            frappe.msgprint({
+                title: __("لا توجد حسابات خزينة متاحة"),
+                indicator: "orange",
+                message: __("لا يوجد حساب Cash أو Bank تشغيلي متاح خارج وردية نشطة."),
+            });
+            return;
+        }
+
+        let dialog;
+        dialog = new frappe.ui.Dialog({
+            title: __("مصروف أو مقبوض عام خارج الوردية"),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "company",
+                    fieldtype: "Link",
+                    options: "Company",
+                    label: __("الشركة"),
+                    reqd: 1,
+                    default: options.company,
+                    onchange: async () => this.reloadTreasuryVoucherCompany(dialog),
+                },
+                {
+                    fieldname: "voucher_action",
+                    fieldtype: "Select",
+                    label: __("إجراء المستند"),
+                    options: this.canEmergencySubmitTreasuryVoucher
+                        ? "Create Draft\nSubmit Now"
+                        : "Create Draft",
+                    default: "Create Draft",
+                    reqd: 1,
+                    read_only: !this.canEmergencySubmitTreasuryVoucher,
+                    description: this.canEmergencySubmitTreasuryVoucher
+                        ? __("المسار الطبيعي هو حفظ طلب للمراجعة. Submit Now مخصص لطوارئ System Manager ويُسجل في التدقيق.")
+                        : __("سيُحفظ الطلب كمسودة ويعتمده مدير خزينة مختلف عن طالب المستند."),
+                },
+                { fieldtype: "Section Break", label: __("نوع العملية والحساب النقدي") },
+                {
+                    fieldname: "voucher_type",
+                    fieldtype: "Select",
+                    label: __("نوع المستند"),
+                    options: "General Expense\nGeneral Receipt",
+                    default: "General Expense",
+                    reqd: 1,
+                    onchange: () => this.updateTreasuryVoucherType(dialog),
+                },
+                {
+                    fieldname: "category",
+                    fieldtype: "Select",
+                    label: __("التصنيف"),
+                    reqd: 1,
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "cash_bank_account",
+                    fieldtype: "Select",
+                    label: __("الخزنة أو البنك"),
+                    options: accounts.map((row) => row.name).join("\n"),
+                    default: options.default_cash_bank_account || accounts[0].name,
+                    reqd: 1,
+                    onchange: () => this.updateTreasuryVoucherAccountInfo(dialog),
+                },
+                {
+                    fieldname: "cash_bank_balance",
+                    fieldtype: "Currency",
+                    label: __("الرصيد الحالي"),
+                    options: "currency",
+                    read_only: 1,
+                },
+                {
+                    fieldname: "currency",
+                    fieldtype: "Data",
+                    label: __("العملة"),
+                    read_only: 1,
+                    default: options.company_currency || "",
+                },
+                { fieldtype: "Section Break", label: __("الحساب والمبلغ") },
+                {
+                    fieldname: "counter_account",
+                    fieldtype: "Link",
+                    options: "Account",
+                    label: __("حساب المصروف أو الإيراد"),
+                    reqd: 1,
+                    get_query: () => this.treasuryVoucherCounterAccountQuery(dialog),
+                },
+                {
+                    fieldname: "amount",
+                    fieldtype: "Currency",
+                    label: __("المبلغ"),
+                    options: "currency",
+                    reqd: 1,
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "posting_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ العملية"),
+                    default: options.posting_date || frappe.datetime.get_today(),
+                    reqd: 1,
+                },
+                {
+                    fieldname: "cost_center",
+                    fieldtype: "Link",
+                    options: "Cost Center",
+                    label: __("مركز التكلفة"),
+                    default: options.default_cost_center || "",
+                    reqd: 1,
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            is_group: 0,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                { fieldtype: "Section Break", label: __("المرجع والمستند الداعم") },
+                {
+                    fieldname: "reference_no",
+                    fieldtype: "Data",
+                    label: __("رقم المرجع"),
+                    description: __("عند إدخال مرجع يجب ألا يتكرر في مستند Treasury Voucher آخر."),
+                },
+                {
+                    fieldname: "reference_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ المرجع"),
+                    default: options.reference_date || frappe.datetime.get_today(),
+                },
+                {
+                    fieldname: "beneficiary_or_payer",
+                    fieldtype: "Data",
+                    label: __("المستفيد أو الدافع"),
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "attachment",
+                    fieldtype: "Attach",
+                    label: __("صورة الإيصال أو المستند"),
+                },
+                { fieldtype: "Section Break", label: __("البيان") },
+                {
+                    fieldname: "description",
+                    fieldtype: "Small Text",
+                    label: __("وصف العملية وسببها"),
+                    reqd: 1,
+                },
+            ],
+            primary_action_label: __("معاينة المستند"),
+            primary_action: async (values) => this.previewTreasuryVoucher(dialog, values),
+        });
+        dialog.show();
+        this.updateTreasuryVoucherType(dialog);
+        this.updateTreasuryVoucherAccountInfo(dialog);
+    }
+
+    async reloadTreasuryVoucherCompany(dialog) {
+        const company = dialog.get_value("company");
+        if (!company) return;
+        const options = await this.getTreasuryVoucherOptions(company);
+        this.setTreasuryVoucherMaps(options);
+        const accounts = options.cash_bank_accounts || [];
+        dialog.set_df_property("cash_bank_account", "options", accounts.map((row) => row.name).join("\n"));
+        dialog.set_value("cash_bank_account", options.default_cash_bank_account || accounts[0]?.name || "");
+        dialog.set_value("currency", options.company_currency || "");
+        dialog.set_value("cost_center", options.default_cost_center || "");
+        dialog.set_value("counter_account", "");
+        this.updateTreasuryVoucherType(dialog);
+        this.updateTreasuryVoucherAccountInfo(dialog);
+    }
+
+    updateTreasuryVoucherType(dialog) {
+        const voucherType = dialog.get_value("voucher_type") || "General Expense";
+        const categories = this.treasuryVoucherCategories[voucherType] || [];
+        dialog.set_df_property("category", "options", categories.join("\n"));
+        if (!categories.includes(dialog.get_value("category"))) {
+            dialog.set_value("category", categories[0] || "");
+        }
+        dialog.set_value("counter_account", "");
+    }
+
+    updateTreasuryVoucherAccountInfo(dialog) {
+        const account = this.treasuryVoucherAccounts[dialog.get_value("cash_bank_account")] || {};
+        dialog.set_value("cash_bank_balance", Number(account.current_balance || 0));
+        dialog.set_value("currency", account.currency || dialog.get_value("currency") || "");
+    }
+
+    treasuryVoucherCounterAccountQuery(dialog) {
+        return {
+            filters: {
+                company: dialog.get_value("company"),
+                root_type: dialog.get_value("voucher_type") === "General Receipt" ? "Income" : "Expense",
+                is_group: 0,
+                disabled: 0,
+            },
+        };
+    }
+
+    async previewTreasuryVoucher(sourceDialog, values) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_treasury_voucher",
+            args: values,
+            freeze: true,
+            freeze_message: __("جاري مراجعة الحسابات والرصيد..."),
+        });
+        this.showTreasuryVoucherConfirmation(sourceDialog, values, response.message || {});
+    }
+
+    showTreasuryVoucherConfirmation(sourceDialog, sourceValues, preview) {
+        const submitNow = preview.voucher_action === "Submit Now";
+        const confirmDialog = new frappe.ui.Dialog({
+            title: submitNow ? __("تأكيد التنفيذ الفوري") : __("تأكيد حفظ طلب المستند"),
+            size: "large",
+            fields: [{ fieldtype: "HTML", options: this.renderTreasuryVoucherPreview(preview) }],
+            primary_action_label: submitNow ? __("تنفيذ واعتماد") : __("حفظ كمسودة"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_treasury_voucher",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: submitNow
+                        ? __("جاري إنشاء واعتماد المستند المحاسبي...")
+                        : __("جاري حفظ طلب المستند..."),
+                });
+                const result = response.message || {};
+                confirmDialog.hide();
+                sourceDialog.hide();
+                frappe.msgprint({
+                    title: submitNow ? __("تم تنفيذ المستند") : __("تم حفظ طلب المستند"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction:rtl;text-align:right;">
+                            <div>${this.esc(result.message || __("تم الحفظ بنجاح"))}</div>
+                            <div><strong>${__("Treasury Voucher")}:</strong> <a href="/app/treasury-voucher/${encodeURIComponent(result.treasury_voucher || "")}">${this.esc(result.treasury_voucher || "-")}</a></div>
+                            <div><strong>${__("الحالة")}:</strong> ${this.esc(result.status || "-")}</div>
+                            <div><strong>${__("المبلغ")}:</strong> ${this.formatMoney(result.amount, result.currency)}</div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
+    }
+
+    renderTreasuryVoucherPreview(preview) {
+        const rows = [
+            [__("الإجراء"), preview.voucher_action === "Submit Now" ? __("تنفيذ واعتماد فورًا") : __("حفظ كمسودة للمراجعة")],
+            [__("الشركة"), preview.company],
+            [__("نوع المستند"), preview.voucher_type],
+            [__("التصنيف"), preview.category],
+            [__("الخزنة أو البنك"), preview.cash_bank_account],
+            [__("حساب المصروف أو الإيراد"), preview.counter_account],
+            [__("المبلغ"), this.formatMoney(preview.amount, preview.currency)],
+            [__("الحساب المصدر"), preview.source_account],
+            [__("رصيد المصدر قبل"), this.formatMoney(preview.source_balance_before, preview.currency)],
+            [__("رصيد المصدر بعد"), this.formatMoney(preview.source_balance_after, preview.currency)],
+            [__("الحساب المستهدف"), preview.target_account],
+            [__("رصيد المستهدف قبل"), this.formatMoney(preview.target_balance_before, preview.currency)],
+            [__("رصيد المستهدف بعد"), this.formatMoney(preview.target_balance_after, preview.currency)],
+            [__("مركز التكلفة"), preview.cost_center],
+            [__("المرجع"), preview.reference_no || "-"],
+            [__("المستفيد أو الدافع"), preview.beneficiary_or_payer || "-"],
+            [__("الوصف"), preview.description || "-"],
+        ];
+        const journalRows = (preview.journal_preview || []).map((row) => `
+            <tr>
+                <td>${this.esc(row.account || "-")}</td>
+                <td>${this.formatMoney(row.debit || 0, preview.currency)}</td>
+                <td>${this.formatMoney(row.credit || 0, preview.currency)}</td>
+            </tr>
+        `).join("");
+        return `
+            <div class="tmv3-preview">
+                ${rows.map(([label, value]) => `
+                    <div class="tmv3-preview-row">
+                        <div class="tmv3-preview-label">${this.esc(label)}</div>
+                        <div class="tmv3-preview-value">${this.esc(value || "-")}</div>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="tmv3-table-wrap" style="margin-top:12px;">
+                <table class="tmv3-table">
+                    <thead><tr><th>${__("الحساب")}</th><th>${__("مدين")}</th><th>${__("دائن")}</th></tr></thead>
+                    <tbody>${journalRows}</tbody>
+                </table>
+            </div>
+            <div class="tmv3-preview-note">
+                <strong>${__("مهم")}:</strong>
+                ${__("هذا المسار للمصروفات والمقبوضات العامة غير المرتبطة بوردية أو فاتورة مورد أو فاتورة عميل.")}
+            </div>
+        `;
+    }
+
+    renderTreasuryVouchers(rows) {
+        const body = (rows || []).length
+            ? rows.map((row) => {
+                const docstatus = Number(row.docstatus || 0);
+                const badgeClass = docstatus === 1 ? "tmv3-badge-on" : docstatus === 2 ? "tmv3-badge-off" : "tmv3-badge-warn";
+                const canApprove = this.canApproveTreasuryVoucher && docstatus === 0 && row.can_self_approve;
+                const canCancel = this.canCancelTreasuryVoucher && docstatus === 1;
+                const approvalNote = docstatus === 0 && !row.can_self_approve
+                    ? `<small class="text-muted">${__("ينتظر مديرًا مختلفًا عن طالب المستند")}</small>`
+                    : "";
+                return `
+                    <tr>
+                        <td><a href="/app/treasury-voucher/${encodeURIComponent(row.name || "")}">${this.esc(row.name || "-")}</a></td>
+                        <td>${this.esc(row.posting_date || "-")}</td>
+                        <td>${this.esc(row.voucher_type || "-")}</td>
+                        <td>${this.esc(row.category || "-")}</td>
+                        <td>${this.esc(row.cash_bank_account || "-")}</td>
+                        <td>${this.esc(row.counter_account || "-")}</td>
+                        <td>${this.formatMoney(row.amount, row.currency || "")}</td>
+                        <td><span class="tmv3-badge ${badgeClass}">${this.esc(row.request_status || row.status || "-")}</span></td>
+                        <td>${this.esc(row.requested_by || "-")}<br>${approvalNote}</td>
+                        <td>${row.journal_entry ? `<a href="/app/journal-entry/${encodeURIComponent(row.journal_entry)}">${this.esc(row.journal_entry)}</a>` : "-"}</td>
+                        <td>
+                            ${canApprove ? `<button class="btn btn-xs btn-primary tmv3-treasury-voucher-submit" data-voucher="${this.esc(row.name)}">${__("اعتماد وتنفيذ")}</button>` : ""}
+                            ${canCancel ? `<button class="btn btn-xs btn-danger tmv3-treasury-voucher-cancel" data-voucher="${this.esc(row.name)}">${__("إلغاء")}</button>` : ""}
+                        </td>
+                    </tr>
+                `;
+            }).join("")
+            : `<tr><td colspan="11" class="tmv3-empty">${__("لا توجد مصروفات أو مقبوضات عامة مسجلة حتى الآن.")}</td></tr>`;
+
+        return `
+            <div class="tmv3-section">
+                <h4>${__("المصروفات والمقبوضات العامة خارج الوردية")}</h4>
+                <div class="tmv3-preview-note" style="margin-bottom:12px;">
+                    ${__("لا تستخدم هذا القسم لسداد Purchase Invoice أو تحصيل Sales Invoice أو لحركة مرتبطة بورديّة مفتوحة.")}
+                </div>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table">
+                        <thead>
+                            <tr>
+                                <th>${__("المستند")}</th><th>${__("التاريخ")}</th><th>${__("النوع")}</th>
+                                <th>${__("التصنيف")}</th><th>${__("الخزنة أو البنك")}</th><th>${__("الحساب المقابل")}</th>
+                                <th>${__("المبلغ")}</th><th>${__("الحالة")}</th><th>${__("طالب المستند")}</th>
+                                <th>${__("Journal Entry")}</th><th>${__("إجراءات")}</th>
+                            </tr>
+                        </thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    bindTreasuryVoucherActions() {
+        this.$main.find(".tmv3-treasury-voucher-submit")
+            .off("click.tmv3-treasury-voucher")
+            .on("click.tmv3-treasury-voucher", (event) => {
+                const voucher = $(event.currentTarget).attr("data-voucher");
+                frappe.confirm(
+                    `${__("سيتم اعتماد المستند وإنشاء Journal Entry. هل تريد المتابعة؟")}<br><br><strong>${this.esc(voucher)}</strong>`,
+                    async () => {
+                        const response = await frappe.call({
+                            method:
+                                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.submit_treasury_voucher",
+                            args: { voucher_name: voucher },
+                            freeze: true,
+                            freeze_message: __("جاري اعتماد مستند الخزينة..."),
+                        });
+                        frappe.show_alert({ message: response.message?.message || __("تم اعتماد المستند"), indicator: "green" });
+                        await this.refresh();
+                    },
+                );
+            });
+
+        this.$main.find(".tmv3-treasury-voucher-cancel")
+            .off("click.tmv3-treasury-voucher-cancel")
+            .on("click.tmv3-treasury-voucher-cancel", (event) => {
+                const voucher = $(event.currentTarget).attr("data-voucher");
+                frappe.confirm(
+                    `${__("سيتم إلغاء المستند والقيد المحاسبي المرتبط به. هل تريد المتابعة؟")}<br><br><strong>${this.esc(voucher)}</strong>`,
+                    async () => {
+                        const response = await frappe.call({
+                            method:
+                                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.cancel_treasury_voucher",
+                            args: { voucher_name: voucher },
+                            freeze: true,
+                            freeze_message: __("جاري إلغاء مستند الخزينة..."),
+                        });
+                        frappe.show_alert({ message: response.message?.message || __("تم إلغاء المستند"), indicator: "green" });
+                        await this.refresh();
+                    },
+                );
+            });
+    }
+
     async getShiftCashMovementOptions(company = null) {
         const response = await frappe.call({
             method:
@@ -2280,7 +2717,7 @@ class TreasuryManagementPageV14 {
                 <div class="tmv3-hero">
                     <h2>${__("إدارة الخزائن والبنوك ووسائل الدفع")}</h2>
                     <p>
-                        ${__("يمكن إدارة الخزائن والبنوك ووسائل الدفع والتحويلات وحركات النقدية المرتبطة بالورديات مع المراجعة والاعتماد.")}
+                        ${__("يمكن إدارة الخزائن والبنوك ووسائل الدفع والتحويلات وحركات الوردية والمصروفات والمقبوضات العامة مع المراجعة والاعتماد.")}
                     </p>
                     <div class="tmv3-status">
                         <span>●</span>
@@ -2310,6 +2747,8 @@ class TreasuryManagementPageV14 {
                     ${this.card(__("طلبات تحويل مسودة"), data.draft_internal_transfers, __("Awaiting Approval"))}
                     ${this.card(__("حركات نقدية"), data.shift_cash_movements, __("Shift Cash Movement"))}
                     ${this.card(__("حركات تنتظر الاعتماد"), data.draft_shift_cash_movements, __("Pending Approval"))}
+                    ${this.card(__("مستندات الخزينة العامة"), data.treasury_vouchers, __("Treasury Voucher"))}
+                    ${this.card(__("مستندات عامة تنتظر الاعتماد"), data.draft_treasury_vouchers, __("Pending Approval"))}
                 </div>
 
                 ${this.renderPendingDashboard(data.pending_dashboard || {})}
@@ -2318,6 +2757,7 @@ class TreasuryManagementPageV14 {
                 ${this.renderTerminals(data.terminals || [])}
                 ${this.renderPaymentSetups(data.payment_setups || [])}
                 ${this.renderShiftCashMovements(data.shift_cash_movement_rows || [])}
+                ${this.renderTreasuryVouchers(data.treasury_voucher_rows || [])}
                 ${this.renderInternalTransfers(data.internal_transfer_rows || [])}
                 ${this.renderUnlinkedBankLedgers(data.unlinked_bank_ledgers || [])}
                 ${this.renderWarnings(data.account_warnings || [])}

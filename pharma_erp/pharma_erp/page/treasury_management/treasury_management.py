@@ -10,6 +10,9 @@ from erpnext.accounts.utils import get_balance_on
 from pharma_erp.pharma_erp.doctype.shift_cash_movement.shift_cash_movement import (
     MOVEMENT_RULES as SHIFT_CASH_MOVEMENT_RULES,
 )
+from pharma_erp.pharma_erp.doctype.treasury_voucher.treasury_voucher import (
+    VOUCHER_RULES as TREASURY_VOUCHER_RULES,
+)
 
 from pharma_erp.treasury_access import (
     can_emergency_submit_treasury,
@@ -37,6 +40,7 @@ def get_overview():
     payment_setups = _get_payment_method_setups()
     internal_transfers = _get_internal_transfers()
     shift_cash_movements = _get_shift_cash_movements()
+    treasury_vouchers = _get_treasury_vouchers()
     pending_dashboard = _get_pending_settlement_dashboard(
         terminals=terminals, payment_setups=payment_setups
     )
@@ -59,6 +63,8 @@ def get_overview():
         "draft_internal_transfers": sum(1 for row in internal_transfers if cint(row.get("docstatus")) == 0),
         "shift_cash_movements": len(shift_cash_movements),
         "draft_shift_cash_movements": sum(1 for row in shift_cash_movements if cint(row.get("docstatus")) == 0),
+        "treasury_vouchers": len(treasury_vouchers),
+        "draft_treasury_vouchers": sum(1 for row in treasury_vouchers if cint(row.get("docstatus")) == 0),
         "drawers": drawers,
         "cash_accounts": cash_accounts,
         "account_warnings": account_warnings,
@@ -69,6 +75,7 @@ def get_overview():
         "payment_setups": payment_setups,
         "internal_transfer_rows": internal_transfers,
         "shift_cash_movement_rows": shift_cash_movements,
+        "treasury_voucher_rows": treasury_vouchers,
         "pending_dashboard": pending_dashboard,
         "access_profile": access_profile,
         "can_create_cash_drawer": access_profile["can_manage"],
@@ -85,6 +92,10 @@ def get_overview():
         "can_approve_shift_cash_movement": access_profile["can_manage"],
         "can_cancel_shift_cash_movement": access_profile["can_manage"],
         "can_emergency_submit_shift_cash_movement": access_profile["can_emergency_submit"],
+        "can_manage_treasury_voucher": access_profile["can_operate"],
+        "can_approve_treasury_voucher": access_profile["can_manage"],
+        "can_cancel_treasury_voucher": access_profile["can_manage"],
+        "can_emergency_submit_treasury_voucher": access_profile["can_emergency_submit"],
     }
 
 
@@ -707,6 +718,196 @@ def cancel_shift_cash_movement(movement_name):
         "ok": True,
         "message": _("Shift cash movement and its Journal Entry were cancelled."),
         "shift_cash_movement": movement.name,
+        "status": "Cancelled",
+    }
+
+
+@frappe.whitelist()
+def get_treasury_voucher_options(company=None):
+    """Return safe defaults and cash/bank accounts for a general Treasury Voucher."""
+    _validate_operator_access()
+    company = _resolve_company(company)
+    accounts = _get_general_treasury_accounts(company)
+    company_doc = frappe.db.get_value(
+        "Company",
+        company,
+        ["default_currency", "cost_center"],
+        as_dict=True,
+    ) or {}
+    return {
+        "company": company,
+        "company_currency": company_doc.get("default_currency") or "",
+        "posting_date": nowdate(),
+        "reference_date": nowdate(),
+        "default_cost_center": company_doc.get("cost_center") or "",
+        "cash_bank_accounts": accounts,
+        "default_cash_bank_account": accounts[0]["name"] if len(accounts) == 1 else "",
+        "categories": {
+            voucher_type: list(rule.get("categories") or [])
+            for voucher_type, rule in TREASURY_VOUCHER_RULES.items()
+        },
+    }
+
+
+@frappe.whitelist()
+def preview_treasury_voucher(
+    company,
+    voucher_type,
+    category,
+    cash_bank_account,
+    counter_account,
+    amount,
+    posting_date=None,
+    cost_center=None,
+    reference_no=None,
+    reference_date=None,
+    beneficiary_or_payer=None,
+    description=None,
+    attachment=None,
+    voucher_action="Create Draft",
+):
+    """Validate and preview a general expense or receipt without writing data."""
+    _validate_operator_access()
+    _validate_treasury_voucher_action_access(voucher_action)
+    return _prepare_treasury_voucher(
+        company=company,
+        voucher_type=voucher_type,
+        category=category,
+        cash_bank_account=cash_bank_account,
+        counter_account=counter_account,
+        amount=amount,
+        posting_date=posting_date,
+        cost_center=cost_center,
+        reference_no=reference_no,
+        reference_date=reference_date,
+        beneficiary_or_payer=beneficiary_or_payer,
+        description=description,
+        attachment=attachment,
+        voucher_action=voucher_action,
+    )
+
+
+@frappe.whitelist()
+def execute_treasury_voucher(
+    company,
+    voucher_type,
+    category,
+    cash_bank_account,
+    counter_account,
+    amount,
+    posting_date=None,
+    cost_center=None,
+    reference_no=None,
+    reference_date=None,
+    beneficiary_or_payer=None,
+    description=None,
+    attachment=None,
+    voucher_action="Create Draft",
+):
+    """Create a draft general Treasury Voucher or emergency-submit it."""
+    _validate_operator_access()
+    _validate_treasury_voucher_action_access(voucher_action)
+    plan = _prepare_treasury_voucher(
+        company=company,
+        voucher_type=voucher_type,
+        category=category,
+        cash_bank_account=cash_bank_account,
+        counter_account=counter_account,
+        amount=amount,
+        posting_date=posting_date,
+        cost_center=cost_center,
+        reference_no=reference_no,
+        reference_date=reference_date,
+        beneficiary_or_payer=beneficiary_or_payer,
+        description=description,
+        attachment=attachment,
+        voucher_action=voucher_action,
+    )
+
+    voucher = frappe.new_doc("Treasury Voucher")
+    for fieldname in (
+        "company",
+        "voucher_type",
+        "category",
+        "cash_bank_account",
+        "counter_account",
+        "source_account",
+        "target_account",
+        "amount",
+        "currency",
+        "posting_date",
+        "cost_center",
+        "reference_no",
+        "reference_date",
+        "beneficiary_or_payer",
+        "description",
+        "attachment",
+    ):
+        if fieldname in plan:
+            setattr(voucher, fieldname, plan.get(fieldname))
+
+    voucher.flags.ignore_permissions = True
+    voucher.insert(ignore_permissions=True)
+    if plan["voucher_action"] == "Submit Now":
+        voucher.flags.ignore_permissions = True
+        voucher.submit()
+
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Treasury Voucher was created successfully."),
+        "treasury_voucher": voucher.name,
+        "docstatus": voucher.docstatus,
+        "status": "Posted" if voucher.docstatus == 1 else "Pending Approval",
+        "journal_entry": frappe.db.get_value("Treasury Voucher", voucher.name, "journal_entry"),
+        "amount": flt(voucher.amount),
+        "currency": plan["currency"],
+        "requested_by": voucher.requested_by or voucher.owner,
+        "approved_by": voucher.approved_by,
+    }
+
+
+@frappe.whitelist()
+def submit_treasury_voucher(voucher_name):
+    """Approve and submit an existing draft Treasury Voucher."""
+    _validate_manager_access()
+    voucher_name = str(voucher_name or "").strip()
+    if not voucher_name or not frappe.db.exists("Treasury Voucher", voucher_name):
+        frappe.throw(_("Treasury Voucher was not found."))
+
+    voucher = frappe.get_doc("Treasury Voucher", voucher_name)
+    if voucher.docstatus != 0:
+        frappe.throw(_("Only a Draft Treasury Voucher can be submitted."))
+    voucher.flags.ignore_permissions = True
+    voucher.submit()
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Treasury Voucher was approved and posted successfully."),
+        "treasury_voucher": voucher.name,
+        "journal_entry": voucher.journal_entry,
+        "status": "Posted",
+    }
+
+
+@frappe.whitelist()
+def cancel_treasury_voucher(voucher_name):
+    """Cancel a posted Treasury Voucher and its generated Journal Entry."""
+    _validate_manager_access()
+    voucher_name = str(voucher_name or "").strip()
+    if not voucher_name or not frappe.db.exists("Treasury Voucher", voucher_name):
+        frappe.throw(_("Treasury Voucher was not found."))
+
+    voucher = frappe.get_doc("Treasury Voucher", voucher_name)
+    if voucher.docstatus != 1:
+        frappe.throw(_("Only a submitted Treasury Voucher can be cancelled."))
+    voucher.flags.ignore_permissions = True
+    voucher.cancel()
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Treasury Voucher and its Journal Entry were cancelled."),
+        "treasury_voucher": voucher.name,
         "status": "Cancelled",
     }
 
@@ -2826,6 +3027,188 @@ def _prepare_internal_transfer(
             {"account": source.name, "debit": 0, "credit": amount},
         ],
     }
+
+def _get_general_treasury_accounts(company):
+    """Return operational Asset Cash/Bank accounts not tied to an active shift."""
+    linked_drawers = {}
+    if frappe.db.exists("DocType", "Cash Drawer"):
+        for row in frappe.get_all(
+            "Cash Drawer",
+            filters={"company": company, "enabled": 1},
+            fields=["name", "drawer_name", "cash_account", "current_active_shift"],
+            limit_page_length=500,
+        ):
+            if row.get("cash_account"):
+                linked_drawers[row.cash_account] = row
+
+    rows = frappe.get_all(
+        "Account",
+        filters={
+            "company": company,
+            "root_type": "Asset",
+            "account_type": ["in", ["Cash", "Bank"]],
+            "is_group": 0,
+            "disabled": 0,
+        },
+        fields=["name", "account_name", "account_type", "account_currency"],
+        order_by="account_type asc, account_name asc",
+        limit_page_length=500,
+    )
+    result = []
+    for row in rows:
+        drawer = linked_drawers.get(row.name) or {}
+        if drawer.get("current_active_shift"):
+            continue
+        normalized = str(row.account_name or row.name or "").casefold()
+        if "clearing" in normalized or "in transit" in normalized:
+            continue
+        result.append(
+            {
+                "name": row.name,
+                "account_name": row.account_name or row.name,
+                "account_type": row.account_type,
+                "currency": row.account_currency or "",
+                "current_balance": _account_balance(row.name, company),
+                "cash_drawer": drawer.get("name") or "",
+                "cash_drawer_name": drawer.get("drawer_name") or "",
+            }
+        )
+    return result
+
+
+def _prepare_treasury_voucher(
+    *,
+    company,
+    voucher_type,
+    category,
+    cash_bank_account,
+    counter_account,
+    amount,
+    posting_date=None,
+    cost_center=None,
+    reference_no=None,
+    reference_date=None,
+    beneficiary_or_payer=None,
+    description=None,
+    attachment=None,
+    voucher_action="Create Draft",
+):
+    company = _resolve_company(company)
+    voucher_action = str(voucher_action or "Create Draft").strip()
+    posting_date_value = str(getdate(posting_date or nowdate()))
+    reference_date_value = str(getdate(reference_date)) if reference_date else None
+
+    voucher = frappe.new_doc("Treasury Voucher")
+    voucher.company = company
+    voucher.voucher_type = str(voucher_type or "").strip()
+    voucher.category = str(category or "").strip()
+    voucher.cash_bank_account = str(cash_bank_account or "").strip()
+    voucher.counter_account = str(counter_account or "").strip()
+    voucher.amount = flt(amount)
+    voucher.posting_date = posting_date_value
+    voucher.cost_center = str(cost_center or "").strip()
+    voucher.reference_no = str(reference_no or "").strip()
+    voucher.reference_date = reference_date_value
+    voucher.beneficiary_or_payer = str(beneficiary_or_payer or "").strip()
+    voucher.description = str(description or "").strip()
+    voucher.attachment = str(attachment or "").strip() or None
+    voucher._validate_and_normalize(check_live_balance=True)
+
+    source_balance = _account_balance_on_date(
+        voucher.source_account,
+        company,
+        voucher.posting_date,
+    )
+    target_balance = _account_balance_on_date(
+        voucher.target_account,
+        company,
+        voucher.posting_date,
+    )
+
+    return {
+        "company": company,
+        "voucher_type": voucher.voucher_type,
+        "category": voucher.category,
+        "cash_bank_account": voucher.cash_bank_account,
+        "counter_account": voucher.counter_account,
+        "source_account": voucher.source_account,
+        "target_account": voucher.target_account,
+        "amount": flt(voucher.amount),
+        "currency": voucher.currency,
+        "posting_date": str(voucher.posting_date),
+        "cost_center": voucher.cost_center,
+        "reference_no": voucher.reference_no,
+        "reference_date": str(voucher.reference_date) if voucher.reference_date else None,
+        "beneficiary_or_payer": voucher.beneficiary_or_payer,
+        "description": voucher.description,
+        "attachment": voucher.attachment,
+        "voucher_action": voucher_action,
+        "source_balance_before": source_balance,
+        "source_balance_after": flt(source_balance - voucher.amount),
+        "target_balance_before": target_balance,
+        "target_balance_after": flt(target_balance + voucher.amount),
+        "journal_preview": [
+            {"account": voucher.target_account, "debit": flt(voucher.amount), "credit": 0},
+            {"account": voucher.source_account, "debit": 0, "credit": flt(voucher.amount)},
+        ],
+    }
+
+
+def _get_treasury_vouchers(limit=50):
+    if not frappe.db.exists("DocType", "Treasury Voucher"):
+        return []
+    rows = frappe.get_all(
+        "Treasury Voucher",
+        fields=[
+            "name",
+            "docstatus",
+            "company",
+            "voucher_type",
+            "category",
+            "posting_date",
+            "cash_bank_account",
+            "counter_account",
+            "amount",
+            "currency",
+            "beneficiary_or_payer",
+            "reference_no",
+            "status",
+            "request_status",
+            "requested_by",
+            "requested_at",
+            "approved_by",
+            "approved_at",
+            "approval_note",
+            "journal_entry",
+            "owner",
+            "creation",
+        ],
+        order_by="posting_date desc, creation desc",
+        limit_page_length=cint(limit) or 50,
+    )
+    for row in rows:
+        row["amount"] = flt(row.get("amount"))
+        row["request_status"] = row.get("request_status") or (
+            "Approved" if cint(row.get("docstatus")) == 1 else "Cancelled" if cint(row.get("docstatus")) == 2 else "Pending Approval"
+        )
+        row["requested_by"] = row.get("requested_by") or row.get("owner")
+        row["can_self_approve"] = bool(
+            can_emergency_submit_treasury()
+            or row.get("requested_by") != frappe.session.user
+        )
+    return rows
+
+
+def _validate_treasury_voucher_action_access(voucher_action):
+    action = str(voucher_action or "Create Draft").strip()
+    if action not in ("Create Draft", "Submit Now"):
+        frappe.throw(_("Invalid Treasury Voucher action."))
+    if action == "Submit Now" and not can_emergency_submit_treasury():
+        frappe.throw(
+            _("Submit Now is reserved for emergency System Manager use. Save the voucher as Draft for manager approval."),
+            frappe.PermissionError,
+        )
+
 
 def _get_shift_cash_movement_type_options():
     labels = {
