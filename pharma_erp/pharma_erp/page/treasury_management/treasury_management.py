@@ -204,6 +204,139 @@ def execute_payment_reconciliation_settlement(
 
 
 @frappe.whitelist()
+def get_card_bank_settlement_options(batch_name):
+    """Return compatible open card batches and bank-settlement defaults."""
+    _validate_create_access()
+    return _card_bank_settlement_options(batch_name)
+
+
+@frappe.whitelist()
+def preview_card_bank_settlement(
+    batch_name,
+    allocations,
+    settlement_date=None,
+    bank_reference=None,
+    fee_amount=0,
+    statement_attachment=None,
+    notes=None,
+):
+    """Validate a card bank settlement without creating accounting documents."""
+    _validate_create_access()
+    return _prepare_card_bank_settlement(
+        batch_name=batch_name,
+        allocations=allocations,
+        settlement_date=settlement_date,
+        bank_reference=bank_reference,
+        fee_amount=fee_amount,
+        statement_attachment=statement_attachment,
+        notes=notes,
+    )
+
+
+@frappe.whitelist()
+def execute_card_bank_settlement(
+    batch_name,
+    allocations,
+    settlement_date=None,
+    bank_reference=None,
+    fee_amount=0,
+    statement_attachment=None,
+    notes=None,
+):
+    """Create and submit Card Bank Settlement for selected open batches."""
+    _validate_create_access()
+    plan = _prepare_card_bank_settlement(
+        batch_name=batch_name,
+        allocations=allocations,
+        settlement_date=settlement_date,
+        bank_reference=bank_reference,
+        fee_amount=fee_amount,
+        statement_attachment=statement_attachment,
+        notes=notes,
+    )
+
+    batch_names = tuple(row["card_settlement_batch"] for row in plan["allocations"])
+    if batch_names:
+        frappe.db.sql(
+            """
+            SELECT name
+            FROM `tabCard Settlement Batch`
+            WHERE name IN %(batch_names)s
+            FOR UPDATE
+            """,
+            {"batch_names": batch_names},
+        )
+
+    # Revalidate after locking to prevent two users settling the same amount.
+    plan = _prepare_card_bank_settlement(
+        batch_name=batch_name,
+        allocations=allocations,
+        settlement_date=settlement_date,
+        bank_reference=bank_reference,
+        fee_amount=fee_amount,
+        statement_attachment=statement_attachment,
+        notes=notes,
+    )
+
+    settlement = frappe.new_doc("Card Bank Settlement")
+    settlement.company = plan["company"]
+    settlement.settlement_date = plan["settlement_date"]
+    settlement.bank_reference = plan["bank_reference"]
+    settlement.statement_attachment = plan.get("statement_attachment") or ""
+    settlement.destination_bank_account = plan["destination_bank_account"]
+    settlement.clearing_account = plan["clearing_account"]
+    settlement.fee_account = plan.get("fee_account") or ""
+    settlement.fee_amount = flt(plan["fee_amount"])
+    settlement.notes = plan.get("notes") or ""
+
+    for row in plan["allocations"]:
+        settlement.append(
+            "allocations",
+            {
+                "card_settlement_batch": row["card_settlement_batch"],
+                "pos_terminal": row.get("pos_terminal") or "",
+                "batch_number": row.get("batch_number") or "",
+                "available_amount": flt(row["available_amount"]),
+                "allocated_amount": flt(row["allocated_amount"]),
+            },
+        )
+
+    settlement.flags.ignore_permissions = True
+    settlement.insert(ignore_permissions=True)
+    settlement.flags.ignore_permissions = True
+    settlement.submit()
+
+    journal_entry = frappe.db.get_value(
+        "Card Bank Settlement", settlement.name, "journal_entry"
+    ) or ""
+    updated_batches = frappe.get_all(
+        "Card Settlement Batch",
+        filters={"name": ["in", list(batch_names)]},
+        fields=[
+            "name",
+            "status",
+            "settled_amount",
+            "outstanding_amount",
+            "bank_settlement",
+        ],
+        order_by="name asc",
+        limit_page_length=500,
+    )
+    frappe.db.commit()
+
+    return {
+        "ok": True,
+        "message": _("Card bank settlement was submitted successfully."),
+        "card_bank_settlement": settlement.name,
+        "journal_entry": journal_entry,
+        "gross_amount": flt(plan["gross_amount"]),
+        "fee_amount": flt(plan["fee_amount"]),
+        "net_amount": flt(plan["net_amount"]),
+        "batches": updated_batches,
+    }
+
+
+@frappe.whitelist()
 def get_cash_drawer_creation_options(company=None):
     """Return safe defaults for the create-cash-drawer dialog."""
     _validate_create_access()
@@ -2428,6 +2561,281 @@ def _fee_parent_accounts(company):
     return rows
 
 
+
+
+CARD_BATCH_SETTLEABLE_STATUSES = {
+    "Awaiting Bank Settlement",
+    "Partially Settled",
+    "Disputed",
+}
+
+
+def _card_bank_settlement_options(batch_name):
+    batch_name = str(batch_name or "").strip()
+    if not batch_name or not frappe.db.exists("Card Settlement Batch", batch_name):
+        frappe.throw(_("Select an existing Card Settlement Batch."))
+
+    seed = frappe.get_doc("Card Settlement Batch", batch_name)
+    _validate_settleable_card_batch(seed)
+
+    batches = frappe.get_all(
+        "Card Settlement Batch",
+        filters={
+            "docstatus": 1,
+            "company": seed.company,
+            "clearing_account": seed.clearing_account,
+            "destination_bank_account": seed.destination_bank_account,
+            "status": ["in", sorted(CARD_BATCH_SETTLEABLE_STATUSES)],
+            "outstanding_amount": [">", 0.005],
+        },
+        fields=[
+            "name",
+            "shift_reference",
+            "pos_terminal",
+            "bank_label",
+            "batch_number",
+            "close_time",
+            "status",
+            "system_total",
+            "machine_total",
+            "settled_amount",
+            "outstanding_amount",
+            "clearing_account",
+            "destination_bank_account",
+            "fee_account",
+        ],
+        order_by="close_time asc, creation asc",
+        limit_page_length=500,
+    )
+    for row in batches:
+        for fieldname in (
+            "system_total",
+            "machine_total",
+            "settled_amount",
+            "outstanding_amount",
+        ):
+            row[fieldname] = flt(row.get(fieldname))
+        row["selected"] = cint(row.name == seed.name)
+
+    currency = frappe.db.get_value(
+        "Account", seed.clearing_account, "account_currency"
+    ) or frappe.db.get_value("Company", seed.company, "default_currency") or ""
+    bank_account = frappe.db.get_value(
+        "Bank Account",
+        {
+            "company": seed.company,
+            "account": seed.destination_bank_account,
+            "disabled": 0,
+        },
+        ["name", "account_name", "bank"],
+        as_dict=True,
+    ) or {}
+    fee_account = seed.fee_account or frappe.db.get_value(
+        "Card POS Terminal", seed.pos_terminal, "fee_account"
+    ) or ""
+
+    return {
+        "seed_batch": seed.name,
+        "company": seed.company,
+        "currency": currency,
+        "clearing_account": seed.clearing_account,
+        "destination_bank_account": seed.destination_bank_account,
+        "bank_account": bank_account.get("name") or "",
+        "bank_account_name": bank_account.get("account_name") or "",
+        "bank": bank_account.get("bank") or seed.bank_label or "",
+        "fee_account": fee_account,
+        "settlement_date": nowdate(),
+        "clearing_balance": flt(_account_balance(seed.clearing_account, seed.company)),
+        "batches": batches,
+    }
+
+
+def _parse_card_allocations(allocations):
+    if isinstance(allocations, str):
+        allocations = frappe.parse_json(allocations)
+    if not isinstance(allocations, (list, tuple)):
+        frappe.throw(_("Card batch allocations must be a list."))
+
+    normalized = []
+    seen = set()
+    for row in allocations:
+        if not isinstance(row, dict):
+            frappe.throw(_("Invalid card batch allocation row."))
+        batch_name = str(row.get("card_settlement_batch") or row.get("name") or "").strip()
+        amount = flt(row.get("allocated_amount"))
+        if not batch_name:
+            frappe.throw(_("Every allocation must include a Card Settlement Batch."))
+        if batch_name in seen:
+            frappe.throw(_("Card batch {0} was selected more than once.").format(batch_name))
+        if amount <= 0:
+            frappe.throw(_("Allocated amount for {0} must be greater than zero.").format(batch_name))
+        seen.add(batch_name)
+        normalized.append(
+            {
+                "card_settlement_batch": batch_name,
+                "allocated_amount": amount,
+            }
+        )
+    if not normalized:
+        frappe.throw(_("Select at least one Card Settlement Batch."))
+    return normalized
+
+
+def _prepare_card_bank_settlement(
+    batch_name,
+    allocations,
+    settlement_date=None,
+    bank_reference=None,
+    fee_amount=0,
+    statement_attachment=None,
+    notes=None,
+):
+    options = _card_bank_settlement_options(batch_name)
+    allocation_rows = _parse_card_allocations(allocations)
+    compatible = {row.name: row for row in options["batches"]}
+
+    prepared = []
+    gross = 0.0
+    latest_close_date = None
+    for allocation in allocation_rows:
+        batch_id = allocation["card_settlement_batch"]
+        if batch_id not in compatible:
+            frappe.throw(
+                _(
+                    "Card batch {0} does not use the same company, clearing account, "
+                    "and destination bank account as {1}."
+                ).format(batch_id, options["seed_batch"])
+            )
+        batch = frappe.get_doc("Card Settlement Batch", batch_id)
+        _validate_settleable_card_batch(batch)
+        available = flt(batch.outstanding_amount)
+        allocated = flt(allocation["allocated_amount"])
+        if allocated - available > 0.01:
+            frappe.throw(
+                _("Allocated amount for {0} exceeds the available amount {1}.").format(
+                    batch.name, available
+                )
+            )
+        if batch.close_time:
+            close_date = getdate(batch.close_time)
+            latest_close_date = max(latest_close_date, close_date) if latest_close_date else close_date
+        gross += allocated
+        prepared.append(
+            {
+                "card_settlement_batch": batch.name,
+                "shift_reference": batch.shift_reference,
+                "pos_terminal": batch.pos_terminal,
+                "batch_number": batch.batch_number or "",
+                "status": batch.status,
+                "close_time": batch.close_time,
+                "available_amount": available,
+                "allocated_amount": allocated,
+            }
+        )
+
+    settlement_date = getdate(settlement_date or nowdate())
+    if settlement_date > getdate(nowdate()):
+        frappe.throw(_("Settlement Date cannot be in the future."))
+    if latest_close_date and settlement_date < latest_close_date:
+        frappe.throw(
+            _("Settlement Date cannot be earlier than the latest selected batch close date {0}.").format(
+                latest_close_date
+            )
+        )
+
+    bank_reference = _clean_master_text(bank_reference)
+    if not bank_reference:
+        frappe.throw(_("Bank Reference is required."))
+    duplicate_reference = frappe.db.get_value(
+        "Card Bank Settlement",
+        {
+            "company": options["company"],
+            "bank_reference": bank_reference,
+            "docstatus": ["!=", 2],
+        },
+        "name",
+    )
+    if duplicate_reference:
+        frappe.throw(
+            _("Bank Reference is already used by Card Bank Settlement {0}.").format(
+                duplicate_reference
+            )
+        )
+
+    fee_amount = flt(fee_amount)
+    if fee_amount < 0:
+        frappe.throw(_("Fee Amount cannot be negative."))
+    if fee_amount - gross > 0.01:
+        frappe.throw(_("Fee Amount cannot exceed Gross Amount."))
+    fee_account = options.get("fee_account") or ""
+    if fee_amount > 0 and not fee_account:
+        frappe.throw(_("Fee Account is required when bank fees are entered."))
+
+    _validate_company_account(
+        options["clearing_account"],
+        options["company"],
+        expected_root="Asset",
+        label=_("Clearing Account"),
+    )
+    _validate_company_account(
+        options["destination_bank_account"],
+        options["company"],
+        expected_root="Asset",
+        expected_type="Bank",
+        label=_("Destination Bank Account"),
+    )
+    if fee_account:
+        _validate_company_account(
+            fee_account,
+            options["company"],
+            expected_root="Expense",
+            label=_("Fee Account"),
+        )
+
+    clearing_balance = flt(_account_balance(options["clearing_account"], options["company"]))
+    if clearing_balance + 0.01 < gross:
+        frappe.throw(
+            _(
+                "Clearing balance {0} is lower than the selected gross settlement {1}."
+            ).format(clearing_balance, gross)
+        )
+
+    return {
+        "seed_batch": options["seed_batch"],
+        "company": options["company"],
+        "currency": options["currency"],
+        "settlement_date": str(settlement_date),
+        "bank_reference": bank_reference,
+        "statement_attachment": str(statement_attachment or "").strip(),
+        "clearing_account": options["clearing_account"],
+        "destination_bank_account": options["destination_bank_account"],
+        "bank_account": options.get("bank_account") or "",
+        "bank_account_name": options.get("bank_account_name") or "",
+        "bank": options.get("bank") or "",
+        "fee_account": fee_account,
+        "gross_amount": flt(gross),
+        "fee_amount": fee_amount,
+        "net_amount": flt(gross - fee_amount),
+        "clearing_balance_before": clearing_balance,
+        "clearing_balance_after": flt(clearing_balance - gross),
+        "notes": str(notes or "").strip(),
+        "allocations": prepared,
+    }
+
+
+def _validate_settleable_card_batch(batch):
+    if batch.docstatus != 1:
+        frappe.throw(_("Card batch must be submitted: {0}").format(batch.name))
+    if batch.status not in CARD_BATCH_SETTLEABLE_STATUSES:
+        frappe.throw(
+            _("Card batch {0} is not open for bank settlement (status: {1}).").format(
+                batch.name, batch.status
+            )
+        )
+    if flt(batch.outstanding_amount) <= 0.005:
+        frappe.throw(_("Card batch {0} has no outstanding amount.").format(batch.name))
+    if not batch.clearing_account or not batch.destination_bank_account:
+        frappe.throw(_("Card batch {0} has incomplete account configuration.").format(batch.name))
 
 
 def _get_pending_settlement_dashboard(terminals=None, payment_setups=None):

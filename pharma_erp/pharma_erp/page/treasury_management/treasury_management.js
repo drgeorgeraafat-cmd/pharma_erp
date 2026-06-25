@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV10(page, wrapper);
+    new TreasuryManagementPageV11(page, wrapper);
 };
 
 
-class TreasuryManagementPageV10 {
+class TreasuryManagementPageV11 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -47,6 +47,11 @@ class TreasuryManagementPageV10 {
             __("إضافة وسيلة دفع إلكترونية"),
             () => this.openPaymentSetupDialog(),
             __("وسائل الدفع"),
+        );
+        this.$cardSettlementButton = this.page.add_inner_button(
+            __("تسوية دفعات الفيزا"),
+            () => this.openCardSettlementPicker(),
+            __("ماكينات الفيزا"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -231,6 +236,7 @@ class TreasuryManagementPageV10 {
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
             if (this.$terminalButton) this.$terminalButton.toggle(this.canManageCardTerminal);
             if (this.$paymentSetupButton) this.$paymentSetupButton.toggle(this.canManagePaymentSetup);
+            if (this.$cardSettlementButton) this.$cardSettlementButton.toggle(this.canExecuteSettlement);
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
@@ -1522,6 +1528,9 @@ class TreasuryManagementPageV10 {
                             ${this.canExecuteSettlement && row.doctype === "Shift Payment Reconciliation"
                                 ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-reconciliation" data-reconciliation="${this.esc(row.document || "")}">${__("تسوية")}</button>`
                                 : ""}
+                            ${this.canExecuteSettlement && row.doctype === "Card Settlement Batch"
+                                ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-card-batch" data-batch="${this.esc(row.document || "")}">${__("تسوية بنكية")}</button>`
+                                : ""}
                         </div>
                     </div>
                 `;
@@ -1563,9 +1572,14 @@ class TreasuryManagementPageV10 {
                     <td>${this.formatMoney(row.outstanding_amount, currency)}</td>
                     <td>${this.esc(row.age_days || 0)} ${__("يوم")}</td>
                     <td><span class="tmv3-badge ${row.overdue ? "tmv3-badge-off" : "tmv3-badge-on"}">${row.overdue ? __("متأخرة") : __("معلّقة اليوم")}</span></td>
+                    <td>
+                        ${this.canExecuteSettlement
+                            ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-card-batch" data-batch="${this.esc(row.name || "")}">${__("تسوية بنكية")}</button>`
+                            : ""}
+                    </td>
                 </tr>
             `).join("")
-            : `<tr><td colspan="7" class="tmv3-empty">${__("لا توجد دفعات فيزا غير مسوّاة.")}</td></tr>`;
+            : `<tr><td colspan="8" class="tmv3-empty">${__("لا توجد دفعات فيزا غير مسوّاة.")}</td></tr>`;
 
         const reconciliationRows = reconciliations.length
             ? reconciliations.map((row) => `
@@ -1625,7 +1639,7 @@ class TreasuryManagementPageV10 {
                     <table class="tmv3-table">
                         <thead><tr>
                             <th>${__("الدفعة")}</th><th>${__("الماكينة")}</th><th>${__("الحالة")}</th>
-                            <th>${__("وقت الإغلاق")}</th><th>${__("المتبقي")}</th><th>${__("العمر")}</th><th>${__("التصنيف")}</th>
+                            <th>${__("وقت الإغلاق")}</th><th>${__("المتبقي")}</th><th>${__("العمر")}</th><th>${__("التصنيف")}</th><th>${__("إجراءات")}</th>
                         </tr></thead>
                         <tbody>${cardRows}</tbody>
                     </table>
@@ -1921,6 +1935,232 @@ class TreasuryManagementPageV10 {
                 const reconciliation = $(event.currentTarget).attr("data-reconciliation");
                 this.openReconciliationSettlementDialog(reconciliation);
             });
+        this.$main
+            .find(".tmv3-settle-card-batch")
+            .off("click.tmv3-card-settlement")
+            .on("click.tmv3-card-settlement", (event) => {
+                const batch = $(event.currentTarget).attr("data-batch");
+                this.openCardBankSettlementDialog(batch);
+            });
+    }
+
+    openCardSettlementPicker() {
+        const dialog = new frappe.ui.Dialog({
+            title: __("اختيار دفعة فيزا للتسوية البنكية"),
+            fields: [
+                {
+                    fieldname: "batch_name",
+                    fieldtype: "Link",
+                    options: "Card Settlement Batch",
+                    label: __("دفعة فيزا مفتوحة"),
+                    reqd: 1,
+                    get_query: () => ({
+                        filters: {
+                            docstatus: 1,
+                            status: ["in", ["Awaiting Bank Settlement", "Partially Settled", "Disputed"]],
+                            outstanding_amount: [">", 0.005],
+                        },
+                    }),
+                },
+            ],
+            primary_action_label: __("متابعة"),
+            primary_action: (values) => {
+                dialog.hide();
+                this.openCardBankSettlementDialog(values.batch_name);
+            },
+        });
+        dialog.show();
+    }
+
+    async openCardBankSettlementDialog(batchName) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_card_bank_settlement_options",
+            args: { batch_name: batchName },
+            freeze: true,
+            freeze_message: __("جاري تحميل دفعات الفيزا المتوافقة..."),
+        });
+        const data = response.message || {};
+        const batches = data.batches || [];
+        if (!batches.length) {
+            frappe.msgprint(__("لا توجد دفعات فيزا مفتوحة ومتوافقة مع هذه الدفعة."));
+            return;
+        }
+        const batchRows = batches.map((row) => `
+            <tr class="tmv3-card-allocation-row" data-batch="${this.esc(row.name || "")}">
+                <td><input type="checkbox" class="tmv3-card-allocation-check" ${row.selected ? "checked" : ""}></td>
+                <td><a href="/app/card-settlement-batch/${encodeURIComponent(row.name || "")}" target="_blank">${this.esc(row.name || "-")}</a></td>
+                <td>${this.esc(row.pos_terminal || "-")}</td>
+                <td>${this.esc(row.shift_reference || "-")}</td>
+                <td>${this.esc(row.close_time || "-")}</td>
+                <td>${this.esc(row.status || "-")}</td>
+                <td>${this.formatMoney(row.outstanding_amount, data.currency)}</td>
+                <td><input type="number" class="form-control input-xs tmv3-card-allocation-amount" min="0.01" step="0.01" max="${this.esc(row.outstanding_amount)}" value="${this.esc(row.outstanding_amount)}" ${row.selected ? "" : "disabled"}></td>
+            </tr>
+        `).join("");
+
+        const dialog = new frappe.ui.Dialog({
+            title: `${__("تنفيذ Card Bank Settlement")}: ${this.esc(data.bank || data.destination_bank_account || "")}`,
+            size: "extra-large",
+            fields: [
+                {
+                    fieldtype: "HTML",
+                    options: `
+                        <div style="direction:rtl;text-align:right;">
+                            <div class="tmv3-preview" style="margin-bottom:14px;">
+                                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الشركة")}</div><div class="tmv3-preview-value">${this.esc(data.company || "-")}</div></div>
+                                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("حساب Clearing")}</div><div class="tmv3-preview-value">${this.esc(data.clearing_account || "-")}</div></div>
+                                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الحساب البنكي النهائي")}</div><div class="tmv3-preview-value">${this.esc(data.destination_bank_account || "-")}</div></div>
+                                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("Bank Account")}</div><div class="tmv3-preview-value">${this.esc(data.bank_account_name || data.bank_account || "-")}</div></div>
+                                <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("رصيد Clearing الحالي")}</div><div class="tmv3-preview-value">${this.formatMoney(data.clearing_balance, data.currency)}</div></div>
+                            </div>
+                            <div class="tmv3-table-wrap"><table class="tmv3-table" style="min-width:1150px;">
+                                <thead><tr>
+                                    <th>${__("اختيار")}</th><th>${__("الدفعة")}</th><th>${__("الماكينة")}</th><th>${__("الوردية")}</th>
+                                    <th>${__("وقت الإغلاق")}</th><th>${__("الحالة")}</th><th>${__("المتاح")}</th><th>${__("مبلغ التسوية")}</th>
+                                </tr></thead>
+                                <tbody>${batchRows}</tbody>
+                            </table></div>
+                            <div class="tmv3-preview-note">${__("يمكن جمع عدة دفعات في تسوية بنكية واحدة بشرط استخدام نفس حساب Clearing ونفس الحساب البنكي النهائي.")}</div>
+                        </div>
+                    `,
+                },
+                {
+                    fieldname: "settlement_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ وصول التسوية للبنك"),
+                    default: data.settlement_date || frappe.datetime.get_today(),
+                    reqd: 1,
+                },
+                {
+                    fieldname: "bank_reference",
+                    fieldtype: "Data",
+                    label: __("مرجع البنك"),
+                    reqd: 1,
+                },
+                {
+                    fieldname: "fee_amount",
+                    fieldtype: "Currency",
+                    label: __("إجمالي عمولة البنك"),
+                    default: 0,
+                    non_negative: 1,
+                    description: `${__("حساب الرسوم")}: ${this.esc(data.fee_account || "-")}`,
+                },
+                {
+                    fieldname: "statement_attachment",
+                    fieldtype: "Attach",
+                    label: __("كشف أو إثبات التسوية"),
+                },
+                {
+                    fieldname: "notes",
+                    fieldtype: "Small Text",
+                    label: __("ملاحظات"),
+                },
+            ],
+            primary_action_label: __("معاينة التسوية"),
+            primary_action: async (values) => {
+                const allocations = this.collectCardSettlementAllocations(dialog);
+                const args = {
+                    batch_name: data.seed_batch,
+                    allocations: JSON.stringify(allocations),
+                    ...values,
+                };
+                const previewResponse = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_card_bank_settlement",
+                    args,
+                    freeze: true,
+                    freeze_message: __("جاري مراجعة الدفعات والحسابات..."),
+                });
+                this.showCardBankSettlementConfirmation(dialog, args, previewResponse.message || {});
+            },
+        });
+        dialog.show();
+        dialog.$wrapper
+            .find(".tmv3-card-allocation-check")
+            .on("change", (event) => {
+                const $row = $(event.currentTarget).closest(".tmv3-card-allocation-row");
+                $row.find(".tmv3-card-allocation-amount").prop("disabled", !event.currentTarget.checked);
+            });
+    }
+
+    collectCardSettlementAllocations(dialog) {
+        const allocations = [];
+        dialog.$wrapper.find(".tmv3-card-allocation-row").each((index, element) => {
+            const $row = $(element);
+            if (!$row.find(".tmv3-card-allocation-check").prop("checked")) return;
+            allocations.push({
+                card_settlement_batch: $row.attr("data-batch"),
+                allocated_amount: flt($row.find(".tmv3-card-allocation-amount").val()),
+            });
+        });
+        if (!allocations.length) {
+            frappe.throw(__("اختر دفعة واحدة على الأقل للتسوية."));
+        }
+        return allocations;
+    }
+
+    showCardBankSettlementConfirmation(sourceDialog, sourceValues, preview) {
+        const allocationRows = (preview.allocations || []).map((row) => `
+            <tr>
+                <td>${this.esc(row.card_settlement_batch || "-")}</td>
+                <td>${this.esc(row.pos_terminal || "-")}</td>
+                <td>${this.esc(row.shift_reference || "-")}</td>
+                <td>${this.formatMoney(row.available_amount, preview.currency)}</td>
+                <td>${this.formatMoney(row.allocated_amount, preview.currency)}</td>
+            </tr>
+        `).join("");
+        const confirmDialog = new frappe.ui.Dialog({
+            title: __("تأكيد التسوية البنكية لدفعات الفيزا"),
+            size: "extra-large",
+            fields: [{
+                fieldtype: "HTML",
+                options: `
+                    <div style="direction:rtl;text-align:right;">
+                        <div class="tmv3-preview" style="margin-bottom:14px;">
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("مرجع البنك")}</div><div class="tmv3-preview-value">${this.esc(preview.bank_reference || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("تاريخ التسوية")}</div><div class="tmv3-preview-value">${this.esc(preview.settlement_date || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الإجمالي")}</div><div class="tmv3-preview-value">${this.formatMoney(preview.gross_amount, preview.currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("عمولة البنك")}</div><div class="tmv3-preview-value">${this.formatMoney(preview.fee_amount, preview.currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("صافي البنك")}</div><div class="tmv3-preview-value">${this.formatMoney(preview.net_amount, preview.currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("رصيد Clearing قبل / بعد")}</div><div class="tmv3-preview-value">${this.formatMoney(preview.clearing_balance_before, preview.currency)} → ${this.formatMoney(preview.clearing_balance_after, preview.currency)}</div></div>
+                        </div>
+                        <div class="tmv3-table-wrap"><table class="tmv3-table">
+                            <thead><tr><th>${__("الدفعة")}</th><th>${__("الماكينة")}</th><th>${__("الوردية")}</th><th>${__("المتاح")}</th><th>${__("المخصص")}</th></tr></thead>
+                            <tbody>${allocationRows}</tbody>
+                        </table></div>
+                        <div class="tmv3-preview-note"><strong>${__("مهم")}:</strong> ${__("سيتم إنشاء واعتماد Card Bank Settlement، وسيقوم المستند بإنشاء Journal Entry وتحديث المبالغ المتبقية وحالة كل Batch تلقائيًا.")}</div>
+                    </div>
+                `,
+            }],
+            primary_action_label: __("تنفيذ التسوية البنكية"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_card_bank_settlement",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: __("جاري إنشاء واعتماد التسوية البنكية..."),
+                });
+                const result = response.message || {};
+                confirmDialog.hide();
+                sourceDialog.hide();
+                frappe.msgprint({
+                    title: __("تمت تسوية دفعات الفيزا"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction:rtl;text-align:right;">
+                            <div>${this.esc(result.message || __("تمت التسوية بنجاح"))}</div>
+                            <div><strong>${__("Card Bank Settlement")}:</strong> <a href="/app/card-bank-settlement/${encodeURIComponent(result.card_bank_settlement || "")}">${this.esc(result.card_bank_settlement || "-")}</a></div>
+                            <div><strong>${__("Journal Entry")}:</strong> <a href="/app/journal-entry/${encodeURIComponent(result.journal_entry || "")}">${this.esc(result.journal_entry || "-")}</a></div>
+                            <div><strong>${__("Gross / Fee / Net")}:</strong> ${this.formatMoney(result.gross_amount, "")} / ${this.formatMoney(result.fee_amount, "")} / ${this.formatMoney(result.net_amount, "")}</div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
     }
 
     async openReconciliationSettlementDialog(reconciliation) {
