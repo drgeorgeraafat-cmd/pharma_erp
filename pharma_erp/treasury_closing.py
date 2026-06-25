@@ -146,7 +146,14 @@ def _is_treasury_account(account, company=None):
 
 
 def _record_emergency_override(closing_name, operation, document):
-    cache = getattr(frappe.flags, "treasury_day_override_log", set())
+    # frappe.flags is a frappe._dict: a missing key can resolve to None rather
+    # than honoring getattr's default. Always normalize the request cache to a
+    # set before checking membership so emergency overrides cannot fail during
+    # validation of a new document.
+    cache = getattr(frappe.flags, "treasury_day_override_log", None)
+    if not isinstance(cache, set):
+        cache = set()
+
     key = (
         closing_name,
         getattr(document, "doctype", ""),
