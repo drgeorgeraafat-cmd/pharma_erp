@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV11(page, wrapper);
+    new TreasuryManagementPageV12(page, wrapper);
 };
 
 
-class TreasuryManagementPageV11 {
+class TreasuryManagementPageV12 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -22,6 +22,8 @@ class TreasuryManagementPageV11 {
         this.canManageCardTerminal = false;
         this.canManagePaymentSetup = false;
         this.canExecuteSettlement = false;
+        this.canManageInternalTransfer = false;
+        this.transferAccounts = {};
         this.autoAccountName = "";
         this.autoBankNames = {};
         this.autoTerminalNames = {};
@@ -52,6 +54,11 @@ class TreasuryManagementPageV11 {
             __("تسوية دفعات الفيزا"),
             () => this.openCardSettlementPicker(),
             __("ماكينات الفيزا"),
+        );
+        this.$internalTransferButton = this.page.add_inner_button(
+            __("تحويل مالي جديد"),
+            () => this.openInternalTransferDialog(),
+            __("التحويلات"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -232,17 +239,20 @@ class TreasuryManagementPageV11 {
             this.canManageCardTerminal = Boolean(data.can_manage_card_terminal);
             this.canManagePaymentSetup = Boolean(data.can_manage_payment_setup);
             this.canExecuteSettlement = Boolean(data.can_execute_settlement);
+            this.canManageInternalTransfer = Boolean(data.can_manage_internal_transfer);
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
             if (this.$terminalButton) this.$terminalButton.toggle(this.canManageCardTerminal);
             if (this.$paymentSetupButton) this.$paymentSetupButton.toggle(this.canManagePaymentSetup);
             if (this.$cardSettlementButton) this.$cardSettlementButton.toggle(this.canExecuteSettlement);
+            if (this.$internalTransferButton) this.$internalTransferButton.toggle(this.canManageInternalTransfer);
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
             this.bindTerminalActions();
             this.bindPaymentSetupActions();
             this.bindSettlementActions();
+            this.bindInternalTransferActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -1441,6 +1451,331 @@ class TreasuryManagementPageV11 {
         `;
     }
 
+
+    async getInternalTransferOptions(company = null) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_internal_transfer_options",
+            args: { company },
+            freeze: true,
+            freeze_message: __("جاري تحميل حسابات التحويل..."),
+        });
+        return response.message || {};
+    }
+
+    async openInternalTransferDialog() {
+        if (!this.canManageInternalTransfer) {
+            frappe.msgprint(__("ليس لديك صلاحية تنفيذ التحويلات المالية."));
+            return;
+        }
+
+        const options = await this.getInternalTransferOptions();
+        this.setTransferAccountMap(options.accounts || []);
+        let dialog;
+        dialog = new frappe.ui.Dialog({
+            title: __("تحويل مالي بين الخزائن والبنوك"),
+            size: "large",
+            fields: [
+                {
+                    fieldname: "company",
+                    fieldtype: "Link",
+                    options: "Company",
+                    label: __("الشركة"),
+                    reqd: 1,
+                    default: options.company,
+                    onchange: async () => this.reloadInternalTransferCompany(dialog),
+                },
+                {
+                    fieldname: "transfer_action",
+                    fieldtype: "Select",
+                    label: __("إجراء التحويل"),
+                    options: "Create Draft\nSubmit Now",
+                    default: "Submit Now",
+                    reqd: 1,
+                    description: __("Create Draft يحفظ طلبًا للمراجعة، وSubmit Now ينشئ ويعتمد التحويل فورًا."),
+                },
+                { fieldtype: "Section Break", label: __("الحساب المصدر والوجهة") },
+                {
+                    fieldname: "paid_from",
+                    fieldtype: "Link",
+                    options: "Account",
+                    label: __("من حساب"),
+                    reqd: 1,
+                    get_query: () => this.internalTransferAccountQuery(dialog),
+                    onchange: () => this.updateInternalTransferAccountInfo(dialog),
+                },
+                {
+                    fieldname: "source_balance",
+                    fieldtype: "Currency",
+                    label: __("الرصيد المتاح في المصدر"),
+                    read_only: 1,
+                    options: "account_currency",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "paid_to",
+                    fieldtype: "Link",
+                    options: "Account",
+                    label: __("إلى حساب"),
+                    reqd: 1,
+                    get_query: () => this.internalTransferAccountQuery(dialog),
+                    onchange: () => this.updateInternalTransferAccountInfo(dialog),
+                },
+                {
+                    fieldname: "destination_balance",
+                    fieldtype: "Currency",
+                    label: __("الرصيد الحالي في الوجهة"),
+                    read_only: 1,
+                    options: "account_currency",
+                },
+                { fieldtype: "Section Break", label: __("بيانات التحويل") },
+                {
+                    fieldname: "amount",
+                    fieldtype: "Currency",
+                    label: __("مبلغ التحويل"),
+                    reqd: 1,
+                    options: "account_currency",
+                },
+                {
+                    fieldname: "posting_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ القيد"),
+                    reqd: 1,
+                    default: options.posting_date || frappe.datetime.get_today(),
+                },
+                {
+                    fieldname: "account_currency",
+                    fieldtype: "Data",
+                    label: __("العملة"),
+                    read_only: 1,
+                    default: options.company_currency || "",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "reference_no",
+                    fieldtype: "Data",
+                    label: __("رقم المرجع"),
+                    reqd: 1,
+                    description: __("رقم إيصال الإيداع أو التحويل أو رقم داخلي فريد."),
+                },
+                {
+                    fieldname: "reference_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ المرجع"),
+                    reqd: 1,
+                    default: options.reference_date || frappe.datetime.get_today(),
+                },
+                { fieldtype: "Section Break", label: __("ملاحظات") },
+                {
+                    fieldname: "remarks",
+                    fieldtype: "Small Text",
+                    label: __("سبب أو ملاحظات التحويل"),
+                },
+            ],
+            primary_action_label: __("معاينة التحويل"),
+            primary_action: async (values) => this.previewInternalTransfer(dialog, values),
+        });
+        dialog.show();
+    }
+
+    setTransferAccountMap(accounts) {
+        this.transferAccounts = {};
+        (accounts || []).forEach((row) => {
+            this.transferAccounts[row.name] = row;
+        });
+    }
+
+    internalTransferAccountQuery(dialog) {
+        return {
+            filters: {
+                company: dialog.get_value("company"),
+                root_type: "Asset",
+                is_group: 0,
+                disabled: 0,
+                account_type: ["in", ["Cash", "Bank"]],
+            },
+        };
+    }
+
+    async reloadInternalTransferCompany(dialog) {
+        const company = dialog.get_value("company");
+        if (!company) return;
+        const options = await this.getInternalTransferOptions(company);
+        this.setTransferAccountMap(options.accounts || []);
+        dialog.set_value("paid_from", "");
+        dialog.set_value("paid_to", "");
+        dialog.set_value("source_balance", 0);
+        dialog.set_value("destination_balance", 0);
+        dialog.set_value("account_currency", options.company_currency || "");
+    }
+
+    updateInternalTransferAccountInfo(dialog) {
+        const source = this.transferAccounts[dialog.get_value("paid_from")] || {};
+        const destination = this.transferAccounts[dialog.get_value("paid_to")] || {};
+        dialog.set_value("source_balance", Number(source.current_balance || 0));
+        dialog.set_value("destination_balance", Number(destination.current_balance || 0));
+        dialog.set_value(
+            "account_currency",
+            source.account_currency || destination.account_currency || dialog.get_value("account_currency") || "",
+        );
+    }
+
+    async previewInternalTransfer(sourceDialog, values) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_internal_transfer",
+            args: values,
+            freeze: true,
+            freeze_message: __("جاري مراجعة التحويل والرصيد المتاح..."),
+        });
+        this.showInternalTransferConfirmation(sourceDialog, values, response.message || {});
+    }
+
+    showInternalTransferConfirmation(sourceDialog, sourceValues, preview) {
+        const submitNow = preview.transfer_action === "Submit Now";
+        const confirmDialog = new frappe.ui.Dialog({
+            title: submitNow ? __("تأكيد تنفيذ واعتماد التحويل") : __("تأكيد حفظ طلب التحويل"),
+            size: "large",
+            fields: [{ fieldtype: "HTML", options: this.renderInternalTransferPreview(preview) }],
+            primary_action_label: submitNow ? __("تنفيذ واعتماد التحويل") : __("حفظ كمسودة"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_internal_transfer",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: submitNow
+                        ? __("جاري إنشاء واعتماد التحويل المالي...")
+                        : __("جاري حفظ طلب التحويل..."),
+                });
+                const result = response.message || {};
+                confirmDialog.hide();
+                sourceDialog.hide();
+                frappe.msgprint({
+                    title: submitNow ? __("تم تنفيذ التحويل") : __("تم حفظ طلب التحويل"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction:rtl;text-align:right;">
+                            <div>${this.esc(result.message || __("تم الحفظ بنجاح"))}</div>
+                            <div><strong>${__("Payment Entry")}:</strong> <a href="/app/payment-entry/${encodeURIComponent(result.payment_entry || "")}">${this.esc(result.payment_entry || "-")}</a></div>
+                            <div><strong>${__("الحالة")}:</strong> ${this.esc(result.status || "-")}</div>
+                            <div><strong>${__("المبلغ")}:</strong> ${this.formatMoney(result.amount, result.account_currency)}</div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
+    }
+
+    renderInternalTransferPreview(preview) {
+        const rows = [
+            [__("الإجراء"), preview.transfer_action === "Submit Now" ? __("إنشاء واعتماد فورًا") : __("حفظ كمسودة للمراجعة")],
+            [__("الشركة"), preview.company],
+            [__("من حساب"), `${preview.paid_from} — ${preview.paid_from_type}`],
+            [__("الرصيد قبل التحويل"), this.formatMoney(preview.source_balance_before, preview.account_currency)],
+            [__("الرصيد بعد التحويل"), this.formatMoney(preview.source_balance_after, preview.account_currency)],
+            [__("إلى حساب"), `${preview.paid_to} — ${preview.paid_to_type}`],
+            [__("رصيد الوجهة قبل التحويل"), this.formatMoney(preview.destination_balance_before, preview.account_currency)],
+            [__("رصيد الوجهة بعد التحويل"), this.formatMoney(preview.destination_balance_after, preview.account_currency)],
+            [__("المبلغ"), this.formatMoney(preview.amount, preview.account_currency)],
+            [__("تاريخ القيد"), preview.posting_date],
+            [__("المرجع"), preview.reference_no],
+            [__("تاريخ المرجع"), preview.reference_date],
+            [__("الملاحظات"), preview.remarks || "-"],
+        ];
+        return `
+            <div class="tmv3-preview">
+                ${rows.map(([label, value]) => `
+                    <div class="tmv3-preview-row">
+                        <div class="tmv3-preview-label">${this.esc(label)}</div>
+                        <div class="tmv3-preview-value">${this.esc(value || "-")}</div>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="tmv3-preview-note">
+                <strong>${__("القيد المتوقع")}:</strong><br>
+                ${__("مدين")} ${this.esc(preview.paid_to)} — ${this.formatMoney(preview.amount, preview.account_currency)}<br>
+                ${__("دائن")} ${this.esc(preview.paid_from)} — ${this.formatMoney(preview.amount, preview.account_currency)}
+            </div>
+        `;
+    }
+
+    renderInternalTransfers(rows) {
+        const body = (rows || []).length
+            ? rows.map((row) => {
+                const docstatus = Number(row.docstatus || 0);
+                const badgeClass = docstatus === 1
+                    ? "tmv3-badge-on"
+                    : docstatus === 2
+                        ? "tmv3-badge-off"
+                        : "tmv3-badge-off";
+                const submitButton = this.canManageInternalTransfer && docstatus === 0
+                    ? `<button class="tmv3-action-btn tmv3-action-success tmv3-transfer-submit" data-payment-entry="${this.esc(row.name)}">${__("اعتماد وتنفيذ")}</button>`
+                    : "";
+                return `
+                    <tr>
+                        <td><a href="/app/payment-entry/${encodeURIComponent(row.name)}">${this.esc(row.name)}</a></td>
+                        <td>${this.esc(row.posting_date || "-")}</td>
+                        <td>${this.esc(row.paid_from || "-")}</td>
+                        <td>${this.esc(row.paid_to || "-")}</td>
+                        <td>${this.formatMoney(row.paid_amount, row.account_currency)}</td>
+                        <td>${this.esc(row.reference_no || "-")}</td>
+                        <td><span class="tmv3-badge ${badgeClass}">${this.esc(row.display_status || row.status || "-")}</span></td>
+                        <td>${this.esc(row.owner || "-")}</td>
+                        <td><div class="tmv3-actions">
+                            <a class="tmv3-action-btn" href="/app/payment-entry/${encodeURIComponent(row.name)}">${__("فتح")}</a>
+                            ${submitButton}
+                        </div></td>
+                    </tr>
+                `;
+            }).join("")
+            : `<tr><td colspan="9" class="tmv3-empty">${__("لا توجد تحويلات داخلية مسجلة حتى الآن.")}</td></tr>`;
+
+        return `
+            <div class="tmv3-section">
+                <h4>${__("التحويلات بين الخزائن والبنوك")}</h4>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table" style="min-width:1100px;">
+                        <thead><tr>
+                            <th>${__("Payment Entry")}</th><th>${__("التاريخ")}</th>
+                            <th>${__("من")}</th><th>${__("إلى")}</th><th>${__("المبلغ")}</th>
+                            <th>${__("المرجع")}</th><th>${__("الحالة")}</th><th>${__("أنشأ بواسطة")}</th><th>${__("إجراءات")}</th>
+                        </tr></thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+                <div class="tmv3-preview-note">${__("التحويل يُسجل كمستند Payment Entry من نوع Internal Transfer. المسودة تمثل طلبًا للمراجعة، والاعتماد هو الذي ينشئ أثر دفتر الأستاذ.")}</div>
+            </div>
+        `;
+    }
+
+    bindInternalTransferActions() {
+        this.$main.find(".tmv3-transfer-submit")
+            .off("click.tmv3-transfer")
+            .on("click.tmv3-transfer", (event) => {
+                const paymentEntry = $(event.currentTarget).attr("data-payment-entry");
+                frappe.confirm(
+                    `${__("سيتم اعتماد وتنفيذ التحويل وإنشاء أثره المحاسبي. هل تريد المتابعة؟")}<br><br><strong>${this.esc(paymentEntry)}</strong>`,
+                    async () => {
+                        const response = await frappe.call({
+                            method:
+                                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.submit_internal_transfer",
+                            args: { payment_entry_name: paymentEntry },
+                            freeze: true,
+                            freeze_message: __("جاري اعتماد التحويل المالي..."),
+                        });
+                        frappe.show_alert({
+                            message: response.message?.message || __("تم اعتماد التحويل"),
+                            indicator: "green",
+                        });
+                        await this.refresh();
+                    },
+                );
+            });
+    }
+
     render(data) {
         this.$main.html(`
             <div class="tmv3">
@@ -1468,6 +1803,8 @@ class TreasuryManagementPageV11 {
                     ${this.card(__("دفعات فيزا مفتوحة"), data.open_card_batches, __("Unsettled Batches"))}
                     ${this.card(__("إعدادات التسوية"), data.clearing_setups, __("Clearing Setup"))}
                     ${this.card(__("تسويات دفع مفتوحة"), data.open_payment_reconciliations, __("Shift Reconciliation"))}
+                    ${this.card(__("التحويلات المالية"), data.internal_transfers, __("Internal Transfer"))}
+                    ${this.card(__("طلبات تحويل مسودة"), data.draft_internal_transfers, __("Awaiting Approval"))}
                 </div>
 
                 ${this.renderPendingDashboard(data.pending_dashboard || {})}
@@ -1475,6 +1812,7 @@ class TreasuryManagementPageV11 {
                 ${this.renderBanks(data.banks || [])}
                 ${this.renderTerminals(data.terminals || [])}
                 ${this.renderPaymentSetups(data.payment_setups || [])}
+                ${this.renderInternalTransfers(data.internal_transfer_rows || [])}
                 ${this.renderUnlinkedBankLedgers(data.unlinked_bank_ledgers || [])}
                 ${this.renderWarnings(data.account_warnings || [])}
             </div>

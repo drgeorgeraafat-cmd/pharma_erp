@@ -24,6 +24,7 @@ def get_overview():
     unlinked_bank_ledgers = _get_unlinked_bank_ledgers(bank_ledger_accounts, banks)
     terminals = _get_card_terminals()
     payment_setups = _get_payment_method_setups()
+    internal_transfers = _get_internal_transfers()
     pending_dashboard = _get_pending_settlement_dashboard(
         terminals=terminals, payment_setups=payment_setups
     )
@@ -42,6 +43,8 @@ def get_overview():
         "open_card_batches": sum(cint(row.get("open_batch_count")) for row in terminals),
         "clearing_setups": _safe_count("Payment Method Clearing Setup"),
         "open_payment_reconciliations": sum(cint(row.get("open_reconciliation_count")) for row in payment_setups),
+        "internal_transfers": len(internal_transfers),
+        "draft_internal_transfers": sum(1 for row in internal_transfers if cint(row.get("docstatus")) == 0),
         "drawers": drawers,
         "cash_accounts": cash_accounts,
         "account_warnings": account_warnings,
@@ -50,6 +53,7 @@ def get_overview():
         "unlinked_bank_ledgers": unlinked_bank_ledgers,
         "terminals": terminals,
         "payment_setups": payment_setups,
+        "internal_transfer_rows": internal_transfers,
         "pending_dashboard": pending_dashboard,
         "can_create_cash_drawer": _can_create_cash_drawer(),
         "can_manage_cash_drawer": _can_create_cash_drawer(),
@@ -57,6 +61,7 @@ def get_overview():
         "can_manage_card_terminal": _can_create_cash_drawer(),
         "can_manage_payment_setup": _can_create_cash_drawer(),
         "can_execute_settlement": _can_create_cash_drawer(),
+        "can_manage_internal_transfer": _can_create_cash_drawer(),
     }
 
 
@@ -333,6 +338,149 @@ def execute_card_bank_settlement(
         "fee_amount": flt(plan["fee_amount"]),
         "net_amount": flt(plan["net_amount"]),
         "batches": updated_batches,
+    }
+
+
+@frappe.whitelist()
+def get_internal_transfer_options(company=None):
+    """Return eligible Asset Cash/Bank accounts and live balances."""
+    _validate_create_access()
+    company = _resolve_company(company)
+    return {
+        "company": company,
+        "company_currency": frappe.db.get_value("Company", company, "default_currency") or "",
+        "posting_date": nowdate(),
+        "reference_date": nowdate(),
+        "accounts": _get_internal_transfer_accounts(company),
+    }
+
+
+@frappe.whitelist()
+def preview_internal_transfer(
+    company,
+    paid_from,
+    paid_to,
+    amount,
+    posting_date=None,
+    reference_no=None,
+    reference_date=None,
+    remarks=None,
+    transfer_action="Submit Now",
+):
+    """Validate and preview a Cash/Bank internal transfer without writing data."""
+    _validate_create_access()
+    return _prepare_internal_transfer(
+        company=company,
+        paid_from=paid_from,
+        paid_to=paid_to,
+        amount=amount,
+        posting_date=posting_date,
+        reference_no=reference_no,
+        reference_date=reference_date,
+        remarks=remarks,
+        transfer_action=transfer_action,
+    )
+
+
+@frappe.whitelist()
+def execute_internal_transfer(
+    company,
+    paid_from,
+    paid_to,
+    amount,
+    posting_date=None,
+    reference_no=None,
+    reference_date=None,
+    remarks=None,
+    transfer_action="Submit Now",
+):
+    """Create a Payment Entry Internal Transfer as Draft or Submitted."""
+    _validate_create_access()
+    plan = _prepare_internal_transfer(
+        company=company,
+        paid_from=paid_from,
+        paid_to=paid_to,
+        amount=amount,
+        posting_date=posting_date,
+        reference_no=reference_no,
+        reference_date=reference_date,
+        remarks=remarks,
+        transfer_action=transfer_action,
+    )
+
+    payment = frappe.new_doc("Payment Entry")
+    payment.payment_type = "Internal Transfer"
+    payment.company = plan["company"]
+    payment.posting_date = plan["posting_date"]
+    payment.paid_from = plan["paid_from"]
+    payment.paid_to = plan["paid_to"]
+    payment.paid_from_account_currency = plan["account_currency"]
+    payment.paid_to_account_currency = plan["account_currency"]
+    payment.paid_amount = flt(plan["amount"])
+    payment.received_amount = flt(plan["amount"])
+    payment.source_exchange_rate = 1
+    payment.target_exchange_rate = 1
+    payment.reference_no = plan["reference_no"]
+    payment.reference_date = plan["reference_date"]
+    payment.remarks = plan["remarks"] or (
+        f"Treasury internal transfer from {plan['paid_from']} to {plan['paid_to']}"
+    )
+    payment.flags.ignore_permissions = True
+    payment.insert(ignore_permissions=True)
+
+    if plan["transfer_action"] == "Submit Now":
+        payment.flags.ignore_permissions = True
+        payment.submit()
+
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Internal transfer was created successfully."),
+        "payment_entry": payment.name,
+        "docstatus": payment.docstatus,
+        "status": "Submitted" if payment.docstatus == 1 else "Draft",
+        "paid_from": plan["paid_from"],
+        "paid_to": plan["paid_to"],
+        "amount": plan["amount"],
+        "account_currency": plan["account_currency"],
+    }
+
+
+@frappe.whitelist()
+def submit_internal_transfer(payment_entry_name):
+    """Approve and submit an existing Draft Internal Transfer."""
+    _validate_create_access()
+    payment_entry_name = str(payment_entry_name or "").strip()
+    if not payment_entry_name or not frappe.db.exists("Payment Entry", payment_entry_name):
+        frappe.throw(_("Payment Entry was not found."))
+
+    payment = frappe.get_doc("Payment Entry", payment_entry_name)
+    if payment.payment_type != "Internal Transfer":
+        frappe.throw(_("Only Internal Transfer Payment Entries can be submitted here."))
+    if payment.docstatus != 0:
+        frappe.throw(_("Only a Draft Internal Transfer can be submitted."))
+
+    _prepare_internal_transfer(
+        company=payment.company,
+        paid_from=payment.paid_from,
+        paid_to=payment.paid_to,
+        amount=payment.paid_amount,
+        posting_date=payment.posting_date,
+        reference_no=payment.reference_no,
+        reference_date=payment.reference_date,
+        remarks=payment.remarks,
+        transfer_action="Submit Now",
+        exclude_payment_entry=payment.name,
+    )
+
+    payment.flags.ignore_permissions = True
+    payment.submit()
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "message": _("Internal transfer was submitted successfully."),
+        "payment_entry": payment.name,
+        "status": "Submitted",
     }
 
 
@@ -2190,6 +2338,237 @@ def _cash_parent_accounts(company):
     rows.sort(key=priority)
     return rows
 
+
+
+def _get_internal_transfer_accounts(company):
+    """Return enabled Asset Cash/Bank leaf accounts with operational labels."""
+    rows = frappe.get_all(
+        "Account",
+        filters={
+            "company": company,
+            "root_type": "Asset",
+            "is_group": 0,
+            "disabled": 0,
+            "account_type": ["in", ["Cash", "Bank"]],
+        },
+        fields=[
+            "name",
+            "account_name",
+            "account_type",
+            "account_currency",
+            "parent_account",
+            "company",
+        ],
+        order_by="account_type asc, account_name asc",
+        limit_page_length=1000,
+    )
+
+    drawer_map = {}
+    if frappe.db.exists("DocType", "Cash Drawer"):
+        for drawer in frappe.get_all(
+            "Cash Drawer",
+            filters={"company": company, "enabled": 1},
+            fields=["name", "drawer_name", "cash_account"],
+            limit_page_length=500,
+        ):
+            if drawer.cash_account:
+                drawer_map[drawer.cash_account] = drawer.drawer_name or drawer.name
+
+    bank_map = {}
+    if frappe.db.exists("DocType", "Bank Account"):
+        for bank_account in frappe.get_all(
+            "Bank Account",
+            filters={"company": company, "disabled": 0},
+            fields=["name", "account_name", "bank", "account"],
+            limit_page_length=500,
+        ):
+            if bank_account.account:
+                bank_map[bank_account.account] = (
+                    bank_account.account_name or bank_account.bank or bank_account.name
+                )
+
+    company_currency = frappe.db.get_value("Company", company, "default_currency") or ""
+    for row in rows:
+        row["account_currency"] = row.get("account_currency") or company_currency
+        row["current_balance"] = _account_balance(row.name, company)
+        if row.account_type == "Cash":
+            row["master_type"] = "Cash Drawer" if row.name in drawer_map else "Cash Account"
+            row["master_label"] = drawer_map.get(row.name) or row.account_name or row.name
+        else:
+            row["master_type"] = "Bank Account" if row.name in bank_map else "Bank Ledger"
+            row["master_label"] = bank_map.get(row.name) or row.account_name or row.name
+    return rows
+
+
+def _get_internal_transfers(limit=50):
+    if not frappe.db.exists("DocType", "Payment Entry"):
+        return []
+    rows = frappe.get_all(
+        "Payment Entry",
+        filters={"payment_type": "Internal Transfer"},
+        fields=[
+            "name",
+            "docstatus",
+            "status",
+            "posting_date",
+            "company",
+            "paid_from",
+            "paid_to",
+            "paid_amount",
+            "received_amount",
+            "paid_from_account_currency",
+            "paid_to_account_currency",
+            "reference_no",
+            "reference_date",
+            "remarks",
+            "owner",
+            "creation",
+            "modified",
+        ],
+        order_by="creation desc",
+        limit_page_length=cint(limit) or 50,
+    )
+    status_by_docstatus = {0: "Draft", 1: "Submitted", 2: "Cancelled"}
+    for row in rows:
+        row["paid_amount"] = flt(row.get("paid_amount"))
+        row["received_amount"] = flt(row.get("received_amount"))
+        row["display_status"] = status_by_docstatus.get(cint(row.get("docstatus")), row.get("status") or "")
+        row["account_currency"] = (
+            row.get("paid_from_account_currency")
+            or row.get("paid_to_account_currency")
+            or frappe.db.get_value("Company", row.company, "default_currency")
+            or ""
+        )
+    return rows
+
+
+def _validate_internal_transfer_account(account_name, company, label):
+    account_name = str(account_name or "").strip()
+    account = frappe.db.get_value(
+        "Account",
+        account_name,
+        [
+            "name",
+            "account_name",
+            "company",
+            "root_type",
+            "account_type",
+            "account_currency",
+            "is_group",
+            "disabled",
+        ],
+        as_dict=True,
+    )
+    if not account:
+        frappe.throw(_("{0} was not found.").format(label))
+    if account.company != company:
+        frappe.throw(_("{0} belongs to another company.").format(label))
+    if account.root_type != "Asset":
+        frappe.throw(_("{0} must be an Asset account.").format(label))
+    if account.account_type not in ("Cash", "Bank"):
+        frappe.throw(_("{0} must be a Cash or Bank account.").format(label))
+    if cint(account.is_group):
+        frappe.throw(_("{0} cannot be a group account.").format(label))
+    if cint(account.disabled):
+        frappe.throw(_("{0} is disabled.").format(label))
+    return account
+
+
+def _prepare_internal_transfer(
+    company,
+    paid_from,
+    paid_to,
+    amount,
+    posting_date=None,
+    reference_no=None,
+    reference_date=None,
+    remarks=None,
+    transfer_action="Submit Now",
+    exclude_payment_entry=None,
+):
+    company = _resolve_company(company)
+    paid_from = str(paid_from or "").strip()
+    paid_to = str(paid_to or "").strip()
+    if not paid_from or not paid_to:
+        frappe.throw(_("Select both source and destination accounts."))
+    if paid_from == paid_to:
+        frappe.throw(_("Source and destination accounts must be different."))
+
+    source = _validate_internal_transfer_account(paid_from, company, _("Source Account"))
+    destination = _validate_internal_transfer_account(paid_to, company, _("Destination Account"))
+    company_currency = frappe.db.get_value("Company", company, "default_currency") or ""
+    source_currency = source.account_currency or company_currency
+    destination_currency = destination.account_currency or company_currency
+    if source_currency != destination_currency:
+        frappe.throw(
+            _("Cross-currency transfers are not supported from Treasury Management. "
+              "Source currency is {0} and destination currency is {1}.").format(
+                source_currency, destination_currency
+            )
+        )
+
+    amount = flt(amount)
+    if amount <= 0:
+        frappe.throw(_("Transfer Amount must be greater than zero."))
+
+    posting_date = str(getdate(posting_date or nowdate()))
+    if getdate(posting_date) > getdate(nowdate()):
+        frappe.throw(_("Posting Date cannot be in the future."))
+    reference_date = str(getdate(reference_date or posting_date))
+    reference_no = _clean_master_text(reference_no)
+    if not reference_no:
+        frappe.throw(_("Reference Number is required for audit tracking."))
+    remarks = str(remarks or "").strip()[:1000]
+
+    transfer_action = str(transfer_action or "").strip()
+    if transfer_action not in ("Create Draft", "Submit Now"):
+        frappe.throw(_("Select a valid transfer action."))
+
+    duplicate_filters = {
+        "company": company,
+        "payment_type": "Internal Transfer",
+        "reference_no": reference_no,
+        "docstatus": ["!=", 2],
+    }
+    duplicate = frappe.db.get_value("Payment Entry", duplicate_filters, "name")
+    if duplicate and duplicate != exclude_payment_entry:
+        frappe.throw(
+            _("Reference Number is already used by Internal Transfer {0}.").format(duplicate)
+        )
+
+    source_balance = flt(_account_balance(paid_from, company))
+    destination_balance = flt(_account_balance(paid_to, company))
+    if source_balance + 0.01 < amount:
+        frappe.throw(
+            _("Source balance {0} is lower than transfer amount {1}.").format(
+                source_balance, amount
+            )
+        )
+
+    return {
+        "company": company,
+        "posting_date": posting_date,
+        "reference_no": reference_no,
+        "reference_date": reference_date,
+        "remarks": remarks,
+        "transfer_action": transfer_action,
+        "paid_from": source.name,
+        "paid_from_name": source.account_name or source.name,
+        "paid_from_type": source.account_type,
+        "paid_to": destination.name,
+        "paid_to_name": destination.account_name or destination.name,
+        "paid_to_type": destination.account_type,
+        "amount": amount,
+        "account_currency": source_currency,
+        "source_balance_before": source_balance,
+        "source_balance_after": flt(source_balance - amount),
+        "destination_balance_before": destination_balance,
+        "destination_balance_after": flt(destination_balance + amount),
+        "journal_preview": [
+            {"account": destination.name, "debit": amount, "credit": 0},
+            {"account": source.name, "debit": 0, "credit": amount},
+        ],
+    }
 
 def _get_cash_drawers():
     if not frappe.db.exists("DocType", "Cash Drawer"):
