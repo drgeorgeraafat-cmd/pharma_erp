@@ -288,8 +288,6 @@ def _upsert_custom_permission(
         "Custom DocPerm",
         filters={
             "parent": doctype,
-            "parenttype": "DocType",
-            "parentfield": "permissions",
             "role": role,
             "permlevel": 0,
             "if_owner": if_owner,
@@ -308,8 +306,6 @@ def _upsert_custom_permission(
         {
             "doctype": "Custom DocPerm",
             "parent": doctype,
-            "parenttype": "DocType",
-            "parentfield": "permissions",
             "role": role,
             "permlevel": 0,
             **values,
