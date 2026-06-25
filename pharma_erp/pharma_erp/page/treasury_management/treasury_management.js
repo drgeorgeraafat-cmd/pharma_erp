@@ -34,6 +34,11 @@ class TreasuryManagementPageV15 {
         this.canApproveTreasuryVoucher = false;
         this.canCancelTreasuryVoucher = false;
         this.canEmergencySubmitTreasuryVoucher = false;
+        this.canPrepareTreasuryDayClosing = false;
+        this.canApproveTreasuryDayClosing = false;
+        this.canCancelTreasuryDayClosing = false;
+        this.canEmergencySubmitTreasuryDayClosing = false;
+        this.dayClosingPreview = null;
         this.accessProfile = {};
         this.transferAccounts = {};
         this.cashMovementDrawers = {};
@@ -99,6 +104,16 @@ class TreasuryManagementPageV15 {
             __("تقرير الخزينة اليومي"),
             () => frappe.set_route("query-report", "Treasury Daily Review"),
             __("التقارير"),
+        );
+        this.$treasuryDayClosingButton = this.page.add_inner_button(
+            __("إقفال يوم الخزينة"),
+            () => this.openTreasuryDayClosingDialog(),
+            __("الإقفال والمراجعة"),
+        );
+        this.$treasuryDayClosingListButton = this.page.add_inner_button(
+            __("سجل إقفالات الخزينة"),
+            () => frappe.set_route("List", "Treasury Day Closing"),
+            __("الإقفال والمراجعة"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -335,6 +350,10 @@ class TreasuryManagementPageV15 {
             this.canApproveTreasuryVoucher = Boolean(data.can_approve_treasury_voucher);
             this.canCancelTreasuryVoucher = Boolean(data.can_cancel_treasury_voucher);
             this.canEmergencySubmitTreasuryVoucher = Boolean(data.can_emergency_submit_treasury_voucher);
+            this.canPrepareTreasuryDayClosing = Boolean(data.can_prepare_treasury_day_closing);
+            this.canApproveTreasuryDayClosing = Boolean(data.can_approve_treasury_day_closing);
+            this.canCancelTreasuryDayClosing = Boolean(data.can_cancel_treasury_day_closing);
+            this.canEmergencySubmitTreasuryDayClosing = Boolean(data.can_emergency_submit_treasury_day_closing);
             this.accessProfile = data.access_profile || {};
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
@@ -345,6 +364,8 @@ class TreasuryManagementPageV15 {
             if (this.$cashMovementButton) this.$cashMovementButton.toggle(this.canManageShiftCashMovement);
             if (this.$treasuryVoucherButton) this.$treasuryVoucherButton.toggle(this.canManageTreasuryVoucher);
             if (this.$treasuryCategoryButton) this.$treasuryCategoryButton.toggle(this.canApproveTreasuryVoucher);
+            if (this.$treasuryDayClosingButton) this.$treasuryDayClosingButton.toggle(this.canPrepareTreasuryDayClosing);
+            if (this.$treasuryDayClosingListButton) this.$treasuryDayClosingListButton.toggle(Boolean((data.access_profile || {}).can_view));
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
@@ -354,6 +375,7 @@ class TreasuryManagementPageV15 {
             this.bindInternalTransferActions();
             this.bindShiftCashMovementActions();
             this.bindTreasuryVoucherActions();
+            this.bindTreasuryDayClosingActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -375,6 +397,242 @@ class TreasuryManagementPageV15 {
         } finally {
             frappe.dom.unfreeze();
         }
+    }
+
+    async openTreasuryDayClosingDialog() {
+        const response = await frappe.call({
+            method: "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_treasury_day_closing_options",
+            freeze: true,
+            freeze_message: __("جاري تجهيز مراجعة يوم الخزينة..."),
+        });
+        const options = response.message || {};
+        this.dayClosingPreview = options.snapshot || null;
+
+        const dialog = new frappe.ui.Dialog({
+            title: __("إقفال يوم الخزينة"),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "company",
+                    fieldtype: "Link",
+                    options: "Company",
+                    label: __("الشركة"),
+                    reqd: 1,
+                    default: options.company,
+                    onchange: () => this.loadTreasuryDayClosingPreview(dialog),
+                },
+                {
+                    fieldname: "closing_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ الإقفال"),
+                    reqd: 1,
+                    default: options.closing_date || frappe.datetime.get_today(),
+                    onchange: () => this.loadTreasuryDayClosingPreview(dialog),
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "closing_action",
+                    fieldtype: "Select",
+                    label: __("إجراء الإقفال"),
+                    options: this.canApproveTreasuryDayClosing
+                        ? "Create Draft\nSubmit Now"
+                        : "Create Draft",
+                    default: this.canApproveTreasuryDayClosing ? "Submit Now" : "Create Draft",
+                    reqd: 1,
+                },
+                {
+                    fieldname: "attachment",
+                    fieldtype: "Attach",
+                    label: __("مرفق المراجعة"),
+                },
+                { fieldtype: "Section Break" },
+                {
+                    fieldname: "closing_preview",
+                    fieldtype: "HTML",
+                },
+                {
+                    fieldname: "accounts",
+                    fieldtype: "Table",
+                    label: __("مراجعة أرصدة الخزائن والبنوك"),
+                    cannot_add_rows: true,
+                    cannot_delete_rows: true,
+                    in_place_edit: true,
+                    fields: [
+                        { fieldname: "account", fieldtype: "Link", options: "Account", label: __("الحساب"), in_list_view: 1, read_only: 1, columns: 2 },
+                        { fieldname: "account_type", fieldtype: "Data", label: __("النوع"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldname: "opening_balance", fieldtype: "Currency", label: __("أول اليوم"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldname: "total_in", fieldtype: "Currency", label: __("داخل"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldname: "total_out", fieldtype: "Currency", label: __("خارج"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldname: "expected_closing", fieldtype: "Currency", label: __("المتوقع"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldname: "actual_closing", fieldtype: "Currency", label: __("الفعلي"), in_list_view: 1, reqd: 1, columns: 1 },
+                        { fieldname: "difference_reason", fieldtype: "Small Text", label: __("سبب الفرق"), columns: 2 },
+                        { fieldname: "notes", fieldtype: "Small Text", label: __("ملاحظات"), columns: 2 },
+                    ],
+                },
+                {
+                    fieldname: "notes",
+                    fieldtype: "Small Text",
+                    label: __("ملاحظات الإقفال"),
+                },
+            ],
+            primary_action_label: __("حفظ الإقفال"),
+            primary_action: async (values) => {
+                const rows = dialog.fields_dict.accounts.grid.get_data().map((row) => ({
+                    account: row.account,
+                    actual_closing: row.actual_closing,
+                    difference_reason: row.difference_reason || "",
+                    notes: row.notes || "",
+                }));
+                const result = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_treasury_day_closing",
+                    args: {
+                        company: values.company,
+                        closing_date: values.closing_date,
+                        closing_action: values.closing_action,
+                        account_rows: JSON.stringify(rows),
+                        notes: values.notes || "",
+                        attachment: values.attachment || "",
+                    },
+                    freeze: true,
+                    freeze_message: values.closing_action === "Submit Now"
+                        ? __("جاري إقفال يوم الخزينة...")
+                        : __("جاري حفظ مسودة الإقفال..."),
+                });
+                dialog.hide();
+                frappe.show_alert({
+                    message: result.message?.message || __("تم حفظ إقفال يوم الخزينة"),
+                    indicator: "green",
+                });
+                await this.refresh();
+            },
+        });
+        dialog.show();
+        this.applyTreasuryDayClosingPreview(dialog, this.dayClosingPreview);
+    }
+
+    async loadTreasuryDayClosingPreview(dialog) {
+        const company = dialog.get_value("company");
+        const closingDate = dialog.get_value("closing_date");
+        if (!company || !closingDate) return;
+        const existingRows = dialog.fields_dict.accounts.grid.get_data().map((row) => ({
+            account: row.account,
+            actual_closing: row.actual_closing,
+            difference_reason: row.difference_reason || "",
+            notes: row.notes || "",
+        }));
+        const response = await frappe.call({
+            method: "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_treasury_day_closing",
+            args: {
+                company,
+                closing_date: closingDate,
+                account_rows: JSON.stringify(existingRows),
+            },
+            freeze: true,
+            freeze_message: __("جاري تحديث لقطة الإقفال..."),
+        });
+        this.dayClosingPreview = response.message || {};
+        this.applyTreasuryDayClosingPreview(dialog, this.dayClosingPreview);
+    }
+
+    applyTreasuryDayClosingPreview(dialog, snapshot) {
+        snapshot = snapshot || {};
+        const summary = snapshot.summary || {};
+        const blockers = snapshot.blockers || [];
+        const currency = snapshot.currency || "";
+        const blockerHtml = blockers.length
+            ? `<div class="tmv3-alerts">${blockers.map((row) => `
+                <div class="tmv3-alert tmv3-alert-critical">
+                    <span>●</span><div><strong>${this.esc(row.message || row.type || "-")}</strong></div>
+                    ${row.document ? `<a href="/app/${frappe.router.slug(row.doctype || "")}/${encodeURIComponent(row.document)}">${this.esc(row.document)}</a>` : ""}
+                </div>
+            `).join("")}</div>`
+            : `<div class="tmv3-preview-note" style="background:var(--green-50);border-color:var(--green-200);">${__("لا توجد موانع تشغيلية ظاهرة للإقفال.")}</div>`;
+
+        dialog.fields_dict.closing_preview.$wrapper.html(`
+            <div dir="rtl">
+                <div class="tmv3-summary-strip">
+                    <div class="tmv3-summary-chip"><small>${__("رصيد أول اليوم")}</small><strong>${this.formatMoney(summary.opening_total, currency)}</strong></div>
+                    <div class="tmv3-summary-chip"><small>${__("إجمالي الداخل")}</small><strong>${this.formatMoney(summary.total_in, currency)}</strong></div>
+                    <div class="tmv3-summary-chip"><small>${__("إجمالي الخارج")}</small><strong>${this.formatMoney(summary.total_out, currency)}</strong></div>
+                    <div class="tmv3-summary-chip"><small>${__("الإقفال المتوقع")}</small><strong>${this.formatMoney(summary.expected_closing_total, currency)}</strong></div>
+                    <div class="tmv3-summary-chip"><small>${__("دفعات فيزا معلقة")}</small><strong>${this.formatMoney(summary.pending_card_amount, currency)}</strong></div>
+                    <div class="tmv3-summary-chip"><small>${__("تسويات إلكترونية معلقة")}</small><strong>${this.formatMoney(summary.pending_reconciliation_amount, currency)}</strong></div>
+                    <div class="tmv3-summary-chip"><small>${__("رصيد Clearing غير مطابق")}</small><strong>${this.formatMoney(summary.unmatched_clearing_balance, currency)}</strong></div>
+                </div>
+                ${blockerHtml}
+            </div>
+        `);
+        dialog.fields_dict.accounts.df.data = (snapshot.accounts || []).map((row) => ({ ...row }));
+        dialog.fields_dict.accounts.grid.refresh();
+    }
+
+    renderTreasuryDayClosings(rows) {
+        const body = rows.length
+            ? rows.map((row) => {
+                const canSubmit = Number(row.docstatus || 0) === 0 && this.canApproveTreasuryDayClosing;
+                const canCancel = Number(row.docstatus || 0) === 1 && this.canCancelTreasuryDayClosing;
+                const statusClass = Number(row.docstatus || 0) === 1 ? "tmv3-badge-on" : "tmv3-badge-off";
+                return `
+                    <tr>
+                        <td><a href="/app/treasury-day-closing/${encodeURIComponent(row.name || "")}">${this.esc(row.name || "-")}</a></td>
+                        <td>${this.formatDateTime(row.closing_date || "-").split(" ")[0]}</td>
+                        <td>${this.esc(row.company || "-")}</td>
+                        <td><span class="tmv3-badge ${statusClass}">${this.esc(row.status || "-")}</span></td>
+                        <td>${this.formatMoney(row.expected_closing_total, "")}</td>
+                        <td>${this.formatMoney(row.actual_closing_total, "")}</td>
+                        <td>${this.formatMoney(row.difference_total, "")}</td>
+                        <td>${this.formatMoney(row.pending_card_amount, "")}</td>
+                        <td>${this.formatMoney(row.pending_reconciliation_amount, "")}</td>
+                        <td>${this.formatMoney(row.unmatched_clearing_balance, "")}</td>
+                        <td>${this.esc(row.reviewed_by || row.prepared_by || "-")}</td>
+                        <td><div class="tmv3-actions">
+                            ${canSubmit ? `<button class="btn btn-xs btn-primary tmv3-day-closing-submit" data-closing="${this.esc(row.name)}">${__("اعتماد وإقفال")}</button>` : ""}
+                            ${canCancel ? `<button class="btn btn-xs btn-danger tmv3-day-closing-cancel" data-closing="${this.esc(row.name)}">${__("إلغاء الإقفال")}</button>` : ""}
+                        </div></td>
+                    </tr>`;
+            }).join("")
+            : `<tr><td colspan="12" class="tmv3-empty">${__("لا توجد إقفالات خزينة حتى الآن.")}</td></tr>`;
+        return `
+            <div class="tmv3-section">
+                <h4>${__("إقفالات ومراجعة أيام الخزينة")}</h4>
+                <div class="tmv3-table-wrap"><table class="tmv3-table" style="min-width:1400px;">
+                    <thead><tr>
+                        <th>${__("المستند")}</th><th>${__("التاريخ")}</th><th>${__("الشركة")}</th><th>${__("الحالة")}</th>
+                        <th>${__("المتوقع")}</th><th>${__("الفعلي")}</th><th>${__("الفرق")}</th>
+                        <th>${__("فيزا معلقة")}</th><th>${__("إلكتروني معلق")}</th><th>${__("Clearing غير مطابق")}</th>
+                        <th>${__("المراجع")}</th><th>${__("الإجراءات")}</th>
+                    </tr></thead><tbody>${body}</tbody>
+                </table></div>
+            </div>`;
+    }
+
+    bindTreasuryDayClosingActions() {
+        this.$main.find(".tmv3-day-closing-submit").off("click.tmv3-day-closing").on("click.tmv3-day-closing", (event) => {
+            const closing = $(event.currentTarget).attr("data-closing");
+            frappe.confirm(__("سيتم تثبيت أرصدة اليوم ومنع الحركات المؤرخة بهذا التاريخ. هل تريد المتابعة؟"), async () => {
+                const response = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.treasury_management.treasury_management.submit_treasury_day_closing",
+                    args: { closing_name: closing },
+                    freeze: true,
+                    freeze_message: __("جاري اعتماد إقفال اليوم..."),
+                });
+                frappe.show_alert({ message: response.message?.message || __("تم إقفال اليوم"), indicator: "green" });
+                await this.refresh();
+            });
+        });
+        this.$main.find(".tmv3-day-closing-cancel").off("click.tmv3-day-closing-cancel").on("click.tmv3-day-closing-cancel", (event) => {
+            const closing = $(event.currentTarget).attr("data-closing");
+            frappe.confirm(__("إلغاء الإقفال سيعيد فتح التاريخ للحركات المالية. هل تريد المتابعة؟"), async () => {
+                const response = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.treasury_management.treasury_management.cancel_treasury_day_closing",
+                    args: { closing_name: closing },
+                    freeze: true,
+                    freeze_message: __("جاري إلغاء إقفال اليوم..."),
+                });
+                frappe.show_alert({ message: response.message?.message || __("تم إلغاء الإقفال"), indicator: "orange" });
+                await this.refresh();
+            });
+        });
     }
 
     async openCreateCashDrawerDialog() {
@@ -2975,9 +3233,12 @@ class TreasuryManagementPageV15 {
                     ${this.card(__("حركات تنتظر الاعتماد"), data.draft_shift_cash_movements, __("Pending Approval"))}
                     ${this.card(__("مستندات الخزينة العامة"), data.treasury_vouchers, __("Treasury Voucher"))}
                     ${this.card(__("مستندات عامة تنتظر الاعتماد"), data.draft_treasury_vouchers, __("Pending Approval"))}
+                    ${this.card(__("أيام خزينة مقفلة"), data.closed_treasury_days, __("Treasury Day Closing"))}
+                    ${this.card(__("إقفالات تنتظر المراجعة"), data.draft_treasury_day_closings, __("Draft Closings"))}
                 </div>
 
                 ${this.renderPendingDashboard(data.pending_dashboard || {})}
+                ${this.renderTreasuryDayClosings(data.treasury_day_closing_rows || [])}
                 ${this.renderDrawers(data.drawers || [])}
                 ${this.renderBanks(data.banks || [])}
                 ${this.renderTerminals(data.terminals || [])}

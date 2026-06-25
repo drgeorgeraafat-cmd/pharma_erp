@@ -252,8 +252,34 @@ doc_events = {
         "before_insert": "pharma_erp.customer_events.set_customer_code"
     },
     "Payment Entry": {
-        "validate": "pharma_erp.treasury_access.validate_payment_entry",
+        "validate": [
+            "pharma_erp.treasury_access.validate_payment_entry",
+            "pharma_erp.treasury_closing.validate_treasury_document_date",
+        ],
         "before_submit": "pharma_erp.treasury_access.before_submit_payment_entry",
-        "before_cancel": "pharma_erp.treasury_access.before_cancel_payment_entry",
+        "before_cancel": [
+            "pharma_erp.treasury_access.before_cancel_payment_entry",
+            "pharma_erp.treasury_closing.before_cancel_treasury_document",
+        ],
+    },
+    "Shift Cash Movement": {
+        "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",
+        "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
+    },
+    "Treasury Voucher": {
+        "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",
+        "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
+    },
+    "Card Bank Settlement": {
+        "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",
+        "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
+    },
+    "Journal Entry": {
+        "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",
+        "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
+    },
+    "Pharmacy Shift Closing": {
+        "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",
+        "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
     },
 }

@@ -1,0 +1,404 @@
+{
+ "doctype": "DocType",
+ "name": "Treasury Day Closing",
+ "module": "Pharma Erp",
+ "autoname": "naming_series:",
+ "is_submittable": 1,
+ "track_changes": 1,
+ "allow_rename": 0,
+ "engine": "InnoDB",
+ "sort_field": "closing_date",
+ "sort_order": "DESC",
+ "title_field": "closing_date",
+ "search_fields": "company,closing_date,status,prepared_by,reviewed_by",
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Naming Series",
+   "options": "TDC-.YYYY.-.#####",
+   "default": "TDC-.YYYY.-.#####",
+   "reqd": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "closing_date",
+   "fieldtype": "Date",
+   "label": "Closing Date",
+   "default": "Today",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nClosed\nCancelled",
+   "default": "Draft",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldtype": "Column Break",
+   "fieldname": "header_column"
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "closing_key",
+   "fieldtype": "Data",
+   "label": "Closing Key",
+   "read_only": 1,
+   "hidden": 1,
+   "unique": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "options": "Treasury Day Closing",
+   "read_only": 1,
+   "no_copy": 1,
+   "print_hide": 1
+  },
+  {
+   "fieldtype": "Section Break",
+   "fieldname": "summary_section",
+   "label": "Daily Treasury Summary"
+  },
+  {
+   "fieldname": "opening_total",
+   "fieldtype": "Currency",
+   "label": "Opening Total",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_in",
+   "fieldtype": "Currency",
+   "label": "Total In",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_out",
+   "fieldtype": "Currency",
+   "label": "Total Out",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldtype": "Column Break",
+   "fieldname": "summary_column"
+  },
+  {
+   "fieldname": "expected_closing_total",
+   "fieldtype": "Currency",
+   "label": "Expected Closing Total",
+   "options": "currency",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "actual_closing_total",
+   "fieldtype": "Currency",
+   "label": "Actual Closing Total",
+   "options": "currency",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "difference_total",
+   "fieldtype": "Currency",
+   "label": "Difference Total",
+   "options": "currency",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldtype": "Section Break",
+   "fieldname": "accounts_section",
+   "label": "Cash and Bank Account Review"
+  },
+  {
+   "fieldname": "accounts",
+   "fieldtype": "Table",
+   "label": "Accounts",
+   "options": "Treasury Day Closing Account",
+   "reqd": 1
+  },
+  {
+   "fieldtype": "Section Break",
+   "fieldname": "blockers_section",
+   "label": "Closing Checks",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "open_shift_count",
+   "fieldtype": "Int",
+   "label": "Open Shifts",
+   "read_only": 1
+  },
+  {
+   "fieldname": "draft_document_count",
+   "fieldtype": "Int",
+   "label": "Draft Treasury Documents",
+   "read_only": 1
+  },
+  {
+   "fieldname": "blocker_count",
+   "fieldtype": "Int",
+   "label": "Blocking Issues",
+   "read_only": 1
+  },
+  {
+   "fieldtype": "Column Break",
+   "fieldname": "blockers_column"
+  },
+  {
+   "fieldname": "blocker_details",
+   "fieldtype": "Code",
+   "label": "Blocker Details",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "snapshot_generated_at",
+   "fieldtype": "Datetime",
+   "label": "Snapshot Generated At",
+   "read_only": 1
+  },
+  {
+   "fieldtype": "Section Break",
+   "fieldname": "pending_section",
+   "label": "Pending Settlements Snapshot",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "pending_card_count",
+   "fieldtype": "Int",
+   "label": "Pending Card Batches",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pending_card_amount",
+   "fieldtype": "Currency",
+   "label": "Pending Card Amount",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pending_reconciliation_count",
+   "fieldtype": "Int",
+   "label": "Pending Electronic Reconciliations",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pending_reconciliation_amount",
+   "fieldtype": "Currency",
+   "label": "Pending Electronic Amount",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldtype": "Column Break",
+   "fieldname": "pending_column"
+  },
+  {
+   "fieldname": "clearing_balance",
+   "fieldtype": "Currency",
+   "label": "Clearing Balance",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "documented_pending",
+   "fieldtype": "Currency",
+   "label": "Documented Pending",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "unmatched_clearing_balance",
+   "fieldtype": "Currency",
+   "label": "Unmatched Clearing Balance",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldtype": "Section Break",
+   "fieldname": "review_section",
+   "label": "Review and Evidence"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Closing Notes"
+  },
+  {
+   "fieldname": "attachment",
+   "fieldtype": "Attach",
+   "label": "Closing Evidence"
+  },
+  {
+   "fieldtype": "Column Break",
+   "fieldname": "review_column"
+  },
+  {
+   "fieldname": "prepared_by",
+   "fieldtype": "Link",
+   "label": "Prepared By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "prepared_at",
+   "fieldtype": "Datetime",
+   "label": "Prepared At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reviewed_by",
+   "fieldtype": "Link",
+   "label": "Reviewed By",
+   "options": "User",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "reviewed_at",
+   "fieldtype": "Datetime",
+   "label": "Reviewed At",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "approval_note",
+   "fieldtype": "Small Text",
+   "label": "Approval Audit Note",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldtype": "Section Break",
+   "fieldname": "override_section",
+   "label": "Emergency Overrides",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "override_count",
+   "fieldtype": "Int",
+   "label": "Override Count",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "last_override_by",
+   "fieldtype": "Link",
+   "label": "Last Override By",
+   "options": "User",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "last_override_at",
+   "fieldtype": "Datetime",
+   "label": "Last Override At",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "last_override_note",
+   "fieldtype": "Small Text",
+   "label": "Last Override Details",
+   "read_only": 1,
+   "allow_on_submit": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 1,
+   "cancel": 1,
+   "delete": 1,
+   "amend": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 1,
+   "cancel": 1,
+   "delete": 1,
+   "amend": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  },
+  {
+   "role": "Treasury Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 1,
+   "cancel": 1,
+   "delete": 1,
+   "amend": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  },
+  {
+   "role": "Treasury Operator",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 1,
+   "amend": 0,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "if_owner": 1
+  },
+  {
+   "role": "Treasury Viewer",
+   "read": 1,
+   "write": 0,
+   "create": 0,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 0,
+   "amend": 0,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  }
+ ]
+}

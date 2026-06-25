@@ -13,6 +13,11 @@ from pharma_erp.pharma_erp.doctype.shift_cash_movement.shift_cash_movement impor
 from pharma_erp.pharma_erp.doctype.treasury_voucher.treasury_voucher import (
     get_enabled_category_options,
 )
+from pharma_erp.pharma_erp.doctype.treasury_day_closing.treasury_day_closing import (
+    build_day_closing_snapshot,
+    get_recent_day_closings,
+)
+from pharma_erp.treasury_closing import ensure_treasury_date_open
 
 from pharma_erp.treasury_access import (
     can_emergency_submit_treasury,
@@ -47,6 +52,22 @@ def get_overview():
     )
     shift_cash_movements = shift_cash_movement_data["rows"]
     treasury_vouchers = _get_treasury_vouchers()
+    treasury_day_closings = get_recent_day_closings(limit=20)
+    treasury_day_closing_count = (
+        frappe.db.count("Treasury Day Closing")
+        if frappe.db.exists("DocType", "Treasury Day Closing")
+        else 0
+    )
+    closed_treasury_day_count = (
+        frappe.db.count("Treasury Day Closing", {"docstatus": 1, "status": "Closed"})
+        if frappe.db.exists("DocType", "Treasury Day Closing")
+        else 0
+    )
+    draft_treasury_day_closing_count = (
+        frappe.db.count("Treasury Day Closing", {"docstatus": 0})
+        if frappe.db.exists("DocType", "Treasury Day Closing")
+        else 0
+    )
     pending_dashboard = _get_pending_settlement_dashboard(
         terminals=terminals, payment_setups=payment_setups
     )
@@ -75,6 +96,9 @@ def get_overview():
         ),
         "treasury_vouchers": len(treasury_vouchers),
         "draft_treasury_vouchers": sum(1 for row in treasury_vouchers if cint(row.get("docstatus")) == 0),
+        "treasury_day_closings": treasury_day_closing_count,
+        "closed_treasury_days": closed_treasury_day_count,
+        "draft_treasury_day_closings": draft_treasury_day_closing_count,
         "drawers": drawers,
         "cash_accounts": cash_accounts,
         "account_warnings": account_warnings,
@@ -87,6 +111,7 @@ def get_overview():
         "shift_cash_movement_rows": shift_cash_movements,
         "shift_cash_movement_data": shift_cash_movement_data,
         "treasury_voucher_rows": treasury_vouchers,
+        "treasury_day_closing_rows": treasury_day_closings,
         "pending_dashboard": pending_dashboard,
         "access_profile": access_profile,
         "can_create_cash_drawer": access_profile["can_manage"],
@@ -107,7 +132,148 @@ def get_overview():
         "can_approve_treasury_voucher": access_profile["can_manage"],
         "can_cancel_treasury_voucher": access_profile["can_manage"],
         "can_emergency_submit_treasury_voucher": access_profile["can_emergency_submit"],
+        "can_prepare_treasury_day_closing": access_profile["can_operate"],
+        "can_approve_treasury_day_closing": access_profile["can_manage"],
+        "can_cancel_treasury_day_closing": access_profile["can_manage"],
+        "can_emergency_submit_treasury_day_closing": access_profile["can_emergency_submit"],
     }
+
+
+@frappe.whitelist()
+def get_treasury_day_closing_options(company=None, closing_date=None):
+    """Return a live snapshot and recent closings for the day-closing dialog."""
+    _validate_access()
+    company = _resolve_company(company)
+    closing_date = str(getdate(closing_date or nowdate()))
+    return {
+        "company": company,
+        "companies": frappe.get_all("Company", fields=["name"], order_by="name asc", limit_page_length=0),
+        "closing_date": closing_date,
+        "snapshot": build_day_closing_snapshot(company, closing_date),
+        "recent_closings": get_recent_day_closings(company=company, limit=20),
+        "can_operate": can_operate_treasury(),
+        "can_manage": can_manage_treasury(),
+        "can_emergency_submit": can_emergency_submit_treasury(),
+    }
+
+
+@frappe.whitelist()
+def preview_treasury_day_closing(company, closing_date, account_rows=None):
+    _validate_operator_access()
+    return build_day_closing_snapshot(
+        company=company,
+        closing_date=closing_date,
+        actual_rows=_parse_day_closing_accounts(account_rows),
+    )
+
+
+@frappe.whitelist()
+def execute_treasury_day_closing(
+    company,
+    closing_date,
+    closing_action="Create Draft",
+    account_rows=None,
+    notes=None,
+    attachment=None,
+):
+    """Create a Draft or submit a Treasury Day Closing from the Treasury page."""
+    action = str(closing_action or "Create Draft").strip()
+    if action == "Submit Now":
+        _validate_manager_access()
+    else:
+        _validate_operator_access()
+
+    snapshot = build_day_closing_snapshot(
+        company=company,
+        closing_date=closing_date,
+        actual_rows=_parse_day_closing_accounts(account_rows),
+    )
+    doc = frappe.new_doc("Treasury Day Closing")
+    doc.company = snapshot["company"]
+    doc.closing_date = snapshot["closing_date"]
+    doc.notes = str(notes or "").strip()
+    doc.attachment = str(attachment or "").strip() or None
+    for row in snapshot["accounts"]:
+        doc.append("accounts", row)
+    doc.flags.ignore_permissions = True
+    doc.insert(ignore_permissions=True)
+
+    if action == "Submit Now":
+        doc.flags.ignore_permissions = True
+        doc.submit()
+
+    return {
+        "treasury_day_closing": doc.name,
+        "docstatus": doc.docstatus,
+        "status": doc.status,
+        "message": _("Treasury day closing {0} was created successfully.").format(doc.name),
+    }
+
+
+@frappe.whitelist()
+def submit_treasury_day_closing(closing_name, account_rows=None, notes=None):
+    _validate_manager_access()
+    if not closing_name or not frappe.db.exists("Treasury Day Closing", closing_name):
+        frappe.throw(_("Treasury Day Closing was not found."))
+    doc = frappe.get_doc("Treasury Day Closing", closing_name)
+    if doc.docstatus != 0:
+        frappe.throw(_("Only a Draft Treasury Day Closing can be submitted."))
+
+    supplied = _parse_day_closing_accounts(account_rows)
+    if supplied:
+        by_account = {row.account: row for row in doc.accounts if row.account}
+        for account, values in supplied.items():
+            if account not in by_account:
+                continue
+            by_account[account].actual_closing = values.get("actual_closing")
+            by_account[account].difference_reason = values.get("difference_reason") or ""
+            by_account[account].notes = values.get("notes") or ""
+    if notes is not None:
+        doc.notes = str(notes or "").strip()
+    doc.flags.ignore_permissions = True
+    doc.save(ignore_permissions=True)
+    doc.flags.ignore_permissions = True
+    doc.submit()
+    return {
+        "treasury_day_closing": doc.name,
+        "docstatus": doc.docstatus,
+        "status": doc.status,
+        "message": _("Treasury day closing {0} was submitted.").format(doc.name),
+    }
+
+
+@frappe.whitelist()
+def cancel_treasury_day_closing(closing_name):
+    _validate_manager_access()
+    if not closing_name or not frappe.db.exists("Treasury Day Closing", closing_name):
+        frappe.throw(_("Treasury Day Closing was not found."))
+    doc = frappe.get_doc("Treasury Day Closing", closing_name)
+    if doc.docstatus != 1:
+        frappe.throw(_("Only a submitted Treasury Day Closing can be cancelled."))
+    doc.flags.ignore_permissions = True
+    doc.cancel()
+    return {
+        "treasury_day_closing": doc.name,
+        "status": "Cancelled",
+        "message": _("Treasury day closing {0} was cancelled and the date is open again.").format(doc.name),
+    }
+
+
+def _parse_day_closing_accounts(account_rows):
+    rows = frappe.parse_json(account_rows) if isinstance(account_rows, str) else (account_rows or [])
+    if isinstance(rows, dict):
+        return rows
+    result = {}
+    for row in rows or []:
+        account = str((row or {}).get("account") or "").strip()
+        if not account:
+            continue
+        result[account] = {
+            "actual_closing": (row or {}).get("actual_closing"),
+            "difference_reason": str((row or {}).get("difference_reason") or "").strip(),
+            "notes": str((row or {}).get("notes") or "").strip(),
+        }
+    return result
 
 
 @frappe.whitelist()
@@ -195,6 +361,12 @@ def execute_payment_reconciliation_settlement(
         notes=notes,
     )
     doc = frappe.get_doc("Shift Payment Reconciliation", plan["reconciliation"])
+    ensure_treasury_date_open(
+        plan["company"],
+        plan["posting_date"],
+        operation="electronic payment settlement",
+        document=doc,
+    )
 
     if plan["settlement_action"] == "Create New Journal Entry":
         journal = frappe.new_doc("Journal Entry")
