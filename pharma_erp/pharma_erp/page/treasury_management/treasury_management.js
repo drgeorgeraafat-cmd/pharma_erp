@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV7(page, wrapper);
+    new TreasuryManagementPageV8(page, wrapper);
 };
 
 
-class TreasuryManagementPageV7 {
+class TreasuryManagementPageV8 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -20,9 +20,11 @@ class TreasuryManagementPageV7 {
         this.canManageCashDrawer = false;
         this.canCreateBank = false;
         this.canManageCardTerminal = false;
+        this.canManagePaymentSetup = false;
         this.autoAccountName = "";
         this.autoBankNames = {};
         this.autoTerminalNames = {};
+        this.autoPaymentNames = {};
 
         this.addStyles();
         this.page.set_primary_action(
@@ -39,6 +41,11 @@ class TreasuryManagementPageV7 {
             __("إضافة ماكينة فيزا"),
             () => this.openCardTerminalDialog(),
             __("ماكينات الفيزا"),
+        );
+        this.$paymentSetupButton = this.page.add_inner_button(
+            __("إضافة وسيلة دفع إلكترونية"),
+            () => this.openPaymentSetupDialog(),
+            __("وسائل الدفع"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -191,13 +198,16 @@ class TreasuryManagementPageV7 {
             this.canManageCashDrawer = Boolean(data.can_manage_cash_drawer);
             this.canCreateBank = Boolean(data.can_create_bank);
             this.canManageCardTerminal = Boolean(data.can_manage_card_terminal);
+            this.canManagePaymentSetup = Boolean(data.can_manage_payment_setup);
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
             if (this.$terminalButton) this.$terminalButton.toggle(this.canManageCardTerminal);
+            if (this.$paymentSetupButton) this.$paymentSetupButton.toggle(this.canManagePaymentSetup);
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
             this.bindTerminalActions();
+            this.bindPaymentSetupActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -1063,6 +1073,339 @@ class TreasuryManagementPageV7 {
         `;
     }
 
+
+    async openPaymentSetupDialog(existingSetup = null) {
+        if (!this.canManagePaymentSetup) {
+            frappe.msgprint(__("ليس لديك صلاحية إدارة وسائل الدفع الإلكترونية."));
+            return;
+        }
+
+        const options = await this.getPaymentSetupOptions(null, existingSetup);
+        const current = options.setup || {};
+        const editing = Boolean(current.name);
+        let dialog;
+
+        dialog = new frappe.ui.Dialog({
+            title: editing ? __("تعديل إعداد وسيلة الدفع") : __("إضافة وسيلة دفع إلكترونية"),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "existing_setup",
+                    fieldtype: "Data",
+                    hidden: 1,
+                    default: current.name || "",
+                },
+                { fieldtype: "Section Break", label: __("بيانات وسيلة الدفع") },
+                {
+                    fieldname: "company",
+                    label: __("الشركة"),
+                    fieldtype: "Link",
+                    options: "Company",
+                    reqd: 1,
+                    read_only: editing ? 1 : 0,
+                    default: current.company || options.company,
+                    onchange: () => this.reloadPaymentSetupCompanyDefaults(dialog),
+                },
+                {
+                    fieldname: "mode_of_payment",
+                    label: __("طريقة الدفع"),
+                    fieldtype: "Link",
+                    options: "Mode of Payment",
+                    reqd: 1,
+                    read_only: editing ? 1 : 0,
+                    default: current.mode_of_payment || options.default_mode_of_payment,
+                    onchange: () => this.syncPaymentSetupNames(dialog),
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "settlement_policy",
+                    label: __("سياسة التسوية"),
+                    fieldtype: "Select",
+                    options: "At Shift Closing\nOn Actual Bank Settlement",
+                    reqd: 1,
+                    default: current.settlement_policy || options.default_settlement_policy,
+                },
+                {
+                    fieldname: "enabled",
+                    label: __("مفعّل"),
+                    fieldtype: "Check",
+                    default: editing ? Number(current.enabled || 0) : 1,
+                },
+                { fieldtype: "Section Break", label: __("الحساب النهائي") },
+                {
+                    fieldname: "destination_mode",
+                    label: __("طريقة ربط الحساب النهائي"),
+                    fieldtype: "Select",
+                    options: "Use Bank Account\nUse Existing Account\nCreate New Account",
+                    reqd: 1,
+                    default: current.destination_mode || "Use Bank Account",
+                },
+                {
+                    fieldname: "bank_account",
+                    label: __("Bank Account"),
+                    fieldtype: "Link",
+                    options: "Bank Account",
+                    default: current.bank_account || "",
+                    depends_on: "eval:doc.destination_mode=='Use Bank Account'",
+                    mandatory_depends_on: "eval:doc.destination_mode=='Use Bank Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            disabled: 0,
+                            is_company_account: 1,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "existing_destination_account",
+                    label: __("حساب نهائي موجود"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: current.destination_account || "",
+                    depends_on: "eval:doc.destination_mode=='Use Existing Account'",
+                    mandatory_depends_on: "eval:doc.destination_mode=='Use Existing Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 0,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "destination_account_name",
+                    label: __("اسم الحساب النهائي الجديد"),
+                    fieldtype: "Data",
+                    depends_on: "eval:doc.destination_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.destination_mode=='Create New Account'",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "destination_parent_account",
+                    label: __("الحساب الأب للحساب النهائي"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: options.default_destination_parent_account || "",
+                    depends_on: "eval:doc.destination_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.destination_mode=='Create New Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 1,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                { fieldtype: "Section Break", label: __("حساب Clearing") },
+                {
+                    fieldname: "clearing_mode",
+                    label: __("طريقة ربط حساب Clearing"),
+                    fieldtype: "Select",
+                    options: "Use Existing Account\nCreate New Account",
+                    reqd: 1,
+                    default: "Use Existing Account",
+                },
+                {
+                    fieldname: "existing_clearing_account",
+                    label: __("حساب Clearing موجود"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: current.clearing_account || "",
+                    depends_on: "eval:doc.clearing_mode=='Use Existing Account'",
+                    mandatory_depends_on: "eval:doc.clearing_mode=='Use Existing Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 0,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "clearing_account_name",
+                    label: __("اسم حساب Clearing الجديد"),
+                    fieldtype: "Data",
+                    depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "clearing_parent_account",
+                    label: __("الحساب الأب لـ Clearing"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: options.default_clearing_parent_account || "",
+                    depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 1,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "fee_account",
+                    label: __("حساب الرسوم"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: current.fee_account || options.default_fee_account || "",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Expense",
+                            is_group: 0,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                { fieldtype: "Section Break", label: __("ملاحظات") },
+                {
+                    fieldname: "notes",
+                    label: __("ملاحظات"),
+                    fieldtype: "Small Text",
+                    default: current.notes || "",
+                },
+            ],
+            primary_action_label: editing ? __("معاينة التعديل") : __("معاينة الإنشاء"),
+            primary_action: async (values) => this.previewPaymentSetup(dialog, values),
+        });
+
+        dialog.show();
+        if (!editing) this.syncPaymentSetupNames(dialog);
+    }
+
+    async getPaymentSetupOptions(company = null, setupName = null) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_payment_method_setup_options",
+            args: { company, setup_name: setupName },
+            freeze: true,
+            freeze_message: __("جاري تجهيز إعداد وسيلة الدفع..."),
+        });
+        return response.message || {};
+    }
+
+    async reloadPaymentSetupCompanyDefaults(dialog) {
+        const company = dialog.get_value("company");
+        if (!company) return;
+        const options = await this.getPaymentSetupOptions(company);
+        dialog.set_value("clearing_parent_account", options.default_clearing_parent_account || "");
+        dialog.set_value("destination_parent_account", options.default_destination_parent_account || "");
+        dialog.set_value("fee_account", options.default_fee_account || "");
+        dialog.set_value("bank_account", "");
+        dialog.set_value("existing_destination_account", "");
+        dialog.set_value("existing_clearing_account", "");
+    }
+
+    syncPaymentSetupNames(dialog) {
+        const mode = String(dialog.get_value("mode_of_payment") || "").trim();
+        if (!mode) return;
+        const base = mode.replace(/\s+/g, " ");
+        const suggestions = {
+            clearing_account_name: `${base} Clearing`,
+            destination_account_name: `${base} Account`,
+        };
+        Object.entries(suggestions).forEach(([fieldname, value]) => {
+            const current = String(dialog.get_value(fieldname) || "").trim();
+            if (!current || current === this.autoPaymentNames[fieldname]) {
+                this.autoPaymentNames[fieldname] = value;
+                dialog.set_value(fieldname, value);
+            }
+        });
+    }
+
+    async previewPaymentSetup(sourceDialog, values) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_payment_method_setup",
+            args: values,
+            freeze: true,
+            freeze_message: __("جاري مراجعة إعداد وسيلة الدفع..."),
+        });
+        this.showPaymentSetupConfirmation(sourceDialog, values, response.message || {});
+    }
+
+    showPaymentSetupConfirmation(sourceDialog, sourceValues, preview) {
+        const updating = preview.action === "update";
+        const confirmDialog = new frappe.ui.Dialog({
+            title: updating ? __("تأكيد تعديل وسيلة الدفع") : __("تأكيد إنشاء وسيلة الدفع"),
+            size: "extra-large",
+            fields: [{ fieldtype: "HTML", options: this.renderPaymentSetupPreview(preview) }],
+            primary_action_label: updating ? __("حفظ التعديلات") : __("إنشاء الإعداد"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.save_payment_method_setup",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: updating
+                        ? __("جاري حفظ تعديلات وسيلة الدفع...")
+                        : __("جاري إنشاء إعداد وسيلة الدفع..."),
+                });
+                confirmDialog.hide();
+                sourceDialog.hide();
+                const result = response.message || {};
+                frappe.msgprint({
+                    title: updating ? __("تم تعديل وسيلة الدفع") : __("تم إنشاء وسيلة الدفع"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction:rtl;text-align:right;">
+                            <div>${this.esc(result.message || __("تم الحفظ بنجاح"))}</div>
+                            <div><strong>${__("الإعداد")}:</strong> ${this.esc(result.setup || "-")}</div>
+                            <div><strong>${__("Clearing")}:</strong> ${this.esc(result.clearing_account || "-")}</div>
+                            <div><strong>${__("الحساب النهائي")}:</strong> ${this.esc(result.destination_account || "-")}</div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
+    }
+
+    renderPaymentSetupPreview(preview) {
+        const accountLabel = (plan) => {
+            if (!plan) return "-";
+            const action = plan.action === "reuse" ? __("استخدام الموجود") : __("إنشاء جديد");
+            return `${plan.document_name || plan.account_name || "-"} — ${action}`;
+        };
+        const rows = [
+            [__("العملية"), preview.action === "update" ? __("تعديل إعداد موجود") : __("إنشاء إعداد جديد")],
+            [__("الشركة"), preview.company],
+            [__("طريقة الدفع"), preview.mode_of_payment],
+            [__("سياسة التسوية"), preview.settlement_policy],
+            [__("الحالة"), preview.enabled ? __("Active") : __("Disabled")],
+            [__("حساب Clearing"), accountLabel(preview.clearing_account)],
+            [__("الحساب النهائي"), accountLabel(preview.destination_account)],
+            [__("Bank Account"), preview.bank_account || "-"],
+            [__("حساب الرسوم"), preview.fee_account || "-"],
+        ];
+        const terminalWarning = Number(preview.card_terminal_count || 0) > 0
+            ? `<div class="tmv3-preview-note"><strong>${__("تنبيه")}:</strong> ${__("طريقة الدفع هذه مرتبطة بماكينات فيزا. إعداد الماكينة المخصص يظل هو المرجع لعمليات Card POS Terminal.")}</div>`
+            : "";
+        return `
+            <div class="tmv3-preview">
+                ${rows.map(([label, value]) => `
+                    <div class="tmv3-preview-row">
+                        <div class="tmv3-preview-label">${this.esc(label)}</div>
+                        <div class="tmv3-preview-value">${this.esc(value || "-")}</div>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="tmv3-preview-note">
+                <strong>${__("مهم")}:</strong>
+                ${__("لن يتم إنشاء قيد محاسبي. الحساب الوسيط يستقبل التحصيل مؤقتًا، والحساب النهائي يمثل البنك أو المحفظة التي تصل إليها التسوية.")}
+            </div>
+            ${terminalWarning}
+        `;
+    }
+
     render(data) {
         this.$main.html(`
             <div class="tmv3">
@@ -1089,11 +1432,13 @@ class TreasuryManagementPageV7 {
                     ${this.card(__("ماكينات الفيزا"), data.card_terminals, __("Card POS Terminal"))}
                     ${this.card(__("دفعات فيزا مفتوحة"), data.open_card_batches, __("Unsettled Batches"))}
                     ${this.card(__("إعدادات التسوية"), data.clearing_setups, __("Clearing Setup"))}
+                    ${this.card(__("تسويات دفع مفتوحة"), data.open_payment_reconciliations, __("Shift Reconciliation"))}
                 </div>
 
                 ${this.renderDrawers(data.drawers || [])}
                 ${this.renderBanks(data.banks || [])}
                 ${this.renderTerminals(data.terminals || [])}
+                ${this.renderPaymentSetups(data.payment_setups || [])}
                 ${this.renderUnlinkedBankLedgers(data.unlinked_bank_ledgers || [])}
                 ${this.renderWarnings(data.account_warnings || [])}
             </div>
@@ -1299,6 +1644,159 @@ class TreasuryManagementPageV7 {
                 <div class="tmv3-preview-note">${__("الدفعة تُعرض كـ «من يوم سابق» عندما تظل غير مسوّاة بعد تاريخ الإغلاق. تعطيل الماكينة ممنوع طالما توجد دفعات مفتوحة.")}</div>
             </div>
         `;
+    }
+
+
+    renderPaymentSetups(rows) {
+        if (!rows.length) {
+            return `
+                <div class="tmv3-section">
+                    <h4>${__("InstaPay والمحافظ والتحويلات")}</h4>
+                    <div class="tmv3-empty">${__("لا توجد إعدادات Payment Clearing مسجلة حتى الآن.")}</div>
+                </div>
+            `;
+        }
+
+        const body = rows.map((row) => {
+            const clearingClass = Number(row.clearing_balance || 0) < 0
+                ? "tmv3-balance-negative" : "tmv3-balance-positive";
+            const openBadge = Number(row.open_reconciliation_count || 0) > 0
+                ? `<span class="tmv3-badge tmv3-badge-off">${this.esc(row.open_reconciliation_count)} ${__("مفتوحة")}</span>`
+                : `<span class="tmv3-badge tmv3-badge-on">${__("لا توجد تسويات مفتوحة")}</span>`;
+            const cardNote = Number(row.card_terminal_count || 0) > 0
+                ? `<br><small>${this.esc(row.card_terminal_count)} ${__("ماكينة مرتبطة")}</small>` : "";
+            const edit = this.canManagePaymentSetup
+                ? `<button class="tmv3-action-btn tmv3-payment-edit" data-setup="${this.esc(row.name)}">${__("تعديل")}</button>` : "";
+            const toggle = this.canManagePaymentSetup
+                ? `<button class="tmv3-action-btn tmv3-payment-toggle ${row.enabled ? "tmv3-action-danger" : "tmv3-action-success"}" data-setup="${this.esc(row.name)}" data-enabled="${row.enabled ? 1 : 0}">${row.enabled ? __("تعطيل") : __("تفعيل")}</button>` : "";
+            return `
+                <tr>
+                    <td><a href="/app/payment-method-clearing-setup/${encodeURIComponent(row.name)}">${this.esc(row.mode_of_payment || row.name)}</a>${cardNote}</td>
+                    <td>${this.esc(row.settlement_policy || "-")}</td>
+                    <td>${this.esc(row.clearing_account || "-")}</td>
+                    <td class="${clearingClass}">${this.formatMoney(row.clearing_balance, row.account_currency)}</td>
+                    <td>${this.esc(row.destination_account || "-")}</td>
+                    <td>${this.formatMoney(row.destination_balance, row.account_currency)}</td>
+                    <td>${this.esc(row.fee_account || "-")}</td>
+                    <td>${openBadge}<br><small>${this.formatMoney(row.open_expected_amount, row.account_currency)}</small></td>
+                    <td><span class="tmv3-badge ${row.enabled ? "tmv3-badge-on" : "tmv3-badge-off"}">${row.enabled ? __("Active") : __("Disabled")}</span></td>
+                    <td><div class="tmv3-actions">
+                        <button class="tmv3-action-btn tmv3-payment-activity" data-setup="${this.esc(row.name)}">${__("الأرصدة والتسويات")}</button>
+                        ${edit}${toggle}
+                    </div></td>
+                </tr>
+            `;
+        }).join("");
+
+        return `
+            <div class="tmv3-section">
+                <h4>${__("InstaPay والمحافظ والتحويلات وPayment Clearing")}</h4>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table" style="min-width:1250px;">
+                        <thead><tr>
+                            <th>${__("طريقة الدفع")}</th><th>${__("سياسة التسوية")}</th>
+                            <th>${__("Clearing")}</th><th>${__("رصيد Clearing")}</th>
+                            <th>${__("الحساب النهائي")}</th><th>${__("رصيد الحساب النهائي")}</th>
+                            <th>${__("حساب الرسوم")}</th><th>${__("التسويات المفتوحة")}</th>
+                            <th>${__("الحالة")}</th><th>${__("إجراءات")}</th>
+                        </tr></thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+                <div class="tmv3-preview-note">${__("مثال: تحصيل InstaPay يدخل أولًا إلى InstaPay Clearing، ثم ينتقل إلى الحساب البنكي النهائي عند المراجعة أو التسوية حسب السياسة المحددة.")}</div>
+            </div>
+        `;
+    }
+
+    bindPaymentSetupActions() {
+        this.$main.find(".tmv3-payment-activity").off("click").on("click", (event) => {
+            this.openPaymentSetupActivity($(event.currentTarget).attr("data-setup"));
+        });
+        this.$main.find(".tmv3-payment-edit").off("click").on("click", (event) => {
+            this.openPaymentSetupDialog($(event.currentTarget).attr("data-setup"));
+        });
+        this.$main.find(".tmv3-payment-toggle").off("click").on("click", (event) => {
+            const $button = $(event.currentTarget);
+            this.confirmPaymentSetupToggle(
+                $button.attr("data-setup"),
+                Number($button.attr("data-enabled") || 0) === 1,
+            );
+        });
+    }
+
+    async openPaymentSetupActivity(setup) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_payment_method_setup_activity",
+            args: { setup_name: setup, limit: 20 },
+            freeze: true,
+            freeze_message: __("جاري تحميل أرصدة وسيلة الدفع..."),
+        });
+        const data = response.message || {};
+        const reconciliations = (data.open_reconciliations || []).length
+            ? data.open_reconciliations.map((row) => `
+                <tr>
+                    <td><a href="/app/shift-payment-reconciliation/${encodeURIComponent(row.name)}">${this.esc(row.name)}</a></td>
+                    <td>${this.esc(row.shift_reference || "-")}</td>
+                    <td>${this.esc(row.status || "-")}</td>
+                    <td>${this.formatMoney(row.expected_amount, data.account_currency)}</td>
+                    <td>${this.formatMoney(row.reviewed_amount, data.account_currency)}</td>
+                    <td>${this.formatMoney(row.difference, data.account_currency)}</td>
+                </tr>
+            `).join("")
+            : `<tr><td colspan="6" class="tmv3-empty">${__("لا توجد تسويات وردية مفتوحة لهذه الوسيلة.")}</td></tr>`;
+        const movementRows = (rows) => (rows || []).length
+            ? rows.map((row) => `
+                <tr><td>${this.esc(row.posting_date || "-")}</td><td>${this.esc(row.voucher_type || "-")}</td>
+                <td>${this.esc(row.voucher_no || "-")}</td><td>${this.formatMoney(row.debit, data.account_currency)}</td>
+                <td>${this.formatMoney(row.credit, data.account_currency)}</td><td>${this.esc(row.against || "-")}</td></tr>
+            `).join("")
+            : `<tr><td colspan="6" class="tmv3-empty">${__("لا توجد حركات دفتر أستاذ حتى الآن.")}</td></tr>`;
+
+        const dialog = new frappe.ui.Dialog({
+            title: `${__("أرصدة وتسويات وسيلة الدفع")}: ${this.esc(data.mode_of_payment || "")}`,
+            size: "extra-large",
+            fields: [{
+                fieldtype: "HTML",
+                options: `
+                    <div style="direction:rtl;text-align:right;">
+                        <div class="tmv3-preview" style="margin-bottom:14px;">
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("حساب Clearing")}</div><div class="tmv3-preview-value">${this.esc(data.clearing_account || "-")} — ${this.formatMoney(data.clearing_balance, data.account_currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الحساب النهائي")}</div><div class="tmv3-preview-value">${this.esc(data.destination_account || "-")} — ${this.formatMoney(data.destination_balance, data.account_currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("سياسة التسوية")}</div><div class="tmv3-preview-value">${this.esc(data.settlement_policy || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("التسويات المفتوحة")}</div><div class="tmv3-preview-value">${this.esc(data.open_reconciliation_count || 0)} — ${this.formatMoney(data.open_expected_amount, data.account_currency)}</div></div>
+                        </div>
+                        <h5>${__("تسويات الوردية المفتوحة")}</h5>
+                        <div class="tmv3-table-wrap"><table class="tmv3-activity-table">
+                            <thead><tr><th>${__("التسوية")}</th><th>${__("الوردية")}</th><th>${__("الحالة")}</th><th>${__("المتوقع")}</th><th>${__("المراجع")}</th><th>${__("الفرق")}</th></tr></thead>
+                            <tbody>${reconciliations}</tbody>
+                        </table></div>
+                        <h5 style="margin-top:18px;">${__("آخر حركات حساب Clearing")}</h5>
+                        <div class="tmv3-table-wrap"><table class="tmv3-activity-table"><thead><tr><th>${__("التاريخ")}</th><th>${__("النوع")}</th><th>${__("المستند")}</th><th>${__("مدين")}</th><th>${__("دائن")}</th><th>${__("المقابل")}</th></tr></thead><tbody>${movementRows(data.clearing_movements)}</tbody></table></div>
+                        <h5 style="margin-top:18px;">${__("آخر حركات الحساب النهائي")}</h5>
+                        <div class="tmv3-table-wrap"><table class="tmv3-activity-table"><thead><tr><th>${__("التاريخ")}</th><th>${__("النوع")}</th><th>${__("المستند")}</th><th>${__("مدين")}</th><th>${__("دائن")}</th><th>${__("المقابل")}</th></tr></thead><tbody>${movementRows(data.destination_movements)}</tbody></table></div>
+                    </div>
+                `,
+            }],
+        });
+        dialog.show();
+    }
+
+    confirmPaymentSetupToggle(setup, isEnabled) {
+        const message = isEnabled
+            ? __("لن يمكن تعطيل الإعداد إذا كانت هناك Shift Payment Reconciliation مفتوحة. هل تريد المتابعة؟")
+            : __("سيتم التحقق من الحسابات وطريقة الدفع ثم تفعيل الإعداد. هل تريد المتابعة؟");
+        frappe.confirm(`${message}<br><br><strong>${this.esc(setup)}</strong>`, async () => {
+            await frappe.call({
+                method:
+                    "pharma_erp.pharma_erp.page.treasury_management.treasury_management.set_payment_method_setup_enabled",
+                args: { setup_name: setup, enabled: isEnabled ? 0 : 1 },
+                freeze: true,
+                freeze_message: __("جاري تحديث حالة إعداد وسيلة الدفع..."),
+            });
+            frappe.show_alert({ message: __("تم تحديث حالة وسيلة الدفع"), indicator: "green" });
+            await this.refresh();
+        });
     }
 
     bindTerminalActions() {

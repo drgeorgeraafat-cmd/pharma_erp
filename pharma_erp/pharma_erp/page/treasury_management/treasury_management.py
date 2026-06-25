@@ -23,6 +23,7 @@ def get_overview():
     bank_ledger_accounts = _get_bank_ledger_accounts()
     unlinked_bank_ledgers = _get_unlinked_bank_ledgers(bank_ledger_accounts, banks)
     terminals = _get_card_terminals()
+    payment_setups = _get_payment_method_setups()
 
     return {
         "ok": True,
@@ -37,6 +38,7 @@ def get_overview():
         "card_terminals": len(terminals),
         "open_card_batches": sum(cint(row.get("open_batch_count")) for row in terminals),
         "clearing_setups": _safe_count("Payment Method Clearing Setup"),
+        "open_payment_reconciliations": sum(cint(row.get("open_reconciliation_count")) for row in payment_setups),
         "drawers": drawers,
         "cash_accounts": cash_accounts,
         "account_warnings": account_warnings,
@@ -44,10 +46,12 @@ def get_overview():
         "bank_ledger_accounts_list": bank_ledger_accounts,
         "unlinked_bank_ledgers": unlinked_bank_ledgers,
         "terminals": terminals,
+        "payment_setups": payment_setups,
         "can_create_cash_drawer": _can_create_cash_drawer(),
         "can_manage_cash_drawer": _can_create_cash_drawer(),
         "can_create_bank": _can_create_cash_drawer(),
         "can_manage_card_terminal": _can_create_cash_drawer(),
+        "can_manage_payment_setup": _can_create_cash_drawer(),
     }
 
 
@@ -494,6 +498,508 @@ def get_bank_account_activity(bank_account_name, limit=20):
         "movements": movements,
     }
 
+
+
+@frappe.whitelist()
+def get_payment_method_setup_options(company=None, setup_name=None):
+    """Return defaults for creating or editing a Payment Method Clearing Setup."""
+    _validate_create_access()
+    if not frappe.db.exists("DocType", "Payment Method Clearing Setup"):
+        frappe.throw(_("Payment Method Clearing Setup is not installed."))
+
+    company = _resolve_company(company)
+    setup = None
+    if setup_name:
+        setup_name = _clean_master_text(setup_name)
+        if not frappe.db.exists("Payment Method Clearing Setup", setup_name):
+            frappe.throw(_("Payment Method Clearing Setup was not found."))
+        setup = frappe.get_doc("Payment Method Clearing Setup", setup_name)
+        company = setup.company
+
+    clearing_parents = _clearing_parent_accounts(company)
+    destination_parents = _bank_parent_accounts(company)
+    default_mode = _default_non_card_mode_of_payment()
+    default_fee = setup.fee_account if setup else _default_fee_account(company)
+
+    bank_account = ""
+    if setup:
+        bank_account = frappe.db.get_value(
+            "Bank Account",
+            {
+                "company": company,
+                "account": setup.destination_account,
+                "disabled": 0,
+                "is_company_account": 1,
+            },
+            "name",
+        ) or ""
+
+    return {
+        "company": company,
+        "default_mode_of_payment": setup.mode_of_payment if setup else default_mode,
+        "default_settlement_policy": setup.settlement_policy if setup else "At Shift Closing",
+        "default_clearing_parent_account": clearing_parents[0]["name"] if clearing_parents else "",
+        "default_destination_parent_account": destination_parents[0]["name"] if destination_parents else "",
+        "default_fee_account": default_fee or "",
+        "setup": _serialize_payment_setup_for_edit(setup, bank_account) if setup else None,
+    }
+
+
+@frappe.whitelist()
+def preview_payment_method_setup(
+    company,
+    mode_of_payment,
+    settlement_policy,
+    destination_mode="Use Bank Account",
+    bank_account=None,
+    existing_destination_account=None,
+    destination_account_name=None,
+    destination_parent_account=None,
+    clearing_mode="Use Existing Account",
+    existing_clearing_account=None,
+    clearing_account_name=None,
+    clearing_parent_account=None,
+    fee_account=None,
+    notes=None,
+    enabled=1,
+    existing_setup=None,
+    **kwargs,
+):
+    """Validate and preview a clearing setup without writing data."""
+    _validate_create_access()
+    return _prepare_payment_method_setup_payload(
+        company=company,
+        mode_of_payment=mode_of_payment,
+        settlement_policy=settlement_policy,
+        destination_mode=destination_mode,
+        bank_account=bank_account,
+        existing_destination_account=existing_destination_account,
+        destination_account_name=destination_account_name,
+        destination_parent_account=destination_parent_account,
+        clearing_mode=clearing_mode,
+        existing_clearing_account=existing_clearing_account,
+        clearing_account_name=clearing_account_name,
+        clearing_parent_account=clearing_parent_account,
+        fee_account=fee_account,
+        notes=notes,
+        enabled=enabled,
+        existing_setup=existing_setup,
+    )
+
+
+@frappe.whitelist()
+def save_payment_method_setup(
+    company,
+    mode_of_payment,
+    settlement_policy,
+    destination_mode="Use Bank Account",
+    bank_account=None,
+    existing_destination_account=None,
+    destination_account_name=None,
+    destination_parent_account=None,
+    clearing_mode="Use Existing Account",
+    existing_clearing_account=None,
+    clearing_account_name=None,
+    clearing_parent_account=None,
+    fee_account=None,
+    notes=None,
+    enabled=1,
+    existing_setup=None,
+    **kwargs,
+):
+    """Create or update a Payment Method Clearing Setup after final validation."""
+    _validate_create_access()
+    payload = _prepare_payment_method_setup_payload(
+        company=company,
+        mode_of_payment=mode_of_payment,
+        settlement_policy=settlement_policy,
+        destination_mode=destination_mode,
+        bank_account=bank_account,
+        existing_destination_account=existing_destination_account,
+        destination_account_name=destination_account_name,
+        destination_parent_account=destination_parent_account,
+        clearing_mode=clearing_mode,
+        existing_clearing_account=existing_clearing_account,
+        clearing_account_name=clearing_account_name,
+        clearing_parent_account=clearing_parent_account,
+        fee_account=fee_account,
+        notes=notes,
+        enabled=enabled,
+        existing_setup=existing_setup,
+    )
+
+    clearing_plan = payload["clearing_account"]
+    clearing_account = (
+        _create_account_from_plan(clearing_plan)
+        if clearing_plan["action"] == "create"
+        else clearing_plan["document_name"]
+    )
+    destination_plan = payload["destination_account"]
+    destination_account = (
+        _create_account_from_plan(destination_plan)
+        if destination_plan["action"] == "create"
+        else destination_plan["document_name"]
+    )
+
+    if payload["action"] == "update":
+        doc = frappe.get_doc("Payment Method Clearing Setup", payload["existing_setup"])
+    else:
+        doc = frappe.new_doc("Payment Method Clearing Setup")
+
+    doc.company = payload["company"]
+    doc.mode_of_payment = payload["mode_of_payment"]
+    doc.enabled = payload["enabled"]
+    doc.settlement_policy = payload["settlement_policy"]
+    doc.clearing_account = clearing_account
+    doc.destination_account = destination_account
+    doc.fee_account = payload["fee_account"] or None
+    doc.notes = payload["notes"] or None
+    doc.flags.ignore_permissions = True
+    if payload["action"] == "create":
+        doc.insert(ignore_permissions=True)
+    else:
+        doc.save(ignore_permissions=True)
+
+    if payload["enabled"]:
+        _sync_mode_of_payment_account(
+            payload["mode_of_payment"], payload["company"], clearing_account
+        )
+
+    doc.add_comment(
+        "Comment",
+        _("{0} from Treasury Management.").format(
+            _("Created") if payload["action"] == "create" else _("Updated")
+        ),
+    )
+
+    return {
+        "ok": True,
+        "setup": doc.name,
+        "mode_of_payment": doc.mode_of_payment,
+        "clearing_account": doc.clearing_account,
+        "destination_account": doc.destination_account,
+        "action": payload["action"],
+        "message": _("Payment Method Clearing Setup was saved successfully."),
+    }
+
+
+@frappe.whitelist()
+def get_payment_method_setup_activity(setup_name, limit=20):
+    """Return balances, movements and open shift reconciliations for a setup."""
+    _validate_access()
+    setup_name = _clean_master_text(setup_name)
+    if not setup_name or not frappe.db.exists("Payment Method Clearing Setup", setup_name):
+        frappe.throw(_("Payment Method Clearing Setup was not found."))
+
+    setup = frappe.get_doc("Payment Method Clearing Setup", setup_name)
+    clearing = _validate_company_account(
+        setup.clearing_account,
+        setup.company,
+        expected_root="Asset",
+        expected_type=None,
+        label=_("Clearing Account"),
+    )
+    destination = _validate_company_account(
+        setup.destination_account,
+        setup.company,
+        expected_root="Asset",
+        expected_type=None,
+        label=_("Destination Account"),
+    )
+    limit = max(1, min(cint(limit) or 20, 100))
+
+    def movements(account):
+        rows = frappe.get_all(
+            "GL Entry",
+            filters={"account": account, "is_cancelled": 0},
+            fields=[
+                "name", "posting_date", "creation", "voucher_type", "voucher_no",
+                "debit", "credit", "against", "remarks",
+            ],
+            order_by="posting_date desc, creation desc",
+            limit_page_length=limit,
+        )
+        for row in rows:
+            row["debit"] = flt(row.get("debit"))
+            row["credit"] = flt(row.get("credit"))
+            row["net_movement"] = flt(row["debit"] - row["credit"])
+        return rows
+
+    reconciliations = _get_open_payment_reconciliations(setup.name, limit=100)
+    return {
+        "setup": setup.name,
+        "company": setup.company,
+        "mode_of_payment": setup.mode_of_payment,
+        "settlement_policy": setup.settlement_policy,
+        "enabled": cint(setup.enabled),
+        "clearing_account": setup.clearing_account,
+        "destination_account": setup.destination_account,
+        "fee_account": setup.fee_account or "",
+        "account_currency": clearing.get("account_currency") or destination.get("account_currency") or "",
+        "clearing_balance": _account_balance(setup.clearing_account, setup.company),
+        "destination_balance": _account_balance(setup.destination_account, setup.company),
+        "open_reconciliation_count": len(reconciliations),
+        "open_expected_amount": sum(flt(row.get("expected_amount")) for row in reconciliations),
+        "open_reconciliations": reconciliations,
+        "clearing_movements": movements(setup.clearing_account),
+        "destination_movements": movements(setup.destination_account),
+    }
+
+
+@frappe.whitelist()
+def set_payment_method_setup_enabled(setup_name, enabled):
+    """Enable or disable a setup, blocking disable while open reconciliations exist."""
+    _validate_create_access()
+    setup_name = _clean_master_text(setup_name)
+    if not setup_name or not frappe.db.exists("Payment Method Clearing Setup", setup_name):
+        frappe.throw(_("Payment Method Clearing Setup was not found."))
+
+    setup = frappe.get_doc("Payment Method Clearing Setup", setup_name)
+    enabled = cint(enabled)
+    if enabled:
+        if not frappe.db.exists("Mode of Payment", setup.mode_of_payment):
+            frappe.throw(_("Mode of Payment was not found."))
+        _validate_company_account(setup.clearing_account, setup.company, "Asset", None, _("Clearing Account"))
+        _validate_company_account(setup.destination_account, setup.company, "Asset", None, _("Destination Account"))
+        if setup.fee_account:
+            _validate_company_account(setup.fee_account, setup.company, "Expense", None, _("Fee Account"))
+    else:
+        open_rows = _get_open_payment_reconciliations(setup.name, limit=5)
+        if open_rows:
+            names = ", ".join(row.name for row in open_rows)
+            frappe.throw(
+                _("Cannot disable this setup while open reconciliations exist: {0}.").format(names)
+            )
+
+    if cint(setup.enabled) != enabled:
+        setup.enabled = enabled
+        setup.flags.ignore_permissions = True
+        setup.save(ignore_permissions=True)
+        if enabled:
+            _sync_mode_of_payment_account(
+                setup.mode_of_payment, setup.company, setup.clearing_account
+            )
+        setup.add_comment(
+            "Comment",
+            _("Payment Method Clearing Setup {0} from Treasury Management.").format(
+                _("enabled") if enabled else _("disabled")
+            ),
+        )
+
+    return {
+        "setup": setup.name,
+        "enabled": cint(setup.enabled),
+        "message": _("Payment Method Clearing Setup status was updated successfully."),
+    }
+
+
+def _prepare_payment_method_setup_payload(
+    company,
+    mode_of_payment,
+    settlement_policy,
+    destination_mode="Use Bank Account",
+    bank_account=None,
+    existing_destination_account=None,
+    destination_account_name=None,
+    destination_parent_account=None,
+    clearing_mode="Use Existing Account",
+    existing_clearing_account=None,
+    clearing_account_name=None,
+    clearing_parent_account=None,
+    fee_account=None,
+    notes=None,
+    enabled=1,
+    existing_setup=None,
+):
+    if not frappe.db.exists("DocType", "Payment Method Clearing Setup"):
+        frappe.throw(_("Payment Method Clearing Setup is not installed."))
+
+    company = _resolve_company(company)
+    mode_of_payment = _clean_master_text(mode_of_payment)
+    settlement_policy = str(settlement_policy or "").strip()
+    destination_mode = str(destination_mode or "Use Bank Account").strip()
+    clearing_mode = str(clearing_mode or "Use Existing Account").strip()
+    fee_account = str(fee_account or "").strip()
+    notes = str(notes or "").strip()
+    existing_setup = _clean_master_text(existing_setup)
+    enabled = cint(enabled)
+
+    if not mode_of_payment or not frappe.db.exists("Mode of Payment", mode_of_payment):
+        frappe.throw(_("Select a valid Mode of Payment."))
+    if settlement_policy not in {"At Shift Closing", "On Actual Bank Settlement"}:
+        frappe.throw(_("Select a valid Settlement Policy."))
+
+    action = "update" if existing_setup else "create"
+    current = None
+    if action == "update":
+        if not frappe.db.exists("Payment Method Clearing Setup", existing_setup):
+            frappe.throw(_("Payment Method Clearing Setup was not found."))
+        current = frappe.get_doc("Payment Method Clearing Setup", existing_setup)
+        if company != current.company:
+            frappe.throw(_("Company cannot be changed after setup creation."))
+        if mode_of_payment != current.mode_of_payment:
+            frappe.throw(_("Mode of Payment cannot be changed after setup creation."))
+    duplicate = frappe.db.get_value(
+        "Payment Method Clearing Setup",
+        {"company": company, "mode_of_payment": mode_of_payment},
+        "name",
+    )
+    if duplicate and duplicate != existing_setup:
+        frappe.throw(
+            _("A clearing setup already exists for {0} and {1}: {2}.").format(
+                company, mode_of_payment, duplicate
+            )
+        )
+
+    destination_mode_lower = destination_mode.lower()
+    selected_bank_account = ""
+    if destination_mode_lower.startswith("use bank"):
+        bank_account = _clean_master_text(bank_account)
+        if not bank_account or not frappe.db.exists("Bank Account", bank_account):
+            frappe.throw(_("Select a valid Bank Account."))
+        bank_doc = frappe.get_doc("Bank Account", bank_account)
+        if cint(bank_doc.disabled) or not cint(bank_doc.is_company_account):
+            frappe.throw(_("The selected Bank Account is disabled or is not a Company Account."))
+        if bank_doc.company != company or not bank_doc.account:
+            frappe.throw(_("The selected Bank Account is not valid for this company."))
+        account = _validate_company_account(
+            bank_doc.account, company, "Asset", "Bank", _("Destination Account")
+        )
+        destination_plan = {
+            "action": "reuse",
+            "document_name": account.name,
+            "account_name": account.account_name,
+            "company": company,
+            "parent_account": account.parent_account,
+            "account_currency": account.account_currency or "",
+            "root_type": account.root_type,
+            "account_type": account.account_type or "",
+        }
+        selected_bank_account = bank_doc.name
+    elif destination_mode_lower.startswith("use existing"):
+        existing_destination_account = str(existing_destination_account or "").strip()
+        if not existing_destination_account:
+            frappe.throw(_("Select an existing Destination Account."))
+        account = _validate_company_account(
+            existing_destination_account, company, "Asset", None, _("Destination Account")
+        )
+        destination_plan = {
+            "action": "reuse",
+            "document_name": account.name,
+            "account_name": account.account_name,
+            "company": company,
+            "parent_account": account.parent_account,
+            "account_currency": account.account_currency or "",
+            "root_type": account.root_type,
+            "account_type": account.account_type or "",
+        }
+    else:
+        destination_account_name = _clean_master_text(destination_account_name)
+        destination_parent_account = str(destination_parent_account or "").strip()
+        if not destination_account_name:
+            frappe.throw(_("Destination Account Name is required."))
+        if not destination_parent_account:
+            frappe.throw(_("Destination Parent Account is required."))
+        _validate_parent_account(destination_parent_account, company, "Asset")
+        currency = frappe.db.get_value("Company", company, "default_currency") or ""
+        destination_plan = _plan_reusable_account(
+            destination_account_name,
+            company,
+            destination_parent_account,
+            currency,
+            root_type="Asset",
+            account_type="Bank",
+        )
+
+    clearing_existing = clearing_mode.lower().startswith("use")
+    if clearing_existing:
+        existing_clearing_account = str(existing_clearing_account or "").strip()
+        if not existing_clearing_account:
+            frappe.throw(_("Select an existing Clearing Account."))
+        account = _validate_company_account(
+            existing_clearing_account, company, "Asset", None, _("Clearing Account")
+        )
+        clearing_plan = {
+            "action": "reuse",
+            "document_name": account.name,
+            "account_name": account.account_name,
+            "company": company,
+            "parent_account": account.parent_account,
+            "account_currency": account.account_currency or "",
+            "root_type": account.root_type,
+            "account_type": account.account_type or "",
+        }
+    else:
+        clearing_account_name = _clean_master_text(clearing_account_name)
+        clearing_parent_account = str(clearing_parent_account or "").strip()
+        if not clearing_account_name:
+            frappe.throw(_("Clearing Account Name is required."))
+        if not clearing_parent_account:
+            frappe.throw(_("Clearing Parent Account is required."))
+        _validate_parent_account(clearing_parent_account, company, "Asset")
+        currency = frappe.db.get_value("Company", company, "default_currency") or ""
+        clearing_plan = _plan_reusable_account(
+            clearing_account_name,
+            company,
+            clearing_parent_account,
+            currency,
+            root_type="Asset",
+            account_type="",
+        )
+
+    if clearing_plan.get("action") == "reuse" and destination_plan.get("action") == "reuse":
+        if clearing_plan["document_name"] == destination_plan["document_name"]:
+            frappe.throw(_("Clearing Account and Destination Account must be different."))
+
+    if fee_account:
+        _validate_company_account(fee_account, company, "Expense", None, _("Fee Account"))
+        if fee_account in {
+            clearing_plan.get("document_name"), destination_plan.get("document_name")
+        }:
+            frappe.throw(_("Fee Account must be different from clearing and destination accounts."))
+
+    if current:
+        open_rows = _get_open_payment_reconciliations(current.name, limit=5)
+        clearing_name = clearing_plan.get("document_name") if clearing_plan["action"] == "reuse" else ""
+        destination_name = destination_plan.get("document_name") if destination_plan["action"] == "reuse" else ""
+        protected_changed = any((
+            company != current.company,
+            mode_of_payment != current.mode_of_payment,
+            clearing_name != current.clearing_account,
+            destination_name != current.destination_account,
+        ))
+        if open_rows and protected_changed:
+            names = ", ".join(row.name for row in open_rows)
+            frappe.throw(
+                _("Accounting links cannot be changed while open reconciliations exist: {0}.").format(names)
+            )
+        if open_rows and not enabled:
+            names = ", ".join(row.name for row in open_rows)
+            frappe.throw(
+                _("Cannot disable this setup while open reconciliations exist: {0}.").format(names)
+            )
+
+    card_terminal_count = frappe.db.count(
+        "Card POS Terminal",
+        filters={"company": company, "mode_of_payment": mode_of_payment},
+    ) if frappe.db.exists("DocType", "Card POS Terminal") else 0
+
+    return {
+        "action": action,
+        "existing_setup": existing_setup,
+        "company": company,
+        "mode_of_payment": mode_of_payment,
+        "settlement_policy": settlement_policy,
+        "enabled": enabled,
+        "destination_mode": destination_mode,
+        "bank_account": selected_bank_account,
+        "destination_account": destination_plan,
+        "clearing_mode": clearing_mode,
+        "clearing_account": clearing_plan,
+        "fee_account": fee_account,
+        "notes": notes,
+        "card_terminal_count": card_terminal_count,
+    }
 
 
 @frappe.whitelist()
@@ -1773,6 +2279,143 @@ def _fee_parent_accounts(company):
     )
     return rows
 
+
+
+def _get_payment_method_setups():
+    if not frappe.db.exists("DocType", "Payment Method Clearing Setup"):
+        return []
+    rows = frappe.get_all(
+        "Payment Method Clearing Setup",
+        fields=[
+            "name", "company", "mode_of_payment", "enabled", "settlement_policy",
+            "clearing_account", "destination_account", "fee_account", "notes",
+        ],
+        order_by="company asc, mode_of_payment asc",
+        limit_page_length=500,
+    )
+    for row in rows:
+        row["enabled"] = cint(row.get("enabled"))
+        row["clearing_balance"] = _account_balance(row.clearing_account, row.company) if row.get("clearing_account") else 0
+        row["destination_balance"] = _account_balance(row.destination_account, row.company) if row.get("destination_account") else 0
+        account = frappe.db.get_value(
+            "Account",
+            row.clearing_account,
+            ["account_currency", "disabled"],
+            as_dict=True,
+        ) if row.get("clearing_account") else {}
+        row["account_currency"] = (account or {}).get("account_currency") or ""
+        row["clearing_disabled"] = cint((account or {}).get("disabled"))
+        destination = frappe.db.get_value(
+            "Account",
+            row.destination_account,
+            ["account_currency", "disabled", "account_type"],
+            as_dict=True,
+        ) if row.get("destination_account") else {}
+        row["destination_disabled"] = cint((destination or {}).get("disabled"))
+        bank_account = frappe.db.get_value(
+            "Bank Account",
+            {
+                "company": row.company,
+                "account": row.destination_account,
+                "disabled": 0,
+                "is_company_account": 1,
+            },
+            ["name", "account_name", "bank"],
+            as_dict=True,
+        ) or {}
+        row["bank_account"] = bank_account.get("name") or ""
+        row["bank_account_name"] = bank_account.get("account_name") or ""
+        row["bank"] = bank_account.get("bank") or ""
+        recs = _get_open_payment_reconciliations(row.name, limit=100)
+        row["open_reconciliation_count"] = len(recs)
+        row["open_expected_amount"] = sum(flt(item.get("expected_amount")) for item in recs)
+        row["card_terminal_count"] = frappe.db.count(
+            "Card POS Terminal",
+            filters={"company": row.company, "mode_of_payment": row.mode_of_payment},
+        ) if frappe.db.exists("DocType", "Card POS Terminal") else 0
+        movement = frappe.get_all(
+            "GL Entry",
+            filters={"account": row.clearing_account, "is_cancelled": 0},
+            fields=["posting_date", "creation", "voucher_type", "voucher_no"],
+            order_by="posting_date desc, creation desc",
+            limit_page_length=1,
+        ) if row.get("clearing_account") else []
+        row["last_movement"] = movement[0] if movement else {}
+    return rows
+
+
+def _get_open_payment_reconciliations(setup_name, limit=100):
+    if not frappe.db.exists("DocType", "Shift Payment Reconciliation"):
+        return []
+    rows = frappe.get_all(
+        "Shift Payment Reconciliation",
+        filters={
+            "setup_reference": setup_name,
+            "docstatus": ["!=", 2],
+            "status": ["in", ["Draft", "Reviewed"]],
+        },
+        fields=[
+            "name", "shift_reference", "company", "mode_of_payment", "status",
+            "from_time", "to_time", "expected_amount", "reviewed_amount",
+            "difference", "fee_amount", "net_transfer_amount", "journal_entry",
+            "creation", "modified",
+        ],
+        order_by="creation asc",
+        limit_page_length=max(1, min(cint(limit) or 100, 500)),
+    )
+    for row in rows:
+        for fieldname in (
+            "expected_amount", "reviewed_amount", "difference", "fee_amount", "net_transfer_amount"
+        ):
+            row[fieldname] = flt(row.get(fieldname))
+    return rows
+
+
+def _serialize_payment_setup_for_edit(setup, bank_account):
+    if not setup:
+        return None
+    destination_mode = "Use Bank Account" if bank_account else "Use Existing Account"
+    return {
+        "name": setup.name,
+        "company": setup.company,
+        "mode_of_payment": setup.mode_of_payment,
+        "enabled": cint(setup.enabled),
+        "settlement_policy": setup.settlement_policy,
+        "destination_mode": destination_mode,
+        "bank_account": bank_account or "",
+        "destination_account": setup.destination_account,
+        "clearing_account": setup.clearing_account,
+        "fee_account": setup.fee_account or "",
+        "notes": setup.notes or "",
+    }
+
+
+
+def _sync_mode_of_payment_account(mode_of_payment, company, clearing_account):
+    """Keep ERPNext Mode of Payment company default aligned with the setup."""
+    doc = frappe.get_doc("Mode of Payment", mode_of_payment)
+    row = None
+    for account_row in doc.get("accounts") or []:
+        if account_row.company == company:
+            row = account_row
+            break
+    if not row:
+        row = doc.append("accounts", {"company": company})
+    row.default_account = clearing_account
+    doc.flags.ignore_permissions = True
+    doc.save(ignore_permissions=True)
+
+def _default_non_card_mode_of_payment():
+    for name in ("Insta Pay", "Wallet", "Bank Transfer", "Transfer"):
+        if frappe.db.exists("Mode of Payment", name):
+            return name
+    rows = frappe.get_all(
+        "Mode of Payment",
+        pluck="name",
+        order_by="name asc",
+        limit_page_length=1,
+    )
+    return rows[0] if rows else ""
 
 def _get_card_terminals():
     if not frappe.db.exists("DocType", "Card POS Terminal"):
