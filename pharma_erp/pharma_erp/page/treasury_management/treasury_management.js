@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV5(page, wrapper);
+    new TreasuryManagementPageV7(page, wrapper);
 };
 
 
-class TreasuryManagementPageV5 {
+class TreasuryManagementPageV7 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -19,8 +19,10 @@ class TreasuryManagementPageV5 {
         this.canCreateCashDrawer = false;
         this.canManageCashDrawer = false;
         this.canCreateBank = false;
+        this.canManageCardTerminal = false;
         this.autoAccountName = "";
         this.autoBankNames = {};
+        this.autoTerminalNames = {};
 
         this.addStyles();
         this.page.set_primary_action(
@@ -32,6 +34,11 @@ class TreasuryManagementPageV5 {
             __("إضافة بنك وحساب"),
             () => this.openCreateBankDialog(),
             __("البنوك"),
+        );
+        this.$terminalButton = this.page.add_inner_button(
+            __("إضافة ماكينة فيزا"),
+            () => this.openCardTerminalDialog(),
+            __("ماكينات الفيزا"),
         );
         this.page.add_inner_button(
             __("تحديث البيانات"),
@@ -183,11 +190,14 @@ class TreasuryManagementPageV5 {
             this.canCreateCashDrawer = Boolean(data.can_create_cash_drawer);
             this.canManageCashDrawer = Boolean(data.can_manage_cash_drawer);
             this.canCreateBank = Boolean(data.can_create_bank);
+            this.canManageCardTerminal = Boolean(data.can_manage_card_terminal);
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
+            if (this.$terminalButton) this.$terminalButton.toggle(this.canManageCardTerminal);
             this.render(data);
             this.bindDrawerActions();
             this.bindBankActions();
+            this.bindTerminalActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -756,6 +766,303 @@ class TreasuryManagementPageV5 {
         `;
     }
 
+
+    async openCardTerminalDialog(existingTerminal = null) {
+        if (!this.canManageCardTerminal) {
+            frappe.msgprint(__("ليس لديك صلاحية إدارة ماكينات الفيزا."));
+            return;
+        }
+
+        const options = await this.getCardTerminalOptions(null, existingTerminal);
+        const current = options.terminal || {};
+        const editing = Boolean(current.name);
+        let dialog;
+
+        dialog = new frappe.ui.Dialog({
+            title: editing ? __("تعديل ماكينة الفيزا") : __("إضافة ماكينة فيزا"),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "existing_terminal",
+                    fieldtype: "Data",
+                    hidden: 1,
+                    default: current.name || "",
+                },
+                { fieldtype: "Section Break", label: __("بيانات الماكينة") },
+                {
+                    fieldname: "terminal_name",
+                    label: __("اسم الماكينة"),
+                    fieldtype: "Data",
+                    reqd: 1,
+                    default: current.terminal_name || "",
+                },
+                {
+                    fieldname: "terminal_code",
+                    label: __("كود الماكينة"),
+                    fieldtype: "Data",
+                    reqd: 1,
+                    read_only: editing ? 1 : 0,
+                    default: current.terminal_code || options.suggested_terminal_code,
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "company",
+                    label: __("الشركة"),
+                    fieldtype: "Link",
+                    options: "Company",
+                    reqd: 1,
+                    default: current.company || options.company,
+                    onchange: () => this.reloadTerminalCompanyDefaults(dialog),
+                },
+                {
+                    fieldname: "mode_of_payment",
+                    label: __("طريقة الدفع"),
+                    fieldtype: "Link",
+                    options: "Mode of Payment",
+                    reqd: 1,
+                    default: current.mode_of_payment || options.default_mode_of_payment,
+                },
+                { fieldtype: "Section Break", label: __("البنك والحساب النهائي") },
+                {
+                    fieldname: "bank_account",
+                    label: __("Bank Account"),
+                    fieldtype: "Link",
+                    options: "Bank Account",
+                    reqd: 1,
+                    default: current.bank_account || "",
+                    onchange: () => this.syncTerminalBankDefaults(dialog),
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            disabled: 0,
+                            is_company_account: 1,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "merchant_id",
+                    label: __("Merchant ID"),
+                    fieldtype: "Data",
+                    default: current.merchant_id || "",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "terminal_id",
+                    label: __("Terminal ID"),
+                    fieldtype: "Data",
+                    default: current.terminal_id || "",
+                },
+                { fieldtype: "Section Break", label: __("حساب Card Clearing") },
+                {
+                    fieldname: "clearing_mode",
+                    label: __("طريقة ربط حساب Clearing"),
+                    fieldtype: "Select",
+                    options: "Use Existing Account\nCreate New Account",
+                    reqd: 1,
+                    default: "Use Existing Account",
+                },
+                {
+                    fieldname: "existing_clearing_account",
+                    label: __("حساب Clearing موجود"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: current.clearing_account || "",
+                    depends_on: "eval:doc.clearing_mode=='Use Existing Account'",
+                    mandatory_depends_on: "eval:doc.clearing_mode=='Use Existing Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 0,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "clearing_account_name",
+                    label: __("اسم حساب Clearing الجديد"),
+                    fieldtype: "Data",
+                    depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                },
+                { fieldtype: "Column Break" },
+                {
+                    fieldname: "clearing_parent_account",
+                    label: __("الحساب الأب لـ Clearing"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: options.default_clearing_parent_account || "",
+                    depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                    mandatory_depends_on: "eval:doc.clearing_mode=='Create New Account'",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Asset",
+                            is_group: 1,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "fee_account",
+                    label: __("حساب رسوم البنك"),
+                    fieldtype: "Link",
+                    options: "Account",
+                    default: current.fee_account || options.default_fee_account || "",
+                    get_query: () => ({
+                        filters: {
+                            company: dialog.get_value("company"),
+                            root_type: "Expense",
+                            is_group: 0,
+                            disabled: 0,
+                        },
+                    }),
+                },
+                { fieldtype: "Section Break", label: __("ملاحظات") },
+                {
+                    fieldname: "notes",
+                    label: __("ملاحظات"),
+                    fieldtype: "Small Text",
+                    default: current.notes || "",
+                },
+            ],
+            primary_action_label: editing ? __("معاينة التعديل") : __("معاينة الإنشاء"),
+            primary_action: async (values) => this.previewCardTerminal(dialog, values),
+        });
+
+        dialog.show();
+        if (!editing && current.bank_label) this.syncTerminalBankDefaults(dialog);
+    }
+
+    async getCardTerminalOptions(company = null, terminalName = null) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_card_terminal_creation_options",
+            args: { company, terminal_name: terminalName },
+            freeze: true,
+            freeze_message: __("جاري تجهيز بيانات ماكينة الفيزا..."),
+        });
+        return response.message || {};
+    }
+
+    async reloadTerminalCompanyDefaults(dialog) {
+        const company = dialog.get_value("company");
+        if (!company) return;
+        const options = await this.getCardTerminalOptions(company);
+        dialog.set_value("mode_of_payment", options.default_mode_of_payment || "");
+        dialog.set_value("clearing_parent_account", options.default_clearing_parent_account || "");
+        dialog.set_value("fee_account", options.default_fee_account || "");
+        dialog.set_value("bank_account", "");
+        dialog.set_value("existing_clearing_account", "");
+    }
+
+    async syncTerminalBankDefaults(dialog) {
+        const bankAccount = dialog.get_value("bank_account");
+        if (!bankAccount) return;
+        const response = await frappe.db.get_value(
+            "Bank Account",
+            bankAccount,
+            ["bank", "account_name", "account"],
+        );
+        const data = response.message || {};
+        const bank = String(data.bank || "").trim();
+        if (!bank) return;
+
+        const suggestions = {
+            terminal_name: `${bank} Terminal`,
+            clearing_account_name: `${bank} Card Clearing`,
+        };
+        Object.entries(suggestions).forEach(([fieldname, value]) => {
+            const current = String(dialog.get_value(fieldname) || "").trim();
+            if (!current || current === this.autoTerminalNames[fieldname]) {
+                this.autoTerminalNames[fieldname] = value;
+                dialog.set_value(fieldname, value);
+            }
+        });
+    }
+
+    async previewCardTerminal(sourceDialog, values) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_card_terminal",
+            args: values,
+            freeze: true,
+            freeze_message: __("جاري مراجعة بيانات ماكينة الفيزا..."),
+        });
+        this.showCardTerminalConfirmation(sourceDialog, values, response.message || {});
+    }
+
+    showCardTerminalConfirmation(sourceDialog, sourceValues, preview) {
+        const updating = preview.action === "update";
+        const confirmDialog = new frappe.ui.Dialog({
+            title: updating ? __("تأكيد تعديل ماكينة الفيزا") : __("تأكيد إنشاء ماكينة الفيزا"),
+            size: "extra-large",
+            fields: [{ fieldtype: "HTML", options: this.renderCardTerminalPreview(preview) }],
+            primary_action_label: updating ? __("حفظ التعديلات") : __("إنشاء الماكينة"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.save_card_terminal",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: updating
+                        ? __("جاري حفظ تعديلات الماكينة...")
+                        : __("جاري إنشاء ماكينة الفيزا..."),
+                });
+                confirmDialog.hide();
+                sourceDialog.hide();
+                const result = response.message || {};
+                frappe.msgprint({
+                    title: updating ? __("تم تعديل الماكينة") : __("تم إنشاء الماكينة"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction: rtl; text-align: right;">
+                            <div>${this.esc(result.message || __("تم الحفظ بنجاح"))}</div>
+                            <div><strong>${__("الماكينة")}:</strong> ${this.esc(result.terminal || "-")}</div>
+                            <div><strong>${__("Clearing")}:</strong> ${this.esc(result.clearing_account || "-")}</div>
+                            <div><strong>${__("الحساب البنكي")}:</strong> ${this.esc(result.destination_bank_account || "-")}</div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
+    }
+
+    renderCardTerminalPreview(preview) {
+        const clearing = preview.clearing_account || {};
+        const clearingAction = clearing.action === "reuse" ? __("استخدام الموجود") : __("إنشاء جديد");
+        const rows = [
+            [__("العملية"), preview.action === "update" ? __("تعديل ماكينة موجودة") : __("إنشاء ماكينة جديدة")],
+            [__("اسم الماكينة"), preview.terminal_name],
+            [__("كود الماكينة"), preview.terminal_code],
+            [__("الشركة"), preview.company],
+            [__("طريقة الدفع"), preview.mode_of_payment],
+            [__("البنك"), preview.bank_label],
+            [__("Bank Account"), preview.bank_account],
+            [__("الحساب البنكي النهائي"), preview.destination_bank_account],
+            [__("حساب Clearing"), `${clearing.document_name || clearing.account_name || "-"} — ${clearingAction}`],
+            [__("حساب الرسوم"), preview.fee_account || "-"],
+            [__("Merchant ID"), preview.merchant_id || "-"],
+            [__("Terminal ID"), preview.terminal_id || "-"],
+        ];
+        return `
+            <div class="tmv3-preview">
+                ${rows.map(([label, value]) => `
+                    <div class="tmv3-preview-row">
+                        <div class="tmv3-preview-label">${this.esc(label)}</div>
+                        <div class="tmv3-preview-value">${this.esc(value || "-")}</div>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="tmv3-preview-note">
+                <strong>${__("مهم")}:</strong>
+                ${__("لن يتم إنشاء قيد محاسبي. عند تعديل ماكينة عليها Batches مفتوحة، يمنع النظام تغيير البنك أو حساب Clearing أو طريقة الدفع حتى تتم التسوية.")}
+            </div>
+        `;
+    }
+
     render(data) {
         this.$main.html(`
             <div class="tmv3">
@@ -780,11 +1087,13 @@ class TreasuryManagementPageV5 {
                     ${this.card(__("حسابات البنوك"), data.bank_ledger_accounts, __("Bank Ledger Accounts"))}
                     ${this.card(__("Bank Accounts"), data.bank_accounts, __("ERPNext Bank Account"))}
                     ${this.card(__("ماكينات الفيزا"), data.card_terminals, __("Card POS Terminal"))}
+                    ${this.card(__("دفعات فيزا مفتوحة"), data.open_card_batches, __("Unsettled Batches"))}
                     ${this.card(__("إعدادات التسوية"), data.clearing_setups, __("Clearing Setup"))}
                 </div>
 
                 ${this.renderDrawers(data.drawers || [])}
                 ${this.renderBanks(data.banks || [])}
+                ${this.renderTerminals(data.terminals || [])}
                 ${this.renderUnlinkedBankLedgers(data.unlinked_bank_ledgers || [])}
                 ${this.renderWarnings(data.account_warnings || [])}
             </div>
@@ -925,6 +1234,168 @@ class TreasuryManagementPageV5 {
                 </div>
             </div>
         `;
+    }
+
+
+    renderTerminals(rows) {
+        if (!rows.length) {
+            return `
+                <div class="tmv3-section">
+                    <h4>${__("ماكينات الفيزا والـ Card Clearing")}</h4>
+                    <div class="tmv3-empty">${__("لا توجد ماكينات فيزا مسجلة حتى الآن.")}</div>
+                </div>
+            `;
+        }
+
+        const body = rows.map((row) => {
+            const balanceClass = Number(row.current_balance || 0) < 0
+                ? "tmv3-balance-negative"
+                : "tmv3-balance-positive";
+            const openBadge = Number(row.open_batch_count || 0) > 0
+                ? `<span class="tmv3-badge tmv3-badge-off">${this.esc(row.open_batch_count)} ${__("مفتوحة")}</span>`
+                : `<span class="tmv3-badge tmv3-badge-on">${__("لا توجد دفعات مفتوحة")}</span>`;
+            const lateBadge = Number(row.late_batch_count || 0) > 0
+                ? `<br><span class="text-danger">${this.esc(row.late_batch_count)} ${__("من يوم سابق")}</span>`
+                : "";
+            const toggle = this.canManageCardTerminal
+                ? `<button class="tmv3-action-btn tmv3-terminal-toggle ${row.enabled ? "tmv3-action-danger" : "tmv3-action-success"}" data-terminal="${this.esc(row.name)}" data-enabled="${row.enabled ? 1 : 0}">${row.enabled ? __("تعطيل") : __("تفعيل")}</button>`
+                : "";
+            const edit = this.canManageCardTerminal
+                ? `<button class="tmv3-action-btn tmv3-terminal-edit" data-terminal="${this.esc(row.name)}">${__("تعديل")}</button>`
+                : "";
+
+            return `
+                <tr>
+                    <td><a href="/app/card-pos-terminal/${encodeURIComponent(row.name)}">${this.esc(row.terminal_name || row.name)}</a></td>
+                    <td>${this.esc(row.terminal_code || "-")}</td>
+                    <td>${this.esc(row.bank_label || "-")}</td>
+                    <td>${this.esc(row.bank_account_name || row.bank_account || "-")}</td>
+                    <td>${this.esc(row.mode_of_payment || "-")}</td>
+                    <td>${this.esc(row.clearing_account || "-")}</td>
+                    <td class="${balanceClass}">${this.formatMoney(row.current_balance, row.account_currency)}</td>
+                    <td>${openBadge}${lateBadge}<br><small>${this.formatMoney(row.open_outstanding_amount, row.account_currency)}</small></td>
+                    <td><span class="tmv3-badge ${row.enabled ? "tmv3-badge-on" : "tmv3-badge-off"}">${row.enabled ? __("Active") : __("Disabled")}</span></td>
+                    <td><div class="tmv3-actions">
+                        <button class="tmv3-action-btn tmv3-terminal-activity" data-terminal="${this.esc(row.name)}">${__("الرصيد والدفعات")}</button>
+                        ${edit}${toggle}
+                    </div></td>
+                </tr>
+            `;
+        }).join("");
+
+        return `
+            <div class="tmv3-section">
+                <h4>${__("ماكينات الفيزا والـ Card Clearing")}</h4>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table" style="min-width:1180px;">
+                        <thead><tr>
+                            <th>${__("الماكينة")}</th><th>${__("الكود")}</th><th>${__("البنك")}</th>
+                            <th>${__("Bank Account")}</th><th>${__("طريقة الدفع")}</th><th>${__("Clearing")}</th>
+                            <th>${__("رصيد Clearing")}</th><th>${__("الدفعات المفتوحة")}</th><th>${__("الحالة")}</th><th>${__("إجراءات")}</th>
+                        </tr></thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+                <div class="tmv3-preview-note">${__("الدفعة تُعرض كـ «من يوم سابق» عندما تظل غير مسوّاة بعد تاريخ الإغلاق. تعطيل الماكينة ممنوع طالما توجد دفعات مفتوحة.")}</div>
+            </div>
+        `;
+    }
+
+    bindTerminalActions() {
+        this.$main.find(".tmv3-terminal-activity").off("click").on("click", (event) => {
+            this.openTerminalActivity($(event.currentTarget).attr("data-terminal"));
+        });
+        this.$main.find(".tmv3-terminal-edit").off("click").on("click", (event) => {
+            this.openCardTerminalDialog($(event.currentTarget).attr("data-terminal"));
+        });
+        this.$main.find(".tmv3-terminal-toggle").off("click").on("click", (event) => {
+            const $button = $(event.currentTarget);
+            this.confirmTerminalToggle(
+                $button.attr("data-terminal"),
+                Number($button.attr("data-enabled") || 0) === 1,
+            );
+        });
+    }
+
+    async openTerminalActivity(terminal) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_card_terminal_activity",
+            args: { terminal_name: terminal, limit: 20 },
+            freeze: true,
+            freeze_message: __("جاري تحميل رصيد Clearing والدفعات..."),
+        });
+        const data = response.message || {};
+        const batchRows = (data.open_batches || []).length
+            ? data.open_batches.map((row) => `
+                <tr>
+                    <td><a href="/app/card-settlement-batch/${encodeURIComponent(row.name)}">${this.esc(row.name)}</a></td>
+                    <td>${this.esc(row.shift_reference || "-")}</td>
+                    <td>${this.esc(row.close_time || "-")}</td>
+                    <td>${this.esc(row.status || "-")}</td>
+                    <td>${this.formatMoney(row.machine_total, data.account_currency)}</td>
+                    <td>${this.formatMoney(row.outstanding_amount, data.account_currency)}</td>
+                    <td>${row.is_late ? `<span class="text-danger">${this.esc(row.age_days)} ${__("يوم")}</span>` : this.esc(row.age_days || 0)}</td>
+                </tr>
+            `).join("")
+            : `<tr><td colspan="7" class="tmv3-empty">${__("لا توجد دفعات مفتوحة لهذه الماكينة.")}</td></tr>`;
+        const movementRows = (data.movements || []).length
+            ? data.movements.map((row) => `
+                <tr><td>${this.esc(row.posting_date || "-")}</td><td>${this.esc(row.voucher_type || "-")}</td>
+                <td>${this.esc(row.voucher_no || "-")}</td><td>${this.formatMoney(row.debit, data.account_currency)}</td>
+                <td>${this.formatMoney(row.credit, data.account_currency)}</td><td>${this.esc(row.against || "-")}</td></tr>
+            `).join("")
+            : `<tr><td colspan="6" class="tmv3-empty">${__("لا توجد حركات دفتر أستاذ حتى الآن.")}</td></tr>`;
+
+        const dialog = new frappe.ui.Dialog({
+            title: `${__("رصيد Clearing ودفعات الماكينة")}: ${this.esc(data.terminal_name || data.terminal || "")}`,
+            size: "extra-large",
+            fields: [{
+                fieldtype: "HTML",
+                options: `
+                    <div style="direction:rtl;text-align:right;">
+                        <div class="tmv3-preview" style="margin-bottom:14px;">
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("حساب Clearing")}</div><div class="tmv3-preview-value">${this.esc(data.clearing_account || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الرصيد الحالي")}</div><div class="tmv3-preview-value">${this.formatMoney(data.current_balance, data.account_currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الدفعات المفتوحة")}</div><div class="tmv3-preview-value">${this.esc(data.open_batch_count || 0)} — ${this.formatMoney(data.open_outstanding_amount, data.account_currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("دفعات من يوم سابق")}</div><div class="tmv3-preview-value">${this.esc(data.late_batch_count || 0)}</div></div>
+                        </div>
+                        <h5>${__("الدفعات المفتوحة")}</h5>
+                        <div class="tmv3-table-wrap"><table class="tmv3-activity-table">
+                            <thead><tr><th>${__("الدفعة")}</th><th>${__("الوردية")}</th><th>${__("الإغلاق")}</th><th>${__("الحالة")}</th><th>${__("إجمالي الماكينة")}</th><th>${__("المتبقي")}</th><th>${__("العمر")}</th></tr></thead>
+                            <tbody>${batchRows}</tbody>
+                        </table></div>
+                        <h5 style="margin-top:18px;">${__("آخر حركات حساب Clearing")}</h5>
+                        <div class="tmv3-table-wrap"><table class="tmv3-activity-table">
+                            <thead><tr><th>${__("التاريخ")}</th><th>${__("نوع المستند")}</th><th>${__("المستند")}</th><th>${__("مدين")}</th><th>${__("دائن")}</th><th>${__("الحساب المقابل")}</th></tr></thead>
+                            <tbody>${movementRows}</tbody>
+                        </table></div>
+                    </div>
+                `,
+            }],
+        });
+        dialog.show();
+    }
+
+    confirmTerminalToggle(terminal, isEnabled) {
+        const action = isEnabled ? __("تعطيل") : __("تفعيل");
+        const message = isEnabled
+            ? __("لن يمكن تعطيل الماكينة إذا كانت مرتبطة بدفعات Card Settlement غير مسوّاة. هل تريد المتابعة؟")
+            : __("سيتم التحقق من الحسابات المرتبطة ثم تفعيل الماكينة. هل تريد المتابعة؟");
+        frappe.confirm(`${message}<br><br><strong>${this.esc(terminal)}</strong>`, async () => {
+            const response = await frappe.call({
+                method:
+                    "pharma_erp.pharma_erp.page.treasury_management.treasury_management.set_card_terminal_enabled",
+                args: { terminal_name: terminal, enabled: isEnabled ? 0 : 1 },
+                freeze: true,
+                freeze_message: `${action} ${__("الماكينة...")}`,
+            });
+            frappe.show_alert({
+                message: response.message?.message || __("تم تحديث حالة الماكينة"),
+                indicator: "green",
+            });
+            await this.refresh();
+        });
     }
 
     renderUnlinkedBankLedgers(rows) {

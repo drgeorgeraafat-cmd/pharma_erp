@@ -3,7 +3,7 @@ import unicodedata
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, nowdate
+from frappe.utils import cint, date_diff, flt, getdate, nowdate
 
 from erpnext.accounts.utils import get_balance_on
 
@@ -22,6 +22,7 @@ def get_overview():
     banks = _get_bank_accounts()
     bank_ledger_accounts = _get_bank_ledger_accounts()
     unlinked_bank_ledgers = _get_unlinked_bank_ledgers(bank_ledger_accounts, banks)
+    terminals = _get_card_terminals()
 
     return {
         "ok": True,
@@ -33,7 +34,8 @@ def get_overview():
         "bank_institutions": frappe.db.count("Bank"),
         "bank_accounts": len(banks),
         "bank_ledger_accounts": len(bank_ledger_accounts),
-        "card_terminals": _safe_count("Card POS Terminal"),
+        "card_terminals": len(terminals),
+        "open_card_batches": sum(cint(row.get("open_batch_count")) for row in terminals),
         "clearing_setups": _safe_count("Payment Method Clearing Setup"),
         "drawers": drawers,
         "cash_accounts": cash_accounts,
@@ -41,9 +43,11 @@ def get_overview():
         "banks": banks,
         "bank_ledger_accounts_list": bank_ledger_accounts,
         "unlinked_bank_ledgers": unlinked_bank_ledgers,
+        "terminals": terminals,
         "can_create_cash_drawer": _can_create_cash_drawer(),
         "can_manage_cash_drawer": _can_create_cash_drawer(),
         "can_create_bank": _can_create_cash_drawer(),
+        "can_manage_card_terminal": _can_create_cash_drawer(),
     }
 
 
@@ -488,6 +492,430 @@ def get_bank_account_activity(bank_account_name, limit=20):
         "bank_account_no": bank_account.bank_account_no or "",
         "iban": bank_account.iban or "",
         "movements": movements,
+    }
+
+
+
+@frappe.whitelist()
+def get_card_terminal_creation_options(company=None, terminal_name=None):
+    """Return defaults for creating or editing a Card POS Terminal."""
+    _validate_create_access()
+
+    company = _resolve_company(company)
+    terminal = None
+    if terminal_name:
+        terminal_name = _clean_master_text(terminal_name)
+        if not frappe.db.exists("Card POS Terminal", terminal_name):
+            frappe.throw(_("Card POS Terminal was not found."))
+        terminal = frappe.get_doc("Card POS Terminal", terminal_name)
+        company = terminal.company
+
+    clearing_parents = _clearing_parent_accounts(company)
+    default_bank_account = ""
+    default_fee_account = _default_fee_account(company)
+    default_mode = _default_card_mode_of_payment()
+    if terminal:
+        default_bank_account = frappe.db.get_value(
+            "Bank Account",
+            {"company": company, "account": terminal.destination_bank_account, "disabled": 0},
+            "name",
+        ) or ""
+
+    return {
+        "company": company,
+        "suggested_terminal_code": terminal.terminal_code if terminal else _next_terminal_code(),
+        "default_mode_of_payment": terminal.mode_of_payment if terminal else default_mode,
+        "default_clearing_parent_account": clearing_parents[0]["name"] if clearing_parents else "",
+        "default_fee_account": terminal.fee_account if terminal else default_fee_account,
+        "terminal": _serialize_terminal_for_edit(terminal, default_bank_account) if terminal else None,
+    }
+
+
+@frappe.whitelist()
+def preview_card_terminal(
+    terminal_name,
+    terminal_code,
+    company,
+    mode_of_payment,
+    bank_account,
+    merchant_id=None,
+    terminal_id=None,
+    clearing_mode="Use Existing Account",
+    existing_clearing_account=None,
+    clearing_account_name=None,
+    clearing_parent_account=None,
+    fee_account=None,
+    notes=None,
+    existing_terminal=None,
+    **kwargs,
+):
+    """Validate and preview a Card POS Terminal without writing data."""
+    _validate_create_access()
+    return _prepare_card_terminal_payload(
+        terminal_name=terminal_name,
+        terminal_code=terminal_code,
+        company=company,
+        mode_of_payment=mode_of_payment,
+        bank_account=bank_account,
+        merchant_id=merchant_id,
+        terminal_id=terminal_id,
+        clearing_mode=clearing_mode,
+        existing_clearing_account=existing_clearing_account,
+        clearing_account_name=clearing_account_name,
+        clearing_parent_account=clearing_parent_account,
+        fee_account=fee_account,
+        notes=notes,
+        existing_terminal=existing_terminal,
+    )
+
+
+@frappe.whitelist()
+def save_card_terminal(
+    terminal_name,
+    terminal_code,
+    company,
+    mode_of_payment,
+    bank_account,
+    merchant_id=None,
+    terminal_id=None,
+    clearing_mode="Use Existing Account",
+    existing_clearing_account=None,
+    clearing_account_name=None,
+    clearing_parent_account=None,
+    fee_account=None,
+    notes=None,
+    existing_terminal=None,
+    **kwargs,
+):
+    """Create or update a Card POS Terminal after final server validation."""
+    _validate_create_access()
+    payload = _prepare_card_terminal_payload(
+        terminal_name=terminal_name,
+        terminal_code=terminal_code,
+        company=company,
+        mode_of_payment=mode_of_payment,
+        bank_account=bank_account,
+        merchant_id=merchant_id,
+        terminal_id=terminal_id,
+        clearing_mode=clearing_mode,
+        existing_clearing_account=existing_clearing_account,
+        clearing_account_name=clearing_account_name,
+        clearing_parent_account=clearing_parent_account,
+        fee_account=fee_account,
+        notes=notes,
+        existing_terminal=existing_terminal,
+    )
+
+    clearing_plan = payload["clearing_account"]
+    clearing_account = (
+        _create_account_from_plan(clearing_plan)
+        if clearing_plan["action"] == "create"
+        else clearing_plan["document_name"]
+    )
+
+    if payload["action"] == "update":
+        terminal = frappe.get_doc("Card POS Terminal", payload["existing_terminal"])
+    else:
+        terminal = frappe.new_doc("Card POS Terminal")
+        terminal.terminal_code = payload["terminal_code"]
+
+    terminal.terminal_name = payload["terminal_name"]
+    terminal.company = payload["company"]
+    terminal.mode_of_payment = payload["mode_of_payment"]
+    terminal.bank_label = payload["bank_label"]
+    terminal.merchant_id = payload["merchant_id"] or None
+    terminal.terminal_id = payload["terminal_id"] or None
+    terminal.clearing_account = clearing_account
+    terminal.destination_bank_account = payload["destination_bank_account"]
+    terminal.fee_account = payload["fee_account"] or None
+    terminal.notes = payload["notes"] or None
+    if payload["action"] == "create":
+        terminal.enabled = 1
+        terminal.flags.ignore_permissions = True
+        terminal.insert(ignore_permissions=True)
+    else:
+        terminal.flags.ignore_permissions = True
+        terminal.save(ignore_permissions=True)
+
+    terminal.add_comment(
+        "Comment",
+        _("{0} from Treasury Management.").format(
+            _("Created") if payload["action"] == "create" else _("Updated")
+        ),
+    )
+
+    return {
+        "ok": True,
+        "terminal": terminal.name,
+        "terminal_name": terminal.terminal_name,
+        "clearing_account": clearing_account,
+        "destination_bank_account": terminal.destination_bank_account,
+        "action": payload["action"],
+        "message": _("Card POS Terminal was saved successfully."),
+    }
+
+
+@frappe.whitelist()
+def get_card_terminal_activity(terminal_name, limit=20):
+    """Return clearing balance, GL movements and open batches for a terminal."""
+    _validate_access()
+    terminal_name = _clean_master_text(terminal_name)
+    if not terminal_name or not frappe.db.exists("Card POS Terminal", terminal_name):
+        frappe.throw(_("Card POS Terminal was not found."))
+
+    terminal = frappe.get_doc("Card POS Terminal", terminal_name)
+    clearing = _validate_company_account(
+        terminal.clearing_account,
+        terminal.company,
+        expected_root="Asset",
+        expected_type=None,
+        label=_("Clearing Account"),
+    )
+    limit = max(1, min(cint(limit) or 20, 100))
+    movements = frappe.get_all(
+        "GL Entry",
+        filters={"account": terminal.clearing_account, "is_cancelled": 0},
+        fields=[
+            "name", "posting_date", "creation", "voucher_type", "voucher_no",
+            "debit", "credit", "against", "remarks",
+        ],
+        order_by="posting_date desc, creation desc",
+        limit_page_length=limit,
+    )
+    for row in movements:
+        row["debit"] = flt(row.get("debit"))
+        row["credit"] = flt(row.get("credit"))
+        row["net_movement"] = flt(row["debit"] - row["credit"])
+
+    open_batches = _get_open_card_batches(terminal.name, limit=100)
+    return {
+        "terminal": terminal.name,
+        "terminal_name": terminal.terminal_name,
+        "company": terminal.company,
+        "bank_label": terminal.bank_label,
+        "mode_of_payment": terminal.mode_of_payment,
+        "clearing_account": terminal.clearing_account,
+        "destination_bank_account": terminal.destination_bank_account,
+        "fee_account": terminal.fee_account or "",
+        "account_currency": clearing.get("account_currency") or "",
+        "current_balance": _account_balance(terminal.clearing_account, terminal.company),
+        "enabled": cint(terminal.enabled),
+        "open_batch_count": len(open_batches),
+        "open_outstanding_amount": sum(flt(row.get("outstanding_amount")) for row in open_batches),
+        "late_batch_count": sum(cint(row.get("is_late")) for row in open_batches),
+        "open_batches": open_batches,
+        "movements": movements,
+    }
+
+
+@frappe.whitelist()
+def set_card_terminal_enabled(terminal_name, enabled):
+    """Enable or disable a terminal, blocking disable while open batches exist."""
+    _validate_create_access()
+    terminal_name = _clean_master_text(terminal_name)
+    if not terminal_name or not frappe.db.exists("Card POS Terminal", terminal_name):
+        frappe.throw(_("Card POS Terminal was not found."))
+
+    terminal = frappe.get_doc("Card POS Terminal", terminal_name)
+    enabled = cint(enabled)
+    if enabled:
+        _validate_terminal_accounts(terminal)
+        if not frappe.db.exists("Mode of Payment", terminal.mode_of_payment):
+            frappe.throw(_("Mode of Payment was not found."))
+    else:
+        open_batches = _get_open_card_batches(terminal.name, limit=5)
+        if open_batches:
+            names = ", ".join(row.name for row in open_batches)
+            frappe.throw(
+                _("Cannot disable this terminal while open settlement batches exist: {0}.").format(names)
+            )
+
+    if cint(terminal.enabled) != enabled:
+        terminal.enabled = enabled
+        terminal.flags.ignore_permissions = True
+        terminal.save(ignore_permissions=True)
+        terminal.add_comment(
+            "Comment",
+            _("Card POS Terminal {0} from Treasury Management.").format(
+                _("enabled") if enabled else _("disabled")
+            ),
+        )
+
+    return {
+        "terminal": terminal.name,
+        "enabled": cint(terminal.enabled),
+        "message": _("Card POS Terminal status was updated successfully."),
+    }
+
+
+def _prepare_card_terminal_payload(
+    terminal_name,
+    terminal_code,
+    company,
+    mode_of_payment,
+    bank_account,
+    merchant_id=None,
+    terminal_id=None,
+    clearing_mode="Use Existing Account",
+    existing_clearing_account=None,
+    clearing_account_name=None,
+    clearing_parent_account=None,
+    fee_account=None,
+    notes=None,
+    existing_terminal=None,
+):
+    terminal_name = _clean_master_text(terminal_name)
+    terminal_code = _normalize_terminal_code(terminal_code)
+    company = _resolve_company(company)
+    mode_of_payment = _clean_master_text(mode_of_payment)
+    bank_account = _clean_master_text(bank_account)
+    merchant_id = _clean_master_text(merchant_id)
+    terminal_id = _clean_master_text(terminal_id)
+    clearing_mode = str(clearing_mode or "Use Existing Account").strip()
+    fee_account = str(fee_account or "").strip()
+    notes = str(notes or "").strip()
+    existing_terminal = _clean_master_text(existing_terminal)
+
+    if not terminal_name:
+        frappe.throw(_("Terminal Name is required."))
+    if not terminal_code:
+        frappe.throw(_("Terminal Code is required."))
+    if not mode_of_payment or not frappe.db.exists("Mode of Payment", mode_of_payment):
+        frappe.throw(_("Select a valid Mode of Payment."))
+    if not bank_account or not frappe.db.exists("Bank Account", bank_account):
+        frappe.throw(_("Select a valid Bank Account."))
+
+    bank_account_doc = frappe.get_doc("Bank Account", bank_account)
+    if cint(bank_account_doc.disabled):
+        frappe.throw(_("The selected Bank Account is disabled."))
+    if not cint(bank_account_doc.is_company_account):
+        frappe.throw(_("The selected Bank Account is not marked as a Company Account."))
+    if bank_account_doc.company != company:
+        frappe.throw(_("The selected Bank Account belongs to another company."))
+    if not bank_account_doc.account:
+        frappe.throw(_("The selected Bank Account has no company ledger account."))
+    destination = _validate_company_account(
+        bank_account_doc.account,
+        company,
+        expected_root="Asset",
+        expected_type="Bank",
+        label=_("Destination Bank Account"),
+    )
+
+    action = "update" if existing_terminal else "create"
+    current = None
+    if action == "update":
+        if not frappe.db.exists("Card POS Terminal", existing_terminal):
+            frappe.throw(_("Card POS Terminal was not found."))
+        current = frappe.get_doc("Card POS Terminal", existing_terminal)
+        if terminal_code != current.terminal_code:
+            frappe.throw(_("Terminal Code cannot be changed after creation."))
+    elif frappe.db.exists("Card POS Terminal", terminal_code):
+        frappe.throw(_("Card POS Terminal {0} already exists.").format(terminal_code))
+
+    duplicate_name = frappe.db.get_value(
+        "Card POS Terminal",
+        {"company": company, "terminal_name": terminal_name},
+        "name",
+    )
+    if duplicate_name and duplicate_name != existing_terminal:
+        frappe.throw(_("A terminal with this name already exists: {0}.").format(duplicate_name))
+
+    for fieldname, value, label in (
+        ("merchant_id", merchant_id, _("Merchant ID")),
+        ("terminal_id", terminal_id, _("Terminal ID")),
+    ):
+        if not value:
+            continue
+        duplicate = frappe.db.get_value(
+            "Card POS Terminal",
+            {"company": company, fieldname: value},
+            "name",
+        )
+        if duplicate and duplicate != existing_terminal:
+            frappe.throw(_("{0} is already used by terminal {1}.").format(label, duplicate))
+
+    use_existing = clearing_mode.lower().startswith("use") or clearing_mode.lower() == "existing"
+    if use_existing:
+        existing_clearing_account = str(existing_clearing_account or "").strip()
+        if not existing_clearing_account:
+            frappe.throw(_("Select an existing Clearing Account."))
+        clearing = _validate_company_account(
+            existing_clearing_account,
+            company,
+            expected_root="Asset",
+            expected_type=None,
+            label=_("Clearing Account"),
+        )
+        clearing_plan = {
+            "action": "reuse",
+            "document_name": clearing.name,
+            "account_name": clearing.account_name,
+            "company": company,
+            "parent_account": clearing.parent_account,
+            "account_currency": clearing.account_currency or "",
+            "root_type": clearing.root_type,
+            "account_type": clearing.account_type or "",
+        }
+    else:
+        clearing_account_name = _clean_master_text(clearing_account_name)
+        clearing_parent_account = str(clearing_parent_account or "").strip()
+        if not clearing_account_name:
+            frappe.throw(_("Clearing Account Name is required."))
+        if not clearing_parent_account:
+            frappe.throw(_("Clearing Parent Account is required."))
+        _validate_parent_account(clearing_parent_account, company, "Asset")
+        currency = frappe.db.get_value("Company", company, "default_currency") or ""
+        clearing_plan = _plan_reusable_account(
+            clearing_account_name,
+            company,
+            clearing_parent_account,
+            currency,
+            root_type="Asset",
+            account_type="",
+        )
+
+    if fee_account:
+        _validate_company_account(
+            fee_account,
+            company,
+            expected_root="Expense",
+            expected_type=None,
+            label=_("Fee Account"),
+        )
+
+    if current:
+        open_batches = _get_open_card_batches(current.name, limit=5)
+        protected_changed = any((
+            company != current.company,
+            mode_of_payment != current.mode_of_payment,
+            bank_account_doc.bank != current.bank_label,
+            destination.name != current.destination_bank_account,
+            (clearing_plan.get("document_name") or "") != current.clearing_account
+                if clearing_plan["action"] == "reuse" else True,
+        ))
+        if open_batches and protected_changed:
+            names = ", ".join(row.name for row in open_batches)
+            frappe.throw(
+                _("Accounting links cannot be changed while open batches exist: {0}.").format(names)
+            )
+
+    return {
+        "action": action,
+        "existing_terminal": existing_terminal,
+        "terminal_name": terminal_name,
+        "terminal_code": terminal_code,
+        "company": company,
+        "mode_of_payment": mode_of_payment,
+        "bank_account": bank_account,
+        "bank_label": bank_account_doc.bank,
+        "destination_bank_account": destination.name,
+        "merchant_id": merchant_id,
+        "terminal_id": terminal_id,
+        "clearing_mode": "existing" if use_existing else "create",
+        "clearing_account": clearing_plan,
+        "fee_account": fee_account,
+        "notes": notes,
     }
 
 
@@ -1345,6 +1773,190 @@ def _fee_parent_accounts(company):
     )
     return rows
 
+
+def _get_card_terminals():
+    if not frappe.db.exists("DocType", "Card POS Terminal"):
+        return []
+
+    rows = frappe.get_all(
+        "Card POS Terminal",
+        fields=[
+            "name", "terminal_name", "terminal_code", "company", "mode_of_payment",
+            "bank_label", "merchant_id", "terminal_id", "enabled", "clearing_account",
+            "destination_bank_account", "fee_account", "notes",
+        ],
+        order_by="company asc, bank_label asc, terminal_name asc",
+        limit_page_length=500,
+    )
+    for row in rows:
+        row["enabled"] = cint(row.get("enabled"))
+        row["current_balance"] = _account_balance(row.clearing_account, row.company) if row.get("clearing_account") else 0
+        row["account_currency"] = ""
+        row["last_movement"] = {}
+        if row.get("clearing_account"):
+            account = frappe.db.get_value(
+                "Account", row.clearing_account,
+                ["account_currency", "disabled", "root_type", "is_group"],
+                as_dict=True,
+            ) or {}
+            row["account_currency"] = account.get("account_currency") or ""
+            row["clearing_disabled"] = cint(account.get("disabled"))
+            movement = frappe.get_all(
+                "GL Entry",
+                filters={"account": row.clearing_account, "is_cancelled": 0},
+                fields=["posting_date", "creation", "voucher_type", "voucher_no"],
+                order_by="posting_date desc, creation desc",
+                limit_page_length=1,
+            )
+            row["last_movement"] = movement[0] if movement else {}
+
+        bank_account = frappe.db.get_value(
+            "Bank Account",
+            {"company": row.company, "account": row.destination_bank_account, "disabled": 0},
+            ["name", "account_name", "bank"],
+            as_dict=True,
+        ) or {}
+        row["bank_account"] = bank_account.get("name") or ""
+        row["bank_account_name"] = bank_account.get("account_name") or ""
+        if bank_account.get("bank"):
+            row["bank_label"] = bank_account.bank
+
+        batches = _get_open_card_batches(row.name, limit=100)
+        row["open_batch_count"] = len(batches)
+        row["open_outstanding_amount"] = sum(flt(item.get("outstanding_amount")) for item in batches)
+        row["late_batch_count"] = sum(cint(item.get("is_late")) for item in batches)
+        row["oldest_open_batch_date"] = min(
+            (str(item.get("close_time") or "") for item in batches if item.get("close_time")),
+            default="",
+        )
+    return rows
+
+
+def _get_open_card_batches(terminal_name, limit=100):
+    if not frappe.db.exists("DocType", "Card Settlement Batch"):
+        return []
+    rows = frappe.get_all(
+        "Card Settlement Batch",
+        filters={
+            "pos_terminal": terminal_name,
+            "docstatus": ["!=", 2],
+            "status": ["not in", ["Settled", "Cancelled"]],
+        },
+        fields=[
+            "name", "shift_reference", "batch_number", "close_time", "system_total",
+            "machine_total", "settled_amount", "outstanding_amount", "status", "docstatus",
+            "bank_settlement", "clearing_account", "destination_bank_account",
+        ],
+        order_by="close_time asc, creation asc",
+        limit_page_length=max(1, min(cint(limit) or 100, 500)),
+    )
+    today = getdate(nowdate())
+    for row in rows:
+        for fieldname in ("system_total", "machine_total", "settled_amount", "outstanding_amount"):
+            row[fieldname] = flt(row.get(fieldname))
+        close_date = getdate(row.close_time) if row.get("close_time") else None
+        row["age_days"] = max(0, date_diff(today, close_date)) if close_date else 0
+        row["is_late"] = cint(bool(close_date and close_date < today))
+    return rows
+
+
+def _serialize_terminal_for_edit(terminal, bank_account):
+    if not terminal:
+        return None
+    return {
+        "name": terminal.name,
+        "terminal_name": terminal.terminal_name,
+        "terminal_code": terminal.terminal_code,
+        "company": terminal.company,
+        "mode_of_payment": terminal.mode_of_payment,
+        "bank_account": bank_account or "",
+        "bank_label": terminal.bank_label,
+        "merchant_id": terminal.merchant_id or "",
+        "terminal_id": terminal.terminal_id or "",
+        "enabled": cint(terminal.enabled),
+        "clearing_account": terminal.clearing_account,
+        "destination_bank_account": terminal.destination_bank_account,
+        "fee_account": terminal.fee_account or "",
+        "notes": terminal.notes or "",
+    }
+
+
+def _validate_terminal_accounts(terminal):
+    _validate_company_account(
+        terminal.clearing_account,
+        terminal.company,
+        expected_root="Asset",
+        expected_type=None,
+        label=_("Clearing Account"),
+    )
+    _validate_company_account(
+        terminal.destination_bank_account,
+        terminal.company,
+        expected_root="Asset",
+        expected_type="Bank",
+        label=_("Destination Bank Account"),
+    )
+    if terminal.fee_account:
+        _validate_company_account(
+            terminal.fee_account,
+            terminal.company,
+            expected_root="Expense",
+            expected_type=None,
+            label=_("Fee Account"),
+        )
+
+
+def _normalize_terminal_code(value):
+    value = _clean_master_text(value).upper()
+    value = re.sub(r"[^A-Z0-9_-]+", "-", value)
+    value = re.sub(r"-+", "-", value).strip("-_")
+    return value[:140]
+
+
+def _next_terminal_code():
+    rows = frappe.get_all("Card POS Terminal", fields=["terminal_code"], limit_page_length=1000)
+    highest = 0
+    for row in rows:
+        match = re.search(r"(\d+)$", str(row.get("terminal_code") or ""))
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"CARD-{highest + 1:02d}"
+
+
+def _default_card_mode_of_payment():
+    for name in ("Credit Card", "Card", "Visa"):
+        if frappe.db.exists("Mode of Payment", name):
+            return name
+    rows = frappe.get_all(
+        "Mode of Payment",
+        filters={"enabled": 1} if frappe.get_meta("Mode of Payment").has_field("enabled") else {},
+        pluck="name",
+        order_by="name asc",
+        limit_page_length=1,
+    )
+    return rows[0] if rows else ""
+
+
+def _default_fee_account(company):
+    if frappe.db.exists("DocType", "Payment Method Clearing Setup"):
+        row = frappe.db.get_value(
+            "Payment Method Clearing Setup",
+            {"company": company, "mode_of_payment": _default_card_mode_of_payment(), "enabled": 1},
+            "fee_account",
+        )
+        if row:
+            return row
+    for account_name in ("Payment Processing Fees", "Bank Charges"):
+        row = frappe.db.get_value(
+            "Account",
+            {"company": company, "account_name": account_name, "root_type": "Expense", "is_group": 0, "disabled": 0},
+            "name",
+        )
+        if row:
+            return row
+    return ""
+
+
 def _count_leaf_accounts(account_type):
     return frappe.db.count(
         "Account",
@@ -1370,7 +1982,7 @@ def _validate_create_access():
     if _can_create_cash_drawer():
         return
     frappe.throw(
-        _("Only System Manager or Accounts Manager can create cash drawers."),
+        _("Only System Manager or Accounts Manager can manage Treasury settings."),
         frappe.PermissionError,
     )
 
