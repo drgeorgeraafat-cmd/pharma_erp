@@ -39,7 +39,13 @@ def get_overview():
     terminals = _get_card_terminals()
     payment_setups = _get_payment_method_setups()
     internal_transfers = _get_internal_transfers()
-    shift_cash_movements = _get_shift_cash_movements()
+    shift_cash_movement_data = _get_shift_cash_movements(
+        from_date=nowdate(),
+        to_date=nowdate(),
+        start=0,
+        limit=50,
+    )
+    shift_cash_movements = shift_cash_movement_data["rows"]
     treasury_vouchers = _get_treasury_vouchers()
     pending_dashboard = _get_pending_settlement_dashboard(
         terminals=terminals, payment_setups=payment_setups
@@ -61,8 +67,12 @@ def get_overview():
         "open_payment_reconciliations": sum(cint(row.get("open_reconciliation_count")) for row in payment_setups),
         "internal_transfers": len(internal_transfers),
         "draft_internal_transfers": sum(1 for row in internal_transfers if cint(row.get("docstatus")) == 0),
-        "shift_cash_movements": len(shift_cash_movements),
-        "draft_shift_cash_movements": sum(1 for row in shift_cash_movements if cint(row.get("docstatus")) == 0),
+        "shift_cash_movements": _safe_count("Shift Cash Movement"),
+        "draft_shift_cash_movements": (
+            frappe.db.count("Shift Cash Movement", {"docstatus": 0})
+            if frappe.db.exists("DocType", "Shift Cash Movement")
+            else 0
+        ),
         "treasury_vouchers": len(treasury_vouchers),
         "draft_treasury_vouchers": sum(1 for row in treasury_vouchers if cint(row.get("docstatus")) == 0),
         "drawers": drawers,
@@ -75,6 +85,7 @@ def get_overview():
         "payment_setups": payment_setups,
         "internal_transfer_rows": internal_transfers,
         "shift_cash_movement_rows": shift_cash_movements,
+        "shift_cash_movement_data": shift_cash_movement_data,
         "treasury_voucher_rows": treasury_vouchers,
         "pending_dashboard": pending_dashboard,
         "access_profile": access_profile,
@@ -97,6 +108,31 @@ def get_overview():
         "can_cancel_treasury_voucher": access_profile["can_manage"],
         "can_emergency_submit_treasury_voucher": access_profile["can_emergency_submit"],
     }
+
+
+@frappe.whitelist()
+def get_shift_cash_movements(
+    from_date=None,
+    to_date=None,
+    request_status=None,
+    movement_type=None,
+    cash_drawer=None,
+    shift_reference=None,
+    start=0,
+    page_length=50,
+):
+    """Return server-filtered shift cash movements with totals and pagination."""
+    _validate_access()
+    return _get_shift_cash_movements(
+        from_date=from_date,
+        to_date=to_date,
+        request_status=request_status,
+        movement_type=movement_type,
+        cash_drawer=cash_drawer,
+        shift_reference=shift_reference,
+        start=start,
+        limit=page_length,
+    )
 
 
 @frappe.whitelist()
@@ -3416,9 +3452,89 @@ def _account_balance_on_date(account, company, posting_date):
         return 0
 
 
-def _get_shift_cash_movements(limit=50):
+def _get_shift_cash_movements(
+    *,
+    from_date=None,
+    to_date=None,
+    request_status=None,
+    movement_type=None,
+    cash_drawer=None,
+    shift_reference=None,
+    start=0,
+    limit=50,
+):
+    default_date = getdate(nowdate())
+    from_date_value = getdate(from_date) if from_date else default_date
+    to_date_value = getdate(to_date) if to_date else from_date_value
+    if from_date_value > to_date_value:
+        frappe.throw(_("From Date cannot be after To Date."))
+
+    page_start = max(cint(start), 0)
+    page_length = min(max(cint(limit) or 50, 1), 200)
+    filters = {
+        "from_date": str(from_date_value),
+        "to_date": str(to_date_value),
+        "request_status": str(request_status or "").strip(),
+        "movement_type": str(movement_type or "").strip(),
+        "cash_drawer": str(cash_drawer or "").strip(),
+        "shift_reference": str(shift_reference or "").strip(),
+    }
+
+    empty_result = {
+        "rows": [],
+        "summary": {
+            "total_count": 0,
+            "pending_count": 0,
+            "approved_count": 0,
+            "cancelled_count": 0,
+            "total_in": 0.0,
+            "total_out": 0.0,
+            "net_movement": 0.0,
+        },
+        "filters": filters,
+        "pagination": {
+            "start": page_start,
+            "page_length": page_length,
+            "returned_count": 0,
+            "has_more": False,
+        },
+        "options": _get_shift_cash_movement_filter_options(),
+    }
     if not frappe.db.exists("DocType", "Shift Cash Movement"):
-        return []
+        return empty_result
+
+    conditions = [
+        "movement_date >= %(from_datetime)s",
+        "movement_date <= %(to_datetime)s",
+    ]
+    values = {
+        "from_datetime": f"{from_date_value} 00:00:00",
+        "to_datetime": f"{to_date_value} 23:59:59.999999",
+        "start": page_start,
+        "row_limit": page_length + 1,
+    }
+
+    status_map = {
+        "Pending Approval": 0,
+        "Approved": 1,
+        "Cancelled": 2,
+    }
+    if filters["request_status"]:
+        if filters["request_status"] not in status_map:
+            frappe.throw(_("Invalid cash movement status filter."))
+        conditions.append("docstatus = %(docstatus)s")
+        values["docstatus"] = status_map[filters["request_status"]]
+    if filters["movement_type"]:
+        conditions.append("movement_type = %(movement_type)s")
+        values["movement_type"] = filters["movement_type"]
+    if filters["cash_drawer"]:
+        conditions.append("cash_drawer = %(cash_drawer)s")
+        values["cash_drawer"] = filters["cash_drawer"]
+    if filters["shift_reference"]:
+        conditions.append("shift_reference = %(shift_reference)s")
+        values["shift_reference"] = filters["shift_reference"]
+
+    where_clause = " AND ".join(conditions)
     meta = frappe.get_meta("Shift Cash Movement")
     fields = [
         "name",
@@ -3450,23 +3566,108 @@ def _get_shift_cash_movements(limit=50):
         if meta.has_field(fieldname):
             fields.append(fieldname)
 
-    rows = frappe.get_all(
-        "Shift Cash Movement",
-        fields=fields,
-        order_by="movement_date desc, creation desc",
-        limit_page_length=cint(limit) or 50,
+    select_clause = ", ".join(f"`{fieldname}`" for fieldname in fields)
+    rows = frappe.db.sql(
+        f"""
+        SELECT {select_clause}
+        FROM `tabShift Cash Movement`
+        WHERE {where_clause}
+        ORDER BY movement_date DESC, creation DESC
+        LIMIT %(row_limit)s OFFSET %(start)s
+        """,
+        values,
+        as_dict=True,
     )
+    has_more = len(rows) > page_length
+    rows = rows[:page_length]
+
     for row in rows:
         row["amount"] = flt(row.get("amount"))
+        if row.get("movement_date"):
+            row["movement_date"] = (
+                get_datetime(row.get("movement_date"))
+                .replace(microsecond=0)
+                .strftime("%Y-%m-%d %H:%M:%S")
+            )
         row["request_status"] = row.get("request_status") or (
-            "Approved" if cint(row.get("docstatus")) == 1 else "Cancelled" if cint(row.get("docstatus")) == 2 else "Pending Approval"
+            "Approved"
+            if cint(row.get("docstatus")) == 1
+            else "Cancelled"
+            if cint(row.get("docstatus")) == 2
+            else "Pending Approval"
         )
         row["requested_by"] = row.get("requested_by") or row.get("owner")
         row["can_self_approve"] = bool(
             can_emergency_submit_treasury()
             or row.get("requested_by") != frappe.session.user
         )
-    return rows
+
+    summary = frappe.db.sql(
+        f"""
+        SELECT
+            COUNT(*) AS total_count,
+            SUM(CASE WHEN docstatus = 0 THEN 1 ELSE 0 END) AS pending_count,
+            SUM(CASE WHEN docstatus = 1 THEN 1 ELSE 0 END) AS approved_count,
+            SUM(CASE WHEN docstatus = 2 THEN 1 ELSE 0 END) AS cancelled_count,
+            COALESCE(SUM(CASE WHEN direction = 'In' THEN amount ELSE 0 END), 0) AS total_in,
+            COALESCE(SUM(CASE WHEN direction = 'Out' THEN amount ELSE 0 END), 0) AS total_out
+        FROM `tabShift Cash Movement`
+        WHERE {where_clause}
+        """,
+        values,
+        as_dict=True,
+    )[0]
+    summary = {
+        "total_count": cint(summary.get("total_count")),
+        "pending_count": cint(summary.get("pending_count")),
+        "approved_count": cint(summary.get("approved_count")),
+        "cancelled_count": cint(summary.get("cancelled_count")),
+        "total_in": flt(summary.get("total_in")),
+        "total_out": flt(summary.get("total_out")),
+    }
+    summary["net_movement"] = flt(summary["total_in"] - summary["total_out"])
+
+    return {
+        "rows": rows,
+        "summary": summary,
+        "filters": filters,
+        "pagination": {
+            "start": page_start,
+            "page_length": page_length,
+            "returned_count": len(rows),
+            "has_more": has_more,
+        },
+        "options": _get_shift_cash_movement_filter_options(),
+    }
+
+
+def _get_shift_cash_movement_filter_options():
+    drawers = []
+    if frappe.db.exists("DocType", "Cash Drawer"):
+        drawers = frappe.get_all(
+            "Cash Drawer",
+            fields=["name", "drawer_name"],
+            order_by="drawer_name asc, name asc",
+            limit_page_length=500,
+        )
+    return {
+        "statuses": [
+            {"value": "Pending Approval", "label": _("Pending Approval")},
+            {"value": "Approved", "label": _("Approved")},
+            {"value": "Cancelled", "label": _("Cancelled")},
+        ],
+        "movement_types": [
+            {"value": value, "label": value}
+            for value in SHIFT_CASH_MOVEMENT_RULES
+        ],
+        "drawers": [
+            {
+                "value": row.name,
+                "label": f"{row.drawer_name or row.name} ({row.name})",
+            }
+            for row in drawers
+        ],
+    }
 
 
 def _validate_shift_cash_movement_action_access(movement_action):

@@ -41,6 +41,9 @@ class TreasuryManagementPageV15 {
         this.treasuryVoucherAccounts = {};
         this.treasuryVoucherCategories = {};
         this.treasuryVoucherCategoryMap = {};
+        this.shiftCashMovementData = null;
+        this.shiftCashMovementSectionOpen = false;
+        this.shiftCashMovementLoading = false;
         this.autoAccountName = "";
         this.autoBankNames = {};
         this.autoTerminalNames = {};
@@ -241,6 +244,43 @@ class TreasuryManagementPageV15 {
                 .tmv3-activity-table th, .tmv3-activity-table td {
                     padding: 8px; border-bottom: 1px solid var(--border-color); text-align: right;
                 }
+                .tmv3-section-toggle {
+                    width: 100%; border: 0; background: transparent; color: var(--text-color);
+                    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                    padding: 0; cursor: pointer; text-align: right;
+                }
+                .tmv3-section-toggle h4 { margin: 0; }
+                .tmv3-section-toggle-meta {
+                    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+                }
+                .tmv3-collapse-icon { font-size: 14px; color: var(--text-muted); }
+                .tmv3-filter-grid {
+                    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                    gap: 10px; margin: 14px 0 10px;
+                }
+                .tmv3-filter-field label {
+                    display: block; color: var(--text-muted); font-size: 11px; margin-bottom: 5px;
+                }
+                .tmv3-filter-field input, .tmv3-filter-field select {
+                    width: 100%; min-height: 34px; border: 1px solid var(--border-color);
+                    border-radius: 8px; background: var(--control-bg); color: var(--text-color);
+                    padding: 6px 9px;
+                }
+                .tmv3-filter-actions { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+                .tmv3-summary-strip {
+                    display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+                    gap: 8px; margin: 10px 0 12px;
+                }
+                .tmv3-summary-chip {
+                    border: 1px solid var(--border-color); border-radius: 10px; padding: 9px 10px;
+                    background: var(--control-bg);
+                }
+                .tmv3-summary-chip small { display: block; color: var(--text-muted); margin-bottom: 3px; }
+                .tmv3-summary-chip strong { font-size: 14px; }
+                .tmv3-pagination {
+                    display: flex; justify-content: space-between; align-items: center;
+                    gap: 10px; flex-wrap: wrap; margin-top: 12px;
+                }
             </style>
         `);
     }
@@ -265,6 +305,13 @@ class TreasuryManagementPageV15 {
             });
 
             const data = response.message || {};
+            this.shiftCashMovementData = data.shift_cash_movement_data || {
+                rows: data.shift_cash_movement_rows || [],
+                summary: {},
+                filters: {},
+                pagination: {},
+                options: {},
+            };
             this.canCreateCashDrawer = Boolean(data.can_create_cash_drawer);
             this.canManageCashDrawer = Boolean(data.can_manage_cash_drawer);
             this.canCreateBank = Boolean(data.can_create_bank);
@@ -2301,8 +2348,25 @@ class TreasuryManagementPageV15 {
         `;
     }
 
-    renderShiftCashMovements(rows) {
-        const body = (rows || []).length
+    renderShiftCashMovements(dataset) {
+        const data = dataset || {};
+        const rows = data.rows || [];
+        const summary = data.summary || {};
+        const filters = data.filters || {};
+        const pagination = data.pagination || {};
+        const options = data.options || {};
+        const isOpen = Boolean(this.shiftCashMovementSectionOpen);
+
+        const optionList = (items, selectedValue, emptyLabel) => [
+            `<option value="">${this.esc(emptyLabel)}</option>`,
+            ...(items || []).map((item) => {
+                const value = item.value || "";
+                const selected = String(value) === String(selectedValue || "") ? " selected" : "";
+                return `<option value="${this.esc(value)}"${selected}>${this.esc(item.label || value)}</option>`;
+            }),
+        ].join("");
+
+        const body = rows.length
             ? rows.map((row) => {
                 const docstatus = Number(row.docstatus || 0);
                 const badgeClass = docstatus === 1 ? "tmv3-badge-on" : docstatus === 2 ? "tmv3-badge-off" : "tmv3-badge-warn";
@@ -2314,7 +2378,7 @@ class TreasuryManagementPageV15 {
                 return `
                     <tr>
                         <td><a href="/app/shift-cash-movement/${encodeURIComponent(row.name || "")}">${this.esc(row.name || "-")}</a></td>
-                        <td>${this.esc(row.movement_date || "-")}</td>
+                        <td>${this.esc(this.formatDateTime(row.movement_date))}</td>
                         <td>${this.esc(row.movement_type || "-")}</td>
                         <td>${this.esc(row.direction || "-")}</td>
                         <td>${this.esc(row.cash_drawer || "-")}</td>
@@ -2330,29 +2394,159 @@ class TreasuryManagementPageV15 {
                     </tr>
                 `;
             }).join("")
-            : `<tr><td colspan="11" class="tmv3-empty">${__("لا توجد حركات نقدية مسجلة حتى الآن.")}</td></tr>`;
+            : `<tr><td colspan="11" class="tmv3-empty">${__("لا توجد حركات مطابقة للفلاتر المحددة.")}</td></tr>`;
 
+        const loadedCount = rows.length;
+        const totalCount = Number(summary.total_count || 0);
         return `
-            <div class="tmv3-section">
-                <h4>${__("حركات النقدية المرتبطة بالورديات")}</h4>
-                <div class="tmv3-table-wrap">
-                    <table class="tmv3-table">
-                        <thead>
-                            <tr>
-                                <th>${__("المستند")}</th><th>${__("التاريخ")}</th><th>${__("النوع")}</th>
-                                <th>${__("الاتجاه")}</th><th>${__("الخزنة")}</th><th>${__("الوردية")}</th>
-                                <th>${__("المبلغ")}</th><th>${__("الحالة")}</th><th>${__("طالب الحركة")}</th>
-                                <th>${__("Journal Entry")}</th><th>${__("إجراءات")}</th>
-                            </tr>
-                        </thead>
-                        <tbody>${body}</tbody>
-                    </table>
+            <div class="tmv3-section tmv3-shift-movements-section">
+                <button type="button" class="tmv3-section-toggle tmv3-shift-movement-toggle" aria-expanded="${isOpen ? "true" : "false"}">
+                    <div class="tmv3-section-toggle-meta">
+                        <h4>${__("حركات النقدية المرتبطة بالورديات")}</h4>
+                        <span class="tmv3-badge tmv3-badge-on">${this.esc(String(totalCount))} ${__("حركة")}</span>
+                        <span class="text-muted">${this.esc(filters.from_date || "-")} → ${this.esc(filters.to_date || "-")}</span>
+                    </div>
+                    <span class="tmv3-collapse-icon">${isOpen ? "▲" : "▼"}</span>
+                </button>
+
+                <div class="tmv3-collapsible-body"${isOpen ? "" : ' style="display:none;"'}>
+                    <div class="tmv3-filter-grid">
+                        <div class="tmv3-filter-field">
+                            <label>${__("من تاريخ")}</label>
+                            <input type="date" class="tmv3-shift-filter-from" value="${this.esc(filters.from_date || "")}">
+                        </div>
+                        <div class="tmv3-filter-field">
+                            <label>${__("إلى تاريخ")}</label>
+                            <input type="date" class="tmv3-shift-filter-to" value="${this.esc(filters.to_date || "")}">
+                        </div>
+                        <div class="tmv3-filter-field">
+                            <label>${__("الحالة")}</label>
+                            <select class="tmv3-shift-filter-status">${optionList(options.statuses, filters.request_status, __("كل الحالات"))}</select>
+                        </div>
+                        <div class="tmv3-filter-field">
+                            <label>${__("نوع الحركة")}</label>
+                            <select class="tmv3-shift-filter-type">${optionList(options.movement_types, filters.movement_type, __("كل الأنواع"))}</select>
+                        </div>
+                        <div class="tmv3-filter-field">
+                            <label>${__("الخزنة")}</label>
+                            <select class="tmv3-shift-filter-drawer">${optionList(options.drawers, filters.cash_drawer, __("كل الخزائن"))}</select>
+                        </div>
+                        <div class="tmv3-filter-field">
+                            <label>${__("رقم الوردية")}</label>
+                            <input type="text" class="tmv3-shift-filter-shift" value="${this.esc(filters.shift_reference || "")}" placeholder="SHIFT-YYYY-00000">
+                        </div>
+                        <div class="tmv3-filter-actions">
+                            <button type="button" class="btn btn-primary btn-sm tmv3-shift-filter-apply">${__("تطبيق")}</button>
+                            <button type="button" class="btn btn-default btn-sm tmv3-shift-filter-reset">${__("إعادة ضبط")}</button>
+                        </div>
+                    </div>
+
+                    <div class="tmv3-summary-strip">
+                        <div class="tmv3-summary-chip"><small>${__("عدد الحركات")}</small><strong>${this.esc(String(totalCount))}</strong></div>
+                        <div class="tmv3-summary-chip"><small>${__("إجمالي الداخل")}</small><strong>${this.formatMoney(summary.total_in || 0, "")}</strong></div>
+                        <div class="tmv3-summary-chip"><small>${__("إجمالي الخارج")}</small><strong>${this.formatMoney(summary.total_out || 0, "")}</strong></div>
+                        <div class="tmv3-summary-chip"><small>${__("صافي الحركة")}</small><strong>${this.formatMoney(summary.net_movement || 0, "")}</strong></div>
+                        <div class="tmv3-summary-chip"><small>${__("تنتظر الاعتماد")}</small><strong>${this.esc(String(summary.pending_count || 0))}</strong></div>
+                    </div>
+
+                    <div class="tmv3-table-wrap">
+                        <table class="tmv3-table">
+                            <thead>
+                                <tr>
+                                    <th>${__("المستند")}</th><th>${__("التاريخ")}</th><th>${__("النوع")}</th>
+                                    <th>${__("الاتجاه")}</th><th>${__("الخزنة")}</th><th>${__("الوردية")}</th>
+                                    <th>${__("المبلغ")}</th><th>${__("الحالة")}</th><th>${__("طالب الحركة")}</th>
+                                    <th>${__("Journal Entry")}</th><th>${__("إجراءات")}</th>
+                                </tr>
+                            </thead>
+                            <tbody>${body}</tbody>
+                        </table>
+                    </div>
+                    <div class="tmv3-pagination">
+                        <span class="text-muted">${__("المعروض")}: ${this.esc(String(loadedCount))} / ${this.esc(String(totalCount))}</span>
+                        ${pagination.has_more ? `<button type="button" class="btn btn-default btn-sm tmv3-shift-load-more">${__("تحميل المزيد")}</button>` : ""}
+                    </div>
                 </div>
             </div>
         `;
     }
 
+    getShiftCashMovementFilters() {
+        const $section = this.$main.find(".tmv3-shift-movements-section");
+        return {
+            from_date: $section.find(".tmv3-shift-filter-from").val() || frappe.datetime.get_today(),
+            to_date: $section.find(".tmv3-shift-filter-to").val() || frappe.datetime.get_today(),
+            request_status: $section.find(".tmv3-shift-filter-status").val() || "",
+            movement_type: $section.find(".tmv3-shift-filter-type").val() || "",
+            cash_drawer: $section.find(".tmv3-shift-filter-drawer").val() || "",
+            shift_reference: ($section.find(".tmv3-shift-filter-shift").val() || "").trim(),
+        };
+    }
+
+    async loadShiftCashMovements({ append = false, reset = false } = {}) {
+        if (this.shiftCashMovementLoading) return;
+        this.shiftCashMovementLoading = true;
+        this.shiftCashMovementSectionOpen = true;
+        try {
+            let filters = this.getShiftCashMovementFilters();
+            if (reset) {
+                const today = frappe.datetime.get_today();
+                filters = {
+                    from_date: today,
+                    to_date: today,
+                    request_status: "",
+                    movement_type: "",
+                    cash_drawer: "",
+                    shift_reference: "",
+                };
+            }
+            const existingRows = append ? ((this.shiftCashMovementData || {}).rows || []) : [];
+            const response = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_shift_cash_movements",
+                args: {
+                    ...filters,
+                    start: append ? existingRows.length : 0,
+                    page_length: 50,
+                },
+                freeze: true,
+                freeze_message: __("جاري تحميل حركات الوردية..."),
+            });
+            const nextData = response.message || {};
+            if (append) {
+                nextData.rows = existingRows.concat(nextData.rows || []);
+            }
+            this.shiftCashMovementData = nextData;
+            const $current = this.$main.find(".tmv3-shift-movements-section");
+            $current.replaceWith(this.renderShiftCashMovements(this.shiftCashMovementData));
+            this.bindShiftCashMovementActions();
+        } catch (error) {
+            console.error(error);
+            frappe.msgprint(error?.message || __("تعذر تحميل حركات الوردية."));
+        } finally {
+            this.shiftCashMovementLoading = false;
+        }
+    }
+
     bindShiftCashMovementActions() {
+        const $section = this.$main.find(".tmv3-shift-movements-section");
+        $section.find(".tmv3-shift-movement-toggle")
+            .off("click.tmv3-shift-toggle")
+            .on("click.tmv3-shift-toggle", () => {
+                this.shiftCashMovementSectionOpen = !this.shiftCashMovementSectionOpen;
+                $section.find(".tmv3-collapsible-body").stop(true, true).slideToggle(160);
+                $section.find(".tmv3-collapse-icon").text(this.shiftCashMovementSectionOpen ? "▲" : "▼");
+                $section.find(".tmv3-shift-movement-toggle").attr("aria-expanded", this.shiftCashMovementSectionOpen ? "true" : "false");
+            });
+        $section.find(".tmv3-shift-filter-apply")
+            .off("click.tmv3-shift-apply")
+            .on("click.tmv3-shift-apply", () => this.loadShiftCashMovements({ append: false }));
+        $section.find(".tmv3-shift-filter-reset")
+            .off("click.tmv3-shift-reset")
+            .on("click.tmv3-shift-reset", () => this.loadShiftCashMovements({ append: false, reset: true }));
+        $section.find(".tmv3-shift-load-more")
+            .off("click.tmv3-shift-more")
+            .on("click.tmv3-shift-more", () => this.loadShiftCashMovements({ append: true }));
+
         this.$main.find(".tmv3-cash-movement-submit")
             .off("click.tmv3-cash-movement")
             .on("click.tmv3-cash-movement", (event) => {
@@ -2783,7 +2977,7 @@ class TreasuryManagementPageV15 {
                 ${this.renderBanks(data.banks || [])}
                 ${this.renderTerminals(data.terminals || [])}
                 ${this.renderPaymentSetups(data.payment_setups || [])}
-                ${this.renderShiftCashMovements(data.shift_cash_movement_rows || [])}
+                ${this.renderShiftCashMovements(this.shiftCashMovementData)}
                 ${this.renderTreasuryVouchers(data.treasury_voucher_rows || [])}
                 ${this.renderInternalTransfers(data.internal_transfer_rows || [])}
                 ${this.renderUnlinkedBankLedgers(data.unlinked_bank_ledgers || [])}
@@ -4029,6 +4223,13 @@ class TreasuryManagementPageV15 {
                 await this.refresh();
             },
         );
+    }
+
+    formatDateTime(value) {
+        const clean = String(value || "").split(".")[0].replace("T", " ");
+        const match = clean.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}:\d{2}:\d{2}))?$/);
+        if (!match) return clean || "-";
+        return `${match[3]}-${match[2]}-${match[1]}${match[4] ? ` ${match[4]}` : ""}`;
     }
 
     formatMoney(value, currency) {
