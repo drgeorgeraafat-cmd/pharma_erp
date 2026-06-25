@@ -95,6 +95,11 @@ class TreasuryManagementPageV15 {
             () => frappe.set_route("List", "Treasury Voucher Category"),
             __("المصروفات العامة"),
         );
+        this.$dailyTreasuryReportButton = this.page.add_inner_button(
+            __("تقرير الخزينة اليومي"),
+            () => frappe.set_route("query-report", "Treasury Daily Review"),
+            __("التقارير"),
+        );
         this.page.add_inner_button(
             __("تحديث البيانات"),
             () => this.refresh(),
