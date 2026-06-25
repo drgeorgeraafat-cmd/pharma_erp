@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV9(page, wrapper);
+    new TreasuryManagementPageV10(page, wrapper);
 };
 
 
-class TreasuryManagementPageV9 {
+class TreasuryManagementPageV10 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -21,6 +21,7 @@ class TreasuryManagementPageV9 {
         this.canCreateBank = false;
         this.canManageCardTerminal = false;
         this.canManagePaymentSetup = false;
+        this.canExecuteSettlement = false;
         this.autoAccountName = "";
         this.autoBankNames = {};
         this.autoTerminalNames = {};
@@ -225,6 +226,7 @@ class TreasuryManagementPageV9 {
             this.canCreateBank = Boolean(data.can_create_bank);
             this.canManageCardTerminal = Boolean(data.can_manage_card_terminal);
             this.canManagePaymentSetup = Boolean(data.can_manage_payment_setup);
+            this.canExecuteSettlement = Boolean(data.can_execute_settlement);
             this.page.btn_primary.toggle(this.canCreateCashDrawer);
             if (this.$bankButton) this.$bankButton.toggle(this.canCreateBank);
             if (this.$terminalButton) this.$terminalButton.toggle(this.canManageCardTerminal);
@@ -234,6 +236,7 @@ class TreasuryManagementPageV9 {
             this.bindBankActions();
             this.bindTerminalActions();
             this.bindPaymentSetupActions();
+            this.bindSettlementActions();
             frappe.show_alert({
                 message: __("تم تحديث بيانات الخزائن والبنوك"),
                 indicator: "green",
@@ -1514,7 +1517,12 @@ class TreasuryManagementPageV9 {
                             <div class="tmv3-alert-title">${this.esc(row.title || severityLabel(row.severity))}</div>
                             <div class="tmv3-alert-message">${this.esc(row.message || "")}</div>
                         </div>
-                        ${route ? `<a class="tmv3-action-btn" href="${route}">${__("فتح")}</a>` : ""}
+                        <div class="tmv3-actions">
+                            ${route ? `<a class="tmv3-action-btn" href="${route}">${__("فتح")}</a>` : ""}
+                            ${this.canExecuteSettlement && row.doctype === "Shift Payment Reconciliation"
+                                ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-reconciliation" data-reconciliation="${this.esc(row.document || "")}">${__("تسوية")}</button>`
+                                : ""}
+                        </div>
                     </div>
                 `;
             }).join("")}</div>`
@@ -1570,9 +1578,14 @@ class TreasuryManagementPageV9 {
                     <td>${this.esc(row.to_time || "-")}</td>
                     <td>${this.esc(row.age_days || 0)} ${__("يوم")}</td>
                     <td><span class="tmv3-badge ${row.overdue ? "tmv3-badge-off" : "tmv3-badge-on"}">${row.overdue ? __("متأخرة") : __("معلّقة اليوم")}</span></td>
+                    <td>
+                        ${this.canExecuteSettlement
+                            ? `<button class="tmv3-action-btn tmv3-action-success tmv3-settle-reconciliation" data-reconciliation="${this.esc(row.name || "")}">${__("تسوية")}</button>`
+                            : ""}
+                    </td>
                 </tr>
             `).join("")
-            : `<tr><td colspan="8" class="tmv3-empty">${__("لا توجد تسويات دفع إلكتروني مفتوحة.")}</td></tr>`;
+            : `<tr><td colspan="9" class="tmv3-empty">${__("لا توجد تسويات دفع إلكتروني مفتوحة.")}</td></tr>`;
 
         return `
             <div class="tmv3-section">
@@ -1623,7 +1636,7 @@ class TreasuryManagementPageV9 {
                     <table class="tmv3-table">
                         <thead><tr>
                             <th>${__("التسوية")}</th><th>${__("طريقة الدفع")}</th><th>${__("الوردية")}</th><th>${__("الحالة")}</th>
-                            <th>${__("المبلغ المعلّق")}</th><th>${__("حتى")}</th><th>${__("العمر")}</th><th>${__("التصنيف")}</th>
+                            <th>${__("المبلغ المعلّق")}</th><th>${__("حتى")}</th><th>${__("العمر")}</th><th>${__("التصنيف")}</th><th>${__("إجراءات")}</th>
                         </tr></thead>
                         <tbody>${reconciliationRows}</tbody>
                     </table>
@@ -1898,6 +1911,187 @@ class TreasuryManagementPageV9 {
                 <div class="tmv3-preview-note">${__("مثال: تحصيل InstaPay يدخل أولًا إلى InstaPay Clearing، ثم ينتقل إلى الحساب البنكي النهائي عند المراجعة أو التسوية حسب السياسة المحددة.")}</div>
             </div>
         `;
+    }
+
+    bindSettlementActions() {
+        this.$main
+            .find(".tmv3-settle-reconciliation")
+            .off("click.tmv3-settlement")
+            .on("click.tmv3-settlement", (event) => {
+                const reconciliation = $(event.currentTarget).attr("data-reconciliation");
+                this.openReconciliationSettlementDialog(reconciliation);
+            });
+    }
+
+    async openReconciliationSettlementDialog(reconciliation) {
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.get_payment_reconciliation_settlement_details",
+            args: { reconciliation_name: reconciliation },
+            freeze: true,
+            freeze_message: __("جاري تحميل بيانات التسوية..."),
+        });
+        const data = response.message || {};
+        const currency = data.currency || "";
+        const dialog = new frappe.ui.Dialog({
+            title: `${__("تنفيذ تسوية الدفع")}: ${this.esc(data.reconciliation || reconciliation)}`,
+            size: "large",
+            fields: [
+                {
+                    fieldtype: "HTML",
+                    options: `
+                        <div class="tmv3-preview" style="margin-bottom:14px;">
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("طريقة الدفع")}</div><div class="tmv3-preview-value">${this.esc(data.mode_of_payment || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الوردية")}</div><div class="tmv3-preview-value">${this.esc(data.shift_reference || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("حساب Clearing")}</div><div class="tmv3-preview-value">${this.esc(data.clearing_account || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("الحساب النهائي")}</div><div class="tmv3-preview-value">${this.esc(data.destination_account || "-")}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("المبلغ")}</div><div class="tmv3-preview-value">${this.formatMoney(data.reviewed_amount, currency)}</div></div>
+                            <div class="tmv3-preview-row"><div class="tmv3-preview-label">${__("رصيد Clearing الحالي")}</div><div class="tmv3-preview-value">${this.formatMoney(data.clearing_balance, currency)}</div></div>
+                        </div>
+                    `,
+                },
+                {
+                    fieldname: "settlement_action",
+                    fieldtype: "Select",
+                    label: __("طريقة تنفيذ التسوية"),
+                    options: "Create New Journal Entry\nLink Existing Journal Entry",
+                    default: "Create New Journal Entry",
+                    reqd: 1,
+                },
+                {
+                    fieldname: "posting_date",
+                    fieldtype: "Date",
+                    label: __("تاريخ القيد"),
+                    default: data.posting_date || frappe.datetime.get_today(),
+                    reqd: 1,
+                },
+                {
+                    fieldname: "fee_amount",
+                    fieldtype: "Currency",
+                    label: __("رسوم التحويل"),
+                    default: Number(data.fee_amount || 0),
+                    non_negative: 1,
+                },
+                {
+                    fieldname: "bank_reference",
+                    fieldtype: "Data",
+                    label: __("مرجع البنك أو المحفظة"),
+                    description: __("إلزامي عند إنشاء قيد جديد."),
+                },
+                {
+                    fieldname: "existing_journal_entry",
+                    fieldtype: "Link",
+                    options: "Journal Entry",
+                    label: __("Journal Entry موجود"),
+                    depends_on: "eval:doc.settlement_action=='Link Existing Journal Entry'",
+                    mandatory_depends_on: "eval:doc.settlement_action=='Link Existing Journal Entry'",
+                    get_query: () => ({
+                        filters: {
+                            company: data.company,
+                            docstatus: 1,
+                        },
+                    }),
+                },
+                {
+                    fieldname: "notes",
+                    fieldtype: "Small Text",
+                    label: __("ملاحظات"),
+                    default: data.notes || "",
+                },
+            ],
+            primary_action_label: __("معاينة التسوية"),
+            primary_action: async (values) => {
+                await this.previewReconciliationSettlement(dialog, data, values);
+            },
+        });
+        dialog.show();
+    }
+
+    async previewReconciliationSettlement(sourceDialog, details, values) {
+        const args = {
+            reconciliation_name: details.reconciliation,
+            ...values,
+        };
+        const response = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.treasury_management.treasury_management.preview_payment_reconciliation_settlement",
+            args,
+            freeze: true,
+            freeze_message: __("جاري مراجعة التسوية والقيد..."),
+        });
+        this.showReconciliationSettlementConfirmation(
+            sourceDialog,
+            args,
+            response.message || {},
+        );
+    }
+
+    showReconciliationSettlementConfirmation(sourceDialog, sourceValues, preview) {
+        const createNew = preview.settlement_action === "Create New Journal Entry";
+        const rows = [
+            [__("التسوية"), preview.reconciliation],
+            [__("طريقة الدفع"), preview.mode_of_payment],
+            [__("طريقة التنفيذ"), createNew ? __("إنشاء Journal Entry جديد") : __("ربط Journal Entry موجود")],
+            [__("Journal Entry الموجود"), preview.existing_journal_entry || "-"],
+            [__("تاريخ القيد"), preview.posting_date],
+            [__("مرجع البنك أو المحفظة"), preview.bank_reference || "-"],
+            [__("حساب Clearing"), preview.clearing_account],
+            [__("الحساب النهائي"), preview.destination_account],
+            [__("المبلغ الإجمالي"), this.formatMoney(preview.reviewed_amount, "")],
+            [__("الرسوم"), this.formatMoney(preview.fee_amount, "")],
+            [__("صافي التحويل"), this.formatMoney(preview.net_transfer_amount, "")],
+            [__("رصيد Clearing قبل"), this.formatMoney(preview.clearing_balance_before, "")],
+            [__("رصيد Clearing بعد"), this.formatMoney(preview.clearing_balance_after, "")],
+        ];
+        const confirmDialog = new frappe.ui.Dialog({
+            title: __("تأكيد تنفيذ التسوية"),
+            size: "large",
+            fields: [{
+                fieldtype: "HTML",
+                options: `
+                    <div class="tmv3-preview">
+                        ${rows.map(([label, value]) => `
+                            <div class="tmv3-preview-row">
+                                <div class="tmv3-preview-label">${this.esc(label)}</div>
+                                <div class="tmv3-preview-value">${this.esc(value ?? "-")}</div>
+                            </div>
+                        `).join("")}
+                    </div>
+                    <div class="tmv3-preview-note">
+                        <strong>${__("مهم")}:</strong>
+                        ${createNew
+                            ? __("سيتم إنشاء واعتماد قيد محاسبي، ثم ربطه بمستند التسوية وإغلاق التنبيه.")
+                            : __("لن يتم إنشاء قيد جديد. سيتم التحقق من القيد الموجود وربطه بالمستند فقط لمنع التكرار.")}
+                    </div>
+                `,
+            }],
+            primary_action_label: __("تنفيذ التسوية"),
+            primary_action: async () => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.treasury_management.treasury_management.execute_payment_reconciliation_settlement",
+                    args: sourceValues,
+                    freeze: true,
+                    freeze_message: __("جاري تنفيذ التسوية المحاسبية..."),
+                });
+                confirmDialog.hide();
+                sourceDialog.hide();
+                const result = response.message || {};
+                frappe.msgprint({
+                    title: __("تم تنفيذ التسوية"),
+                    indicator: "green",
+                    message: `
+                        <div style="direction:rtl;text-align:right;">
+                            <div>${this.esc(result.message || __("تمت التسوية بنجاح"))}</div>
+                            <div><strong>${__("التسوية")}:</strong> ${this.esc(result.reconciliation || "-")}</div>
+                            <div><strong>${__("Journal Entry")}:</strong> <a href="/app/journal-entry/${encodeURIComponent(result.journal_entry || "")}">${this.esc(result.journal_entry || "-")}</a></div>
+                        </div>
+                    `,
+                });
+                await this.refresh();
+            },
+        });
+        confirmDialog.show();
     }
 
     bindPaymentSetupActions() {

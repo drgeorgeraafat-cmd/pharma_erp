@@ -3,7 +3,7 @@ import unicodedata
 
 import frappe
 from frappe import _
-from frappe.utils import cint, date_diff, flt, getdate, nowdate
+from frappe.utils import cint, date_diff, flt, getdate, now_datetime, nowdate
 
 from erpnext.accounts.utils import get_balance_on
 
@@ -56,6 +56,7 @@ def get_overview():
         "can_create_bank": _can_create_cash_drawer(),
         "can_manage_card_terminal": _can_create_cash_drawer(),
         "can_manage_payment_setup": _can_create_cash_drawer(),
+        "can_execute_settlement": _can_create_cash_drawer(),
     }
 
 
@@ -64,6 +65,142 @@ def get_pending_settlement_dashboard():
     """Return pending clearing balances, overdue settlements and review alerts."""
     _validate_access()
     return _get_pending_settlement_dashboard()
+
+
+@frappe.whitelist()
+def get_payment_reconciliation_settlement_details(reconciliation_name):
+    """Return validated details for settling one electronic reconciliation."""
+    _validate_create_access()
+    doc = _get_open_payment_reconciliation(reconciliation_name)
+    return _reconciliation_settlement_details(doc)
+
+
+@frappe.whitelist()
+def preview_payment_reconciliation_settlement(
+    reconciliation_name,
+    settlement_action,
+    fee_amount=0,
+    posting_date=None,
+    bank_reference=None,
+    existing_journal_entry=None,
+    notes=None,
+):
+    """Validate and preview a settlement without changing accounting data."""
+    _validate_create_access()
+    return _prepare_payment_reconciliation_settlement(
+        reconciliation_name=reconciliation_name,
+        settlement_action=settlement_action,
+        fee_amount=fee_amount,
+        posting_date=posting_date,
+        bank_reference=bank_reference,
+        existing_journal_entry=existing_journal_entry,
+        notes=notes,
+    )
+
+
+@frappe.whitelist()
+def execute_payment_reconciliation_settlement(
+    reconciliation_name,
+    settlement_action,
+    fee_amount=0,
+    posting_date=None,
+    bank_reference=None,
+    existing_journal_entry=None,
+    notes=None,
+):
+    """Create or link the Journal Entry and close one reconciliation."""
+    _validate_create_access()
+    plan = _prepare_payment_reconciliation_settlement(
+        reconciliation_name=reconciliation_name,
+        settlement_action=settlement_action,
+        fee_amount=fee_amount,
+        posting_date=posting_date,
+        bank_reference=bank_reference,
+        existing_journal_entry=existing_journal_entry,
+        notes=notes,
+    )
+    doc = frappe.get_doc("Shift Payment Reconciliation", plan["reconciliation"])
+
+    if plan["settlement_action"] == "Create New Journal Entry":
+        journal = frappe.new_doc("Journal Entry")
+        journal.voucher_type = "Journal Entry"
+        journal.company = plan["company"]
+        journal.posting_date = plan["posting_date"]
+        reference_text = plan.get("bank_reference") or "-"
+        journal.user_remark = (
+            f"Treasury settlement {doc.name} / {doc.mode_of_payment} / "
+            f"{doc.shift_reference} / reference {reference_text}"
+        )
+        if flt(plan["net_transfer_amount"]) > 0:
+            journal.append(
+                "accounts",
+                {
+                    "account": plan["destination_account"],
+                    "debit_in_account_currency": flt(plan["net_transfer_amount"]),
+                    "credit_in_account_currency": 0,
+                },
+            )
+        if flt(plan["fee_amount"]) > 0:
+            journal.append(
+                "accounts",
+                {
+                    "account": plan["fee_account"],
+                    "debit_in_account_currency": flt(plan["fee_amount"]),
+                    "credit_in_account_currency": 0,
+                },
+            )
+        journal.append(
+            "accounts",
+            {
+                "account": plan["clearing_account"],
+                "debit_in_account_currency": 0,
+                "credit_in_account_currency": flt(plan["reviewed_amount"]),
+            },
+        )
+        journal.flags.ignore_permissions = True
+        journal.insert(ignore_permissions=True)
+        journal.flags.ignore_permissions = True
+        journal.submit()
+        journal_name = journal.name
+    else:
+        journal_name = plan["existing_journal_entry"]
+
+    note_parts = []
+    if plan.get("bank_reference"):
+        note_parts.append(_("Bank Reference: {0}").format(plan["bank_reference"]))
+    if plan.get("notes"):
+        note_parts.append(plan["notes"])
+    stored_notes = "\n".join(note_parts) or (doc.notes or "")
+
+    frappe.db.set_value(
+        "Shift Payment Reconciliation",
+        doc.name,
+        {
+            "reviewed_amount": flt(plan["reviewed_amount"]),
+            "difference": flt(plan["difference"]),
+            "fee_amount": flt(plan["fee_amount"]),
+            "net_transfer_amount": flt(plan["net_transfer_amount"]),
+            "reviewed_by": frappe.session.user,
+            "reviewed_at": now_datetime(),
+            "journal_entry": journal_name,
+            "status": "Submitted",
+            "notes": stored_notes,
+        },
+        update_modified=False,
+    )
+    frappe.db.commit()
+
+    return {
+        "ok": True,
+        "message": _("Payment reconciliation was settled successfully."),
+        "reconciliation": doc.name,
+        "journal_entry": journal_name,
+        "status": "Submitted",
+        "settlement_action": plan["settlement_action"],
+        "reviewed_amount": plan["reviewed_amount"],
+        "fee_amount": plan["fee_amount"],
+        "net_transfer_amount": plan["net_transfer_amount"],
+    }
 
 
 @frappe.whitelist()
@@ -3022,6 +3159,238 @@ def _count_leaf_accounts(account_type):
             "disabled": 0,
         },
     )
+
+
+def _get_open_payment_reconciliation(reconciliation_name):
+    reconciliation_name = str(reconciliation_name or "").strip()
+    if not reconciliation_name or not frappe.db.exists(
+        "Shift Payment Reconciliation", reconciliation_name
+    ):
+        frappe.throw(_("Payment Reconciliation was not found."))
+
+    doc = frappe.get_doc("Shift Payment Reconciliation", reconciliation_name)
+    if doc.docstatus != 1:
+        frappe.throw(_("Only a submitted reconciliation can be settled."))
+    if doc.status not in ("Draft", "Reviewed"):
+        frappe.throw(
+            _("Reconciliation {0} is not open for settlement.").format(doc.name)
+        )
+
+    linked = str(doc.journal_entry or "").strip()
+    if linked:
+        journal_status = frappe.db.get_value("Journal Entry", linked, "docstatus")
+        if cint(journal_status) == 1:
+            frappe.throw(
+                _("Reconciliation is already linked to submitted Journal Entry {0}.").format(linked)
+            )
+        frappe.throw(
+            _("Reconciliation has a non-submitted Journal Entry link {0}. Review it first.").format(linked)
+        )
+    return doc
+
+
+def _reconciliation_settlement_details(doc):
+    expected = flt(doc.expected_amount)
+    reviewed = flt(doc.reviewed_amount) or expected
+    fee_amount = flt(doc.fee_amount)
+    net_amount = flt(reviewed - fee_amount)
+    balance = _account_balance(doc.clearing_account, doc.company)
+    return {
+        "reconciliation": doc.name,
+        "shift_reference": doc.shift_reference,
+        "company": doc.company,
+        "mode_of_payment": doc.mode_of_payment,
+        "status": doc.status,
+        "expected_amount": expected,
+        "reviewed_amount": reviewed,
+        "difference": flt(reviewed - expected),
+        "fee_amount": fee_amount,
+        "net_transfer_amount": net_amount,
+        "clearing_account": doc.clearing_account,
+        "destination_account": doc.destination_account,
+        "fee_account": doc.fee_account or "",
+        "settlement_policy": doc.settlement_policy,
+        "to_time": doc.to_time,
+        "posting_date": str(getdate(doc.to_time or nowdate())),
+        "clearing_balance": flt(balance),
+        "notes": doc.notes or "",
+        "currency": frappe.db.get_value("Company", doc.company, "default_currency") or "",
+    }
+
+
+def _prepare_payment_reconciliation_settlement(
+    reconciliation_name,
+    settlement_action,
+    fee_amount=0,
+    posting_date=None,
+    bank_reference=None,
+    existing_journal_entry=None,
+    notes=None,
+):
+    doc = _get_open_payment_reconciliation(reconciliation_name)
+    settlement_action = str(settlement_action or "").strip()
+    if settlement_action not in (
+        "Create New Journal Entry",
+        "Link Existing Journal Entry",
+    ):
+        frappe.throw(_("Select a valid settlement action."))
+
+    expected = flt(doc.expected_amount)
+    reviewed = flt(doc.reviewed_amount) or expected
+    if reviewed <= 0:
+        frappe.throw(_("Reviewed Amount must be greater than zero."))
+    difference = flt(reviewed - expected)
+    if abs(difference) > 0.01:
+        frappe.throw(_("Reviewed Amount must equal Expected Amount."))
+
+    fee_amount = flt(fee_amount)
+    if fee_amount < 0:
+        frappe.throw(_("Fee Amount cannot be negative."))
+    if fee_amount > reviewed:
+        frappe.throw(_("Fee Amount cannot exceed Reviewed Amount."))
+    net_amount = flt(reviewed - fee_amount)
+
+    _validate_company_account(
+        doc.clearing_account,
+        doc.company,
+        expected_root="Asset",
+        label=_("Clearing Account"),
+    )
+    _validate_company_account(
+        doc.destination_account,
+        doc.company,
+        expected_root="Asset",
+        label=_("Destination Account"),
+    )
+    if fee_amount > 0:
+        if not doc.fee_account:
+            frappe.throw(_("Fee Account is required when a fee is entered."))
+        _validate_company_account(
+            doc.fee_account,
+            doc.company,
+            expected_root="Expense",
+            label=_("Fee Account"),
+        )
+
+    posting_date = str(getdate(posting_date or doc.to_time or nowdate()))
+    bank_reference = _clean_master_text(bank_reference)
+    notes = str(notes or "").strip()
+    clearing_balance = flt(_account_balance(doc.clearing_account, doc.company))
+    after_balance = flt(clearing_balance - reviewed)
+
+    existing_journal_entry = str(existing_journal_entry or "").strip()
+    if settlement_action == "Create New Journal Entry":
+        if existing_journal_entry:
+            frappe.throw(_("Do not select an existing Journal Entry when creating a new one."))
+        if not bank_reference:
+            frappe.throw(_("Bank Reference is required for a new settlement Journal Entry."))
+        if clearing_balance + 0.01 < reviewed:
+            frappe.throw(
+                _(
+                    "Clearing balance {0} is lower than the settlement amount {1}. "
+                    "Link the existing Journal Entry or review previous postings."
+                ).format(clearing_balance, reviewed)
+            )
+    else:
+        if not existing_journal_entry:
+            frappe.throw(_("Select the existing Journal Entry to link."))
+        _validate_existing_reconciliation_journal(
+            doc,
+            existing_journal_entry,
+            reviewed,
+            fee_amount,
+            net_amount,
+        )
+
+    return {
+        "reconciliation": doc.name,
+        "shift_reference": doc.shift_reference,
+        "company": doc.company,
+        "mode_of_payment": doc.mode_of_payment,
+        "settlement_action": settlement_action,
+        "posting_date": posting_date,
+        "bank_reference": bank_reference,
+        "existing_journal_entry": existing_journal_entry,
+        "expected_amount": expected,
+        "reviewed_amount": reviewed,
+        "difference": difference,
+        "fee_amount": fee_amount,
+        "net_transfer_amount": net_amount,
+        "clearing_account": doc.clearing_account,
+        "destination_account": doc.destination_account,
+        "fee_account": doc.fee_account or "",
+        "clearing_balance_before": clearing_balance,
+        "clearing_balance_after": after_balance,
+        "notes": notes,
+    }
+
+
+def _validate_existing_reconciliation_journal(
+    reconciliation,
+    journal_name,
+    reviewed_amount,
+    fee_amount,
+    net_amount,
+):
+    if not frappe.db.exists("Journal Entry", journal_name):
+        frappe.throw(_("Existing Journal Entry was not found."))
+    journal = frappe.get_doc("Journal Entry", journal_name)
+    if journal.docstatus != 1:
+        frappe.throw(_("Existing Journal Entry must be submitted."))
+    if journal.company != reconciliation.company:
+        frappe.throw(_("Existing Journal Entry belongs to another company."))
+
+    other_link = frappe.db.get_value(
+        "Shift Payment Reconciliation",
+        {
+            "journal_entry": journal_name,
+            "name": ["!=", reconciliation.name],
+            "docstatus": ["!=", 2],
+        },
+        "name",
+    )
+    if other_link:
+        frappe.throw(
+            _("Journal Entry is already linked to reconciliation {0}.").format(other_link)
+        )
+
+    expected_net = {
+        reconciliation.destination_account: flt(net_amount),
+        reconciliation.clearing_account: flt(-reviewed_amount),
+    }
+    if fee_amount > 0:
+        expected_net[reconciliation.fee_account] = flt(
+            expected_net.get(reconciliation.fee_account, 0) + fee_amount
+        )
+
+    actual_net = {}
+    for row in journal.accounts:
+        amount = flt(row.debit) - flt(row.credit)
+        if abs(amount) <= 0.005:
+            continue
+        actual_net[row.account] = flt(actual_net.get(row.account, 0) + amount)
+
+    unexpected = {
+        account: amount
+        for account, amount in actual_net.items()
+        if account not in expected_net and abs(amount) > 0.01
+    }
+    if unexpected:
+        frappe.throw(
+            _("Existing Journal Entry contains unrelated account movements: {0}.").format(
+                ", ".join(sorted(unexpected))
+            )
+        )
+
+    for account, expected_amount in expected_net.items():
+        actual_amount = flt(actual_net.get(account))
+        if abs(actual_amount - expected_amount) > 0.01:
+            frappe.throw(
+                _(
+                    "Journal Entry amount for {0} is {1}, expected {2}."
+                ).format(account, actual_amount, expected_amount)
+            )
+    return journal
 
 
 def _safe_count(doctype):
