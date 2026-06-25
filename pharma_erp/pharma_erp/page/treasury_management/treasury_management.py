@@ -24,6 +24,9 @@ def get_overview():
     unlinked_bank_ledgers = _get_unlinked_bank_ledgers(bank_ledger_accounts, banks)
     terminals = _get_card_terminals()
     payment_setups = _get_payment_method_setups()
+    pending_dashboard = _get_pending_settlement_dashboard(
+        terminals=terminals, payment_setups=payment_setups
+    )
 
     return {
         "ok": True,
@@ -47,12 +50,20 @@ def get_overview():
         "unlinked_bank_ledgers": unlinked_bank_ledgers,
         "terminals": terminals,
         "payment_setups": payment_setups,
+        "pending_dashboard": pending_dashboard,
         "can_create_cash_drawer": _can_create_cash_drawer(),
         "can_manage_cash_drawer": _can_create_cash_drawer(),
         "can_create_bank": _can_create_cash_drawer(),
         "can_manage_card_terminal": _can_create_cash_drawer(),
         "can_manage_payment_setup": _can_create_cash_drawer(),
     }
+
+
+@frappe.whitelist()
+def get_pending_settlement_dashboard():
+    """Return pending clearing balances, overdue settlements and review alerts."""
+    _validate_access()
+    return _get_pending_settlement_dashboard()
 
 
 @frappe.whitelist()
@@ -2279,6 +2290,408 @@ def _fee_parent_accounts(company):
     )
     return rows
 
+
+
+
+def _get_pending_settlement_dashboard(terminals=None, payment_setups=None):
+    """Build a read-only dashboard for clearing balances and overdue settlements."""
+    terminals = terminals if terminals is not None else _get_card_terminals()
+    payment_setups = (
+        payment_setups if payment_setups is not None else _get_payment_method_setups()
+    )
+    today = getdate(nowdate())
+
+    accounts = {}
+
+    def register_account(account_name, company, source_type, source_name, destination=None):
+        account_name = str(account_name or "").strip()
+        company = str(company or "").strip()
+        if not account_name or not company:
+            return
+
+        row = accounts.setdefault(
+            account_name,
+            {
+                "account": account_name,
+                "company": company,
+                "currency": "",
+                "disabled": 0,
+                "sources": [],
+                "destination_accounts": [],
+                "current_balance": 0.0,
+                "documented_pending": 0.0,
+                "card_pending": 0.0,
+                "payment_pending": 0.0,
+                "open_document_count": 0,
+                "overdue_document_count": 0,
+                "oldest_pending_days": 0,
+                "last_movement": {},
+            },
+        )
+        source = {
+            "type": source_type,
+            "name": source_name,
+        }
+        if source not in row["sources"]:
+            row["sources"].append(source)
+        destination = str(destination or "").strip()
+        if destination and destination not in row["destination_accounts"]:
+            row["destination_accounts"].append(destination)
+
+    for terminal in terminals or []:
+        register_account(
+            terminal.get("clearing_account"),
+            terminal.get("company"),
+            "Card POS Terminal",
+            terminal.get("terminal_name") or terminal.get("name"),
+            terminal.get("destination_bank_account"),
+        )
+
+    for setup in payment_setups or []:
+        register_account(
+            setup.get("clearing_account"),
+            setup.get("company"),
+            "Payment Method",
+            setup.get("mode_of_payment") or setup.get("name"),
+            setup.get("destination_account"),
+        )
+
+    for row in accounts.values():
+        meta = frappe.db.get_value(
+            "Account",
+            row["account"],
+            ["account_currency", "disabled", "root_type", "is_group"],
+            as_dict=True,
+        ) or {}
+        row["currency"] = meta.get("account_currency") or ""
+        row["disabled"] = cint(meta.get("disabled"))
+        row["current_balance"] = _account_balance(row["account"], row["company"])
+        movement = frappe.get_all(
+            "GL Entry",
+            filters={"account": row["account"], "is_cancelled": 0},
+            fields=["posting_date", "creation", "voucher_type", "voucher_no"],
+            order_by="posting_date desc, creation desc",
+            limit_page_length=1,
+        )
+        row["last_movement"] = movement[0] if movement else {}
+
+    open_card_batches = []
+    if frappe.db.exists("DocType", "Card Settlement Batch"):
+        card_rows = frappe.get_all(
+            "Card Settlement Batch",
+            filters={
+                "docstatus": ["!=", 2],
+                "status": [
+                    "in",
+                    [
+                        "Draft",
+                        "Awaiting Bank Settlement",
+                        "Partially Settled",
+                        "Disputed",
+                    ],
+                ],
+            },
+            fields=[
+                "name",
+                "company",
+                "pos_terminal",
+                "bank_label",
+                "status",
+                "close_time",
+                "creation",
+                "system_total",
+                "machine_total",
+                "settled_amount",
+                "outstanding_amount",
+                "clearing_account",
+                "destination_bank_account",
+                "bank_settlement",
+            ],
+            order_by="close_time asc, creation asc",
+            limit_page_length=1000,
+        )
+        for batch in card_rows:
+            outstanding = flt(batch.get("outstanding_amount"))
+            if outstanding <= 0.005 and batch.get("status") not in ("Draft", "Disputed"):
+                continue
+            basis = batch.get("close_time") or batch.get("creation")
+            age_days = max(date_diff(today, getdate(basis)), 0) if basis else 0
+            overdue = bool(basis and getdate(basis) < today)
+            batch["system_total"] = flt(batch.get("system_total"))
+            batch["machine_total"] = flt(batch.get("machine_total"))
+            batch["settled_amount"] = flt(batch.get("settled_amount"))
+            batch["outstanding_amount"] = outstanding
+            batch["age_days"] = age_days
+            batch["overdue"] = overdue
+            batch["severity"] = (
+                "critical"
+                if batch.get("status") == "Disputed" or age_days >= 3
+                else "warning"
+                if overdue
+                else "info"
+            )
+            register_account(
+                batch.get("clearing_account"),
+                batch.get("company"),
+                "Card Settlement Batch",
+                batch.get("pos_terminal") or batch.get("name"),
+                batch.get("destination_bank_account"),
+            )
+            open_card_batches.append(batch)
+
+            account_row = accounts.get(batch.get("clearing_account"))
+            if account_row:
+                account_row["card_pending"] += outstanding
+                account_row["documented_pending"] += outstanding
+                account_row["open_document_count"] += 1
+                account_row["overdue_document_count"] += cint(overdue)
+                account_row["oldest_pending_days"] = max(
+                    cint(account_row.get("oldest_pending_days")), age_days
+                )
+
+    setup_by_name = {row.get("name"): row for row in payment_setups or []}
+    open_reconciliations = []
+    if frappe.db.exists("DocType", "Shift Payment Reconciliation"):
+        reconciliation_rows = frappe.get_all(
+            "Shift Payment Reconciliation",
+            filters={
+                "docstatus": ["!=", 2],
+                "status": ["in", ["Draft", "Reviewed"]],
+            },
+            fields=[
+                "name",
+                "setup_reference",
+                "shift_reference",
+                "company",
+                "mode_of_payment",
+                "status",
+                "from_time",
+                "to_time",
+                "expected_amount",
+                "reviewed_amount",
+                "difference",
+                "fee_amount",
+                "net_transfer_amount",
+                "clearing_account",
+                "destination_account",
+                "settlement_policy",
+                "journal_entry",
+                "creation",
+                "modified",
+            ],
+            order_by="to_time asc, creation asc",
+            limit_page_length=1000,
+        )
+        for reconciliation in reconciliation_rows:
+            setup = setup_by_name.get(reconciliation.get("setup_reference")) or {}
+            clearing_account = reconciliation.get("clearing_account") or setup.get("clearing_account") or ""
+            destination_account = reconciliation.get("destination_account") or setup.get("destination_account") or ""
+            expected = flt(reconciliation.get("expected_amount"))
+            reviewed = flt(reconciliation.get("reviewed_amount"))
+            difference = flt(reconciliation.get("difference"))
+            fee_amount = flt(reconciliation.get("fee_amount"))
+            net_transfer = flt(reconciliation.get("net_transfer_amount"))
+            pending_amount = reviewed if reviewed > 0 else expected
+            if net_transfer > 0 and reconciliation.get("status") == "Reviewed":
+                pending_amount = net_transfer + fee_amount
+
+            basis = reconciliation.get("to_time") or reconciliation.get("creation")
+            age_days = max(date_diff(today, getdate(basis)), 0) if basis else 0
+            overdue = bool(basis and getdate(basis) < today)
+            register_account(
+                clearing_account,
+                reconciliation.get("company"),
+                "Shift Payment Reconciliation",
+                reconciliation.get("mode_of_payment") or reconciliation.get("name"),
+                destination_account,
+            )
+            reconciliation.update(
+                {
+                    "clearing_account": clearing_account,
+                    "destination_account": destination_account,
+                    "expected_amount": expected,
+                    "reviewed_amount": reviewed,
+                    "difference": difference,
+                    "fee_amount": fee_amount,
+                    "net_transfer_amount": net_transfer,
+                    "pending_amount": pending_amount,
+                    "age_days": age_days,
+                    "overdue": overdue,
+                    "severity": "critical" if age_days >= 3 else "warning" if overdue else "info",
+                }
+            )
+            open_reconciliations.append(reconciliation)
+
+            account_row = accounts.get(clearing_account)
+            if account_row:
+                account_row["payment_pending"] += pending_amount
+                account_row["documented_pending"] += pending_amount
+                account_row["open_document_count"] += 1
+                account_row["overdue_document_count"] += cint(overdue)
+                account_row["oldest_pending_days"] = max(
+                    cint(account_row.get("oldest_pending_days")), age_days
+                )
+
+    # Open documents can reference an account not currently present in an active setup.
+    # Enrich any such account before building totals and alerts.
+    for row in accounts.values():
+        if row.get("currency") or row.get("last_movement"):
+            continue
+        meta = frappe.db.get_value(
+            "Account",
+            row["account"],
+            ["account_currency", "disabled", "root_type", "is_group"],
+            as_dict=True,
+        ) or {}
+        row["currency"] = meta.get("account_currency") or ""
+        row["disabled"] = cint(meta.get("disabled"))
+        row["current_balance"] = _account_balance(row["account"], row["company"])
+        movement = frappe.get_all(
+            "GL Entry",
+            filters={"account": row["account"], "is_cancelled": 0},
+            fields=["posting_date", "creation", "voucher_type", "voucher_no"],
+            order_by="posting_date desc, creation desc",
+            limit_page_length=1,
+        )
+        row["last_movement"] = movement[0] if movement else {}
+
+    alerts = []
+    account_rows = []
+    for row in accounts.values():
+        row["current_balance"] = flt(row.get("current_balance"))
+        row["documented_pending"] = flt(row.get("documented_pending"))
+        row["card_pending"] = flt(row.get("card_pending"))
+        row["payment_pending"] = flt(row.get("payment_pending"))
+        row["unmatched_balance"] = flt(
+            row["current_balance"] - row["documented_pending"]
+        )
+        row["source_label"] = "، ".join(
+            source.get("name") or source.get("type") or ""
+            for source in row.get("sources") or []
+        )
+        row["destination_label"] = "، ".join(row.get("destination_accounts") or [])
+
+        if row.get("disabled"):
+            alerts.append(
+                {
+                    "severity": "critical",
+                    "type": "disabled_account",
+                    "title": _("Referenced clearing account is disabled"),
+                    "message": _("Account {0} is disabled but still linked to treasury settings.").format(row["account"]),
+                    "account": row["account"],
+                }
+            )
+        if row["current_balance"] < -0.005:
+            alerts.append(
+                {
+                    "severity": "critical",
+                    "type": "negative_balance",
+                    "title": _("Negative clearing balance"),
+                    "message": _("Account {0} has a negative balance of {1}.").format(
+                        row["account"], row["current_balance"]
+                    ),
+                    "account": row["account"],
+                }
+            )
+        if abs(row["unmatched_balance"]) > 0.01:
+            alerts.append(
+                {
+                    "severity": "warning",
+                    "type": "unmatched_balance",
+                    "title": _("Clearing balance needs review"),
+                    "message": _("Account {0} differs from documented open settlements by {1}.").format(
+                        row["account"], row["unmatched_balance"]
+                    ),
+                    "account": row["account"],
+                }
+            )
+        account_rows.append(row)
+
+    for batch in open_card_batches:
+        if batch.get("overdue") or batch.get("status") == "Disputed":
+            alerts.append(
+                {
+                    "severity": batch.get("severity"),
+                    "type": "card_batch",
+                    "title": _("Card settlement batch needs attention"),
+                    "message": _("Batch {0} is {1} with {2} still outstanding.").format(
+                        batch.get("name"), batch.get("status"), batch.get("outstanding_amount")
+                    ),
+                    "doctype": "Card Settlement Batch",
+                    "document": batch.get("name"),
+                }
+            )
+
+    for reconciliation in open_reconciliations:
+        if reconciliation.get("overdue"):
+            alerts.append(
+                {
+                    "severity": reconciliation.get("severity"),
+                    "type": "payment_reconciliation",
+                    "title": _("Payment reconciliation is overdue"),
+                    "message": _("Reconciliation {0} for {1} has been open for {2} day(s).").format(
+                        reconciliation.get("name"),
+                        reconciliation.get("mode_of_payment") or "-",
+                        reconciliation.get("age_days") or 0,
+                    ),
+                    "doctype": "Shift Payment Reconciliation",
+                    "document": reconciliation.get("name"),
+                }
+            )
+
+    severity_order = {"critical": 0, "warning": 1, "info": 2}
+    alerts.sort(key=lambda row: (severity_order.get(row.get("severity"), 9), row.get("title") or ""))
+    open_card_batches.sort(key=lambda row: (-cint(row.get("overdue")), -cint(row.get("age_days")), row.get("name") or ""))
+    open_reconciliations.sort(key=lambda row: (-cint(row.get("overdue")), -cint(row.get("age_days")), row.get("name") or ""))
+    account_rows.sort(key=lambda row: (-cint(row.get("overdue_document_count")), -abs(flt(row.get("unmatched_balance"))), row.get("account") or ""))
+
+    currencies = {row.get("currency") for row in account_rows if row.get("currency")}
+    summary_currency = next(iter(currencies)) if len(currencies) == 1 else ""
+    total_clearing_balance = sum(flt(row.get("current_balance")) for row in account_rows)
+    total_documented_pending = sum(flt(row.get("documented_pending")) for row in account_rows)
+    total_unmatched_balance = flt(total_clearing_balance - total_documented_pending)
+
+    return {
+        "generated_on": nowdate(),
+        "currency": summary_currency,
+        "summary": {
+            "clearing_account_count": len(account_rows),
+            "total_clearing_balance": total_clearing_balance,
+            "total_documented_pending": total_documented_pending,
+            "total_unmatched_balance": total_unmatched_balance,
+            "accounts_needing_review": sum(
+                1 for row in account_rows if abs(flt(row.get("unmatched_balance"))) > 0.01
+            ),
+            "open_card_batch_count": len(open_card_batches),
+            "open_card_batch_amount": sum(
+                flt(row.get("outstanding_amount")) for row in open_card_batches
+            ),
+            "overdue_card_batch_count": sum(cint(row.get("overdue")) for row in open_card_batches),
+            "overdue_card_batch_amount": sum(
+                flt(row.get("outstanding_amount"))
+                for row in open_card_batches
+                if row.get("overdue")
+            ),
+            "open_reconciliation_count": len(open_reconciliations),
+            "open_reconciliation_amount": sum(
+                flt(row.get("pending_amount")) for row in open_reconciliations
+            ),
+            "overdue_reconciliation_count": sum(
+                cint(row.get("overdue")) for row in open_reconciliations
+            ),
+            "overdue_reconciliation_amount": sum(
+                flt(row.get("pending_amount"))
+                for row in open_reconciliations
+                if row.get("overdue")
+            ),
+            "critical_alert_count": sum(1 for row in alerts if row.get("severity") == "critical"),
+            "warning_alert_count": sum(1 for row in alerts if row.get("severity") == "warning"),
+        },
+        "accounts": account_rows,
+        "open_card_batches": open_card_batches,
+        "open_reconciliations": open_reconciliations,
+        "alerts": alerts,
+    }
 
 
 def _get_payment_method_setups():

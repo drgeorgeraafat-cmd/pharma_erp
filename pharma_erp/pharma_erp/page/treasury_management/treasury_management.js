@@ -5,11 +5,11 @@ frappe.pages["treasury-management"].on_page_load = function (wrapper) {
         single_column: true,
     });
 
-    new TreasuryManagementPageV8(page, wrapper);
+    new TreasuryManagementPageV9(page, wrapper);
 };
 
 
-class TreasuryManagementPageV8 {
+class TreasuryManagementPageV9 {
     constructor(page, wrapper) {
         this.page = page;
         this.wrapper = wrapper;
@@ -166,6 +166,32 @@ class TreasuryManagementPageV8 {
                 .tmv3-action-success { color: var(--green-700); border-color: var(--green-200); }
                 .tmv3-balance-positive { color: var(--green-700); font-weight: 800; }
                 .tmv3-balance-negative { color: var(--red-600); font-weight: 800; }
+                .tmv3-balance-review { color: var(--orange-700); font-weight: 800; }
+                .tmv3-alerts { display: grid; gap: 8px; margin-bottom: 14px; }
+                .tmv3-alert {
+                    border: 1px solid var(--border-color);
+                    border-radius: 10px;
+                    padding: 10px 12px;
+                    display: grid;
+                    grid-template-columns: auto 1fr auto;
+                    gap: 10px;
+                    align-items: center;
+                }
+                .tmv3-alert-critical { border-color: var(--red-300); background: var(--red-50); }
+                .tmv3-alert-warning { border-color: var(--orange-300); background: var(--orange-50); }
+                .tmv3-alert-info { border-color: var(--blue-200); background: var(--blue-50); }
+                .tmv3-alert-title { font-weight: 800; }
+                .tmv3-alert-message { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+                .tmv3-alert-icon { font-size: 16px; }
+                .tmv3-dashboard-note {
+                    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+                    color: var(--text-muted); font-size: 12px; margin-bottom: 12px;
+                }
+                .tmv3-dashboard-ok {
+                    border: 1px solid var(--green-200); background: var(--green-50);
+                    color: var(--green-700); border-radius: 10px; padding: 11px 12px;
+                    margin-bottom: 12px; font-weight: 700;
+                }
                 .tmv3-activity-table { width: 100%; border-collapse: collapse; min-width: 760px; }
                 .tmv3-activity-table th, .tmv3-activity-table td {
                     padding: 8px; border-bottom: 1px solid var(--border-color); text-align: right;
@@ -1435,6 +1461,7 @@ class TreasuryManagementPageV8 {
                     ${this.card(__("تسويات دفع مفتوحة"), data.open_payment_reconciliations, __("Shift Reconciliation"))}
                 </div>
 
+                ${this.renderPendingDashboard(data.pending_dashboard || {})}
                 ${this.renderDrawers(data.drawers || [])}
                 ${this.renderBanks(data.banks || [])}
                 ${this.renderTerminals(data.terminals || [])}
@@ -1443,6 +1470,171 @@ class TreasuryManagementPageV8 {
                 ${this.renderWarnings(data.account_warnings || [])}
             </div>
         `);
+    }
+
+
+    renderPendingDashboard(data) {
+        const summary = data.summary || {};
+        const currency = data.currency || "";
+        const alerts = data.alerts || [];
+        const accounts = data.accounts || [];
+        const cardBatches = data.open_card_batches || [];
+        const reconciliations = data.open_reconciliations || [];
+
+        const severityLabel = (severity) => ({
+            critical: __("حرج"),
+            warning: __("مراجعة"),
+            info: __("معلّق"),
+        }[severity] || __("تنبيه"));
+        const severityIcon = (severity) => ({
+            critical: "●",
+            warning: "▲",
+            info: "●",
+        }[severity] || "●");
+        const routeForAlert = (row) => {
+            if (row.doctype === "Card Settlement Batch") {
+                return `/app/card-settlement-batch/${encodeURIComponent(row.document || "")}`;
+            }
+            if (row.doctype === "Shift Payment Reconciliation") {
+                return `/app/shift-payment-reconciliation/${encodeURIComponent(row.document || "")}`;
+            }
+            if (row.account) {
+                return `/app/account/${encodeURIComponent(row.account)}`;
+            }
+            return "";
+        };
+
+        const alertsHtml = alerts.length
+            ? `<div class="tmv3-alerts">${alerts.map((row) => {
+                const route = routeForAlert(row);
+                return `
+                    <div class="tmv3-alert tmv3-alert-${this.esc(row.severity || "info")}">
+                        <div class="tmv3-alert-icon">${severityIcon(row.severity)}</div>
+                        <div>
+                            <div class="tmv3-alert-title">${this.esc(row.title || severityLabel(row.severity))}</div>
+                            <div class="tmv3-alert-message">${this.esc(row.message || "")}</div>
+                        </div>
+                        ${route ? `<a class="tmv3-action-btn" href="${route}">${__("فتح")}</a>` : ""}
+                    </div>
+                `;
+            }).join("")}</div>`
+            : `<div class="tmv3-dashboard-ok">${__("لا توجد تنبيهات حرجة أو تسويات متأخرة حاليًا.")}</div>`;
+
+        const accountRows = accounts.length
+            ? accounts.map((row) => {
+                const difference = Number(row.unmatched_balance || 0);
+                const differenceClass = Math.abs(difference) <= 0.01
+                    ? "tmv3-balance-positive"
+                    : "tmv3-balance-review";
+                const overdueBadge = Number(row.overdue_document_count || 0) > 0
+                    ? `<span class="tmv3-badge tmv3-badge-off">${this.esc(row.overdue_document_count)} ${__("متأخرة")}</span>`
+                    : `<span class="tmv3-badge tmv3-badge-on">${__("لا توجد متأخرات")}</span>`;
+                return `
+                    <tr>
+                        <td><a href="/app/account/${encodeURIComponent(row.account || "")}">${this.esc(row.account || "-")}</a></td>
+                        <td>${this.esc(row.source_label || "-")}</td>
+                        <td>${this.esc(row.destination_label || "-")}</td>
+                        <td>${this.formatMoney(row.current_balance, row.currency || currency)}</td>
+                        <td>${this.formatMoney(row.documented_pending, row.currency || currency)}</td>
+                        <td class="${differenceClass}">${this.formatMoney(row.unmatched_balance, row.currency || currency)}</td>
+                        <td>${this.esc(row.open_document_count || 0)}</td>
+                        <td>${overdueBadge}<br><small>${this.esc(row.oldest_pending_days || 0)} ${__("يوم")}</small></td>
+                        <td>${this.esc((row.last_movement || {}).posting_date || "-")}</td>
+                    </tr>
+                `;
+            }).join("")
+            : `<tr><td colspan="9" class="tmv3-empty">${__("لا توجد حسابات Clearing مرتبطة بالإعدادات الحالية.")}</td></tr>`;
+
+        const cardRows = cardBatches.length
+            ? cardBatches.map((row) => `
+                <tr>
+                    <td><a href="/app/card-settlement-batch/${encodeURIComponent(row.name || "")}">${this.esc(row.name || "-")}</a></td>
+                    <td>${this.esc(row.pos_terminal || "-")}</td>
+                    <td>${this.esc(row.status || "-")}</td>
+                    <td>${this.esc(row.close_time || "-")}</td>
+                    <td>${this.formatMoney(row.outstanding_amount, currency)}</td>
+                    <td>${this.esc(row.age_days || 0)} ${__("يوم")}</td>
+                    <td><span class="tmv3-badge ${row.overdue ? "tmv3-badge-off" : "tmv3-badge-on"}">${row.overdue ? __("متأخرة") : __("معلّقة اليوم")}</span></td>
+                </tr>
+            `).join("")
+            : `<tr><td colspan="7" class="tmv3-empty">${__("لا توجد دفعات فيزا غير مسوّاة.")}</td></tr>`;
+
+        const reconciliationRows = reconciliations.length
+            ? reconciliations.map((row) => `
+                <tr>
+                    <td><a href="/app/shift-payment-reconciliation/${encodeURIComponent(row.name || "")}">${this.esc(row.name || "-")}</a></td>
+                    <td>${this.esc(row.mode_of_payment || "-")}</td>
+                    <td>${this.esc(row.shift_reference || "-")}</td>
+                    <td>${this.esc(row.status || "-")}</td>
+                    <td>${this.formatMoney(row.pending_amount, currency)}</td>
+                    <td>${this.esc(row.to_time || "-")}</td>
+                    <td>${this.esc(row.age_days || 0)} ${__("يوم")}</td>
+                    <td><span class="tmv3-badge ${row.overdue ? "tmv3-badge-off" : "tmv3-badge-on"}">${row.overdue ? __("متأخرة") : __("معلّقة اليوم")}</span></td>
+                </tr>
+            `).join("")
+            : `<tr><td colspan="8" class="tmv3-empty">${__("لا توجد تسويات دفع إلكتروني مفتوحة.")}</td></tr>`;
+
+        return `
+            <div class="tmv3-section">
+                <h4>${__("لوحة الأرصدة المعلّقة والتنبيهات والتسويات المتأخرة")}</h4>
+                <div class="tmv3-dashboard-note">
+                    <span>${__("الرصيد المعلّق هو رصيد حساب Clearing الفعلي، والمبلغ الموثق هو إجمالي المستندات المفتوحة المرتبطة به.")}</span>
+                    <span>${__("تاريخ اللوحة")}: ${this.esc(data.generated_on || "-")}</span>
+                </div>
+
+                <div class="tmv3-grid">
+                    ${this.card(__("إجمالي أرصدة Clearing"), this.formatMoney(summary.total_clearing_balance, currency), __("Unique Clearing Accounts"))}
+                    ${this.card(__("موثق بمستندات مفتوحة"), this.formatMoney(summary.total_documented_pending, currency), __("Open Settlements"))}
+                    ${this.card(__("فرق يحتاج مراجعة"), this.formatMoney(summary.total_unmatched_balance, currency), `${this.esc(summary.accounts_needing_review || 0)} ${__("حساب")}`)}
+                    ${this.card(__("دفعات فيزا مفتوحة"), summary.open_card_batch_count || 0, this.formatMoney(summary.open_card_batch_amount, currency))}
+                    ${this.card(__("تسويات دفع مفتوحة"), summary.open_reconciliation_count || 0, this.formatMoney(summary.open_reconciliation_amount, currency))}
+                    ${this.card(__("تسويات متأخرة"), Number(summary.overdue_card_batch_count || 0) + Number(summary.overdue_reconciliation_count || 0), this.formatMoney(Number(summary.overdue_card_batch_amount || 0) + Number(summary.overdue_reconciliation_amount || 0), currency))}
+                    ${this.card(__("تنبيهات حرجة"), summary.critical_alert_count || 0, __("Critical"))}
+                    ${this.card(__("تنبيهات مراجعة"), summary.warning_alert_count || 0, __("Warnings"))}
+                </div>
+
+                ${alertsHtml}
+
+                <h5>${__("أرصدة حسابات Clearing")}</h5>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table" style="min-width:1250px;">
+                        <thead><tr>
+                            <th>${__("حساب Clearing")}</th><th>${__("المصدر")}</th><th>${__("الحساب النهائي")}</th>
+                            <th>${__("الرصيد الفعلي")}</th><th>${__("موثق بمستندات")}</th><th>${__("الفرق")}</th>
+                            <th>${__("مستندات مفتوحة")}</th><th>${__("التأخير")}</th><th>${__("آخر حركة")}</th>
+                        </tr></thead>
+                        <tbody>${accountRows}</tbody>
+                    </table>
+                </div>
+
+                <h5 style="margin-top:18px;">${__("دفعات الفيزا غير المسوّاة")}</h5>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table">
+                        <thead><tr>
+                            <th>${__("الدفعة")}</th><th>${__("الماكينة")}</th><th>${__("الحالة")}</th>
+                            <th>${__("وقت الإغلاق")}</th><th>${__("المتبقي")}</th><th>${__("العمر")}</th><th>${__("التصنيف")}</th>
+                        </tr></thead>
+                        <tbody>${cardRows}</tbody>
+                    </table>
+                </div>
+
+                <h5 style="margin-top:18px;">${__("تسويات الدفع الإلكتروني المفتوحة")}</h5>
+                <div class="tmv3-table-wrap">
+                    <table class="tmv3-table">
+                        <thead><tr>
+                            <th>${__("التسوية")}</th><th>${__("طريقة الدفع")}</th><th>${__("الوردية")}</th><th>${__("الحالة")}</th>
+                            <th>${__("المبلغ المعلّق")}</th><th>${__("حتى")}</th><th>${__("العمر")}</th><th>${__("التصنيف")}</th>
+                        </tr></thead>
+                        <tbody>${reconciliationRows}</tbody>
+                    </table>
+                </div>
+
+                <div class="tmv3-preview-note">
+                    <strong>${__("قاعدة التأخير")}:</strong>
+                    ${__("يُصنف المستند كمتأخر عندما يظل مفتوحًا بعد تاريخ الإغلاق أو نهاية الفترة. مستندات اليوم تظهر كمعلّقة وليست متأخرة.")}
+                </div>
+            </div>
+        `;
     }
 
     renderDrawers(rows) {
