@@ -1,0 +1,166 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-06-26 03:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "invoice_control_section",
+  "default_entry_mode",
+  "require_supplier_invoice_number",
+  "prevent_duplicate_supplier_invoice_number",
+  "require_supplier_invoice_attachment",
+  "default_cash_invoice_excluded_from_claim",
+  "batch_control_section",
+  "enable_automatic_batch_generation",
+  "require_batch_number",
+  "require_expiry_date",
+  "require_manager_approval_for_auto_batch",
+  "auto_batch_prefix",
+  "pricing_control_section",
+  "retail_price_update_policy",
+  "selling_price_list",
+  "retail_price_difference_tolerance",
+  "block_batch_price_conflict"
+ ],
+ "fields": [
+  {
+   "fieldname": "invoice_control_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Invoice Control"
+  },
+  {
+   "default": "Quick Invoice & Receipt",
+   "fieldname": "default_entry_mode",
+   "fieldtype": "Select",
+   "label": "Default Purchase Entry Mode",
+   "options": "Quick Invoice & Receipt\nAgainst Purchase Order"
+  },
+  {
+   "default": "1",
+   "fieldname": "require_supplier_invoice_number",
+   "fieldtype": "Check",
+   "label": "Require Supplier Invoice Number"
+  },
+  {
+   "default": "1",
+   "fieldname": "prevent_duplicate_supplier_invoice_number",
+   "fieldtype": "Check",
+   "label": "Prevent Duplicate Supplier Invoice Number"
+  },
+  {
+   "default": "0",
+   "fieldname": "require_supplier_invoice_attachment",
+   "fieldtype": "Check",
+   "label": "Require Supplier Invoice Attachment"
+  },
+  {
+   "default": "1",
+   "fieldname": "default_cash_invoice_excluded_from_claim",
+   "fieldtype": "Check",
+   "label": "Exclude Cash Invoices From Supplier Claims"
+  },
+  {
+   "fieldname": "batch_control_section",
+   "fieldtype": "Section Break",
+   "label": "Batch and Expiry Control"
+  },
+  {
+   "default": "1",
+   "description": "When enabled, a missing batch number is generated using the configured prefix, item code, expiry date, and a sequence.",
+   "fieldname": "enable_automatic_batch_generation",
+   "fieldtype": "Check",
+   "label": "Enable Automatic Batch Generation"
+  },
+  {
+   "default": "1",
+   "fieldname": "require_batch_number",
+   "fieldtype": "Check",
+   "label": "Require Batch Number for Batch Items"
+  },
+  {
+   "default": "1",
+   "fieldname": "require_expiry_date",
+   "fieldtype": "Check",
+   "label": "Require Expiry Date for Expiry Items"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_automatic_batch_generation",
+   "fieldname": "require_manager_approval_for_auto_batch",
+   "fieldtype": "Check",
+   "label": "Require Manager Approval for Auto Batch"
+  },
+  {
+   "default": "AUTO",
+   "depends_on": "eval:doc.enable_automatic_batch_generation",
+   "fieldname": "auto_batch_prefix",
+   "fieldtype": "Data",
+   "label": "Automatic Batch Prefix"
+  },
+  {
+   "fieldname": "pricing_control_section",
+   "fieldtype": "Section Break",
+   "label": "Printed Retail Price Control"
+  },
+  {
+   "default": "Ask Before Update",
+   "fieldname": "retail_price_update_policy",
+   "fieldtype": "Select",
+   "label": "Update Current Item Price From Purchases",
+   "options": "Do Not Update\nAsk Before Update\nUpdate Automatically"
+  },
+  {
+   "fieldname": "selling_price_list",
+   "fieldtype": "Link",
+   "label": "Current Selling Price List",
+   "options": "Price List"
+  },
+  {
+   "default": "0.01",
+   "fieldname": "retail_price_difference_tolerance",
+   "fieldtype": "Currency",
+   "label": "Retail Price Difference Tolerance"
+  },
+  {
+   "default": "1",
+   "fieldname": "block_batch_price_conflict",
+   "fieldtype": "Check",
+   "label": "Block Different Retail Price for Existing Batch"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-06-26 03:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Purchase Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Purchase Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

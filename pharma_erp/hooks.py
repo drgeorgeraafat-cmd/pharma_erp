@@ -247,9 +247,19 @@ app_license = "mit"
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
+
+doctype_js = {
+    "Purchase Invoice": "public/js/purchase_invoice.js",
+}
+
 doc_events = {
     "Customer": {
         "before_insert": "pharma_erp.customer_events.set_customer_code"
+    },
+    "Purchase Invoice": {
+        "validate": "pharma_erp.purchase_management.validate_purchase_invoice",
+        "before_submit": "pharma_erp.purchase_management.before_submit_purchase_invoice",
+        "on_submit": "pharma_erp.purchase_management.on_submit_purchase_invoice",
     },
     "Payment Entry": {
         "validate": [

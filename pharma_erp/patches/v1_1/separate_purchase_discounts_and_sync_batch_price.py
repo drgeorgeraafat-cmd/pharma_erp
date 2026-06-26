@@ -1,0 +1,129 @@
+"""Separate supplier, additional and effective purchase discounts."""
+
+from __future__ import annotations
+
+import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from frappe.utils import flt
+
+
+def execute():
+    create_custom_fields(
+        {
+            "Purchase Invoice Item": [
+                {
+                    "fieldname": "custom_supplier_discount_percentage",
+                    "label": "Supplier / Base Discount %",
+                    "fieldtype": "Percent",
+                    "insert_after": "custom_selling_price",
+                    "in_list_view": 1,
+                },
+                {
+                    "fieldname": "custom_effective_discount_percentage",
+                    "label": "Effective Discount %",
+                    "fieldtype": "Percent",
+                    "read_only": 1,
+                    "no_copy": 1,
+                    "insert_after": "custom_additional_discount",
+                    "in_list_view": 1,
+                },
+            ]
+        },
+        update=True,
+    )
+
+    _update_custom_field_order()
+    _hide_standard_discount_input()
+    _backfill_purchase_invoice_items()
+
+    frappe.clear_cache(doctype="Purchase Invoice Item")
+    frappe.clear_cache(doctype="Purchase Invoice")
+    frappe.clear_cache(doctype="Batch")
+
+
+def _update_custom_field_order():
+    updates = {
+        "custom_additional_discount": {
+            "label": "Additional Line Discount %",
+            "insert_after": "custom_supplier_discount_percentage",
+            "in_list_view": 1,
+        },
+        "custom_effective_discount_percentage": {
+            "insert_after": "custom_additional_discount",
+        },
+    }
+    for fieldname, values in updates.items():
+        name = frappe.db.get_value(
+            "Custom Field",
+            {"dt": "Purchase Invoice Item", "fieldname": fieldname},
+            "name",
+        )
+        if name:
+            frappe.db.set_value("Custom Field", name, values, update_modified=False)
+
+
+def _hide_standard_discount_input():
+    # The standard field remains populated with the effective discount for ERPNext's
+    # totals engine. Users enter the two component discounts in the custom fields.
+    for prop, value, prop_type in (
+        ("hidden", "1", "Check"),
+        ("in_list_view", "0", "Check"),
+    ):
+        name = f"Purchase Invoice Item-discount_percentage-{prop}"
+        if frappe.db.exists("Property Setter", name):
+            frappe.db.set_value(
+                "Property Setter", name, "value", value, update_modified=False
+            )
+            continue
+        ps = frappe.new_doc("Property Setter")
+        ps.name = name
+        ps.doctype_or_field = "DocField"
+        ps.doc_type = "Purchase Invoice Item"
+        ps.field_name = "discount_percentage"
+        ps.property = prop
+        ps.property_type = prop_type
+        ps.value = value
+        ps.flags.ignore_permissions = True
+        ps.insert(ignore_permissions=True)
+
+
+def _backfill_purchase_invoice_items():
+    meta = frappe.get_meta("Purchase Invoice Item")
+    if not (
+        meta.has_field("custom_supplier_discount_percentage")
+        and meta.has_field("custom_effective_discount_percentage")
+    ):
+        return
+
+    rows = frappe.get_all(
+        "Purchase Invoice Item",
+        fields=[
+            "name",
+            "discount_percentage",
+            "custom_additional_discount",
+            "custom_supplier_discount_percentage",
+            "custom_effective_discount_percentage",
+        ],
+    )
+    for row in rows:
+        effective = max(0.0, min(100.0, flt(row.discount_percentage)))
+        additional = max(0.0, min(100.0, flt(row.custom_additional_discount)))
+        base = flt(row.custom_supplier_discount_percentage)
+        if not base and effective:
+            if additional >= 100:
+                base = 0.0
+            else:
+                remaining_after_additional = 1.0 - additional / 100.0
+                base = 100.0 * (
+                    1.0 - (1.0 - effective / 100.0) / remaining_after_additional
+                )
+                base = max(0.0, min(100.0, base))
+        frappe.db.set_value(
+            "Purchase Invoice Item",
+            row.name,
+            {
+                "custom_supplier_discount_percentage": base,
+                "custom_effective_discount_percentage": effective,
+            },
+            update_modified=False,
+        )

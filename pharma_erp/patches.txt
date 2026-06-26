@@ -16,3 +16,8 @@ pharma_erp.patches.v1_0.migrate_card_shift_financial_scripts_to_app
 pharma_erp.patches.v1_0.setup_treasury_roles_and_approval
 pharma_erp.patches.v1_0.setup_shift_cash_movement_approval
 pharma_erp.patches.v1_0.setup_treasury_voucher_categories
+pharma_erp.patches.v1_1.setup_purchase_management_foundation
+
+pharma_erp.patches.v1_1.fix_purchase_printed_retail_price_editable
+
+pharma_erp.patches.v1_1.separate_purchase_discounts_and_sync_batch_price
