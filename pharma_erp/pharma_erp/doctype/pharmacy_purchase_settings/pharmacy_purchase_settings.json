@@ -21,7 +21,17 @@
   "retail_price_update_policy",
   "selling_price_list",
   "retail_price_difference_tolerance",
-  "block_batch_price_conflict"
+  "block_batch_price_conflict",
+  "shortcuts_section",
+  "enable_purchase_shortcuts",
+  "enter_moves_to_next_row",
+  "shortcut_add_item",
+  "shortcut_focus_item_search",
+  "shortcuts_column_break",
+  "shortcut_delete_row",
+  "shortcut_save_draft",
+  "shortcut_new_invoice",
+  "shortcut_open_official_document"
  ],
  "fields": [
   {
@@ -127,6 +137,74 @@
    "fieldname": "block_batch_price_conflict",
    "fieldtype": "Check",
    "label": "Block Different Retail Price for Existing Batch"
+  },
+  {
+   "fieldname": "shortcuts_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Page Keyboard Shortcuts"
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_purchase_shortcuts",
+   "fieldtype": "Check",
+   "label": "Enable Purchase Page Shortcuts"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "fieldname": "enter_moves_to_next_row",
+   "fieldtype": "Check",
+   "label": "Enter Moves to Same Field in Next Row"
+  },
+  {
+   "default": "F1",
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "description": "Examples: F1, CTRL+I, ALT+A",
+   "fieldname": "shortcut_add_item",
+   "fieldtype": "Data",
+   "label": "Add Item / Open Item Search"
+  },
+  {
+   "default": "F2",
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "description": "Focus the barcode or item-code input.",
+   "fieldname": "shortcut_focus_item_search",
+   "fieldtype": "Data",
+   "label": "Focus Barcode / Item Code"
+  },
+  {
+   "default": "CTRL+DELETE",
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "description": "Deletes the currently active purchase row after confirmation.",
+   "fieldname": "shortcut_delete_row",
+   "fieldtype": "Data",
+   "label": "Delete Active Item Row"
+  },
+  {
+   "default": "CTRL+S",
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "fieldname": "shortcut_save_draft",
+   "fieldtype": "Data",
+   "label": "Save Draft"
+  },
+  {
+   "default": "CTRL+N",
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "fieldname": "shortcut_new_invoice",
+   "fieldtype": "Data",
+   "label": "New Invoice"
+  },
+  {
+   "default": "CTRL+O",
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "fieldname": "shortcut_open_official_document",
+   "fieldtype": "Data",
+   "label": "Open Official Purchase Invoice"
+  },
+  {
+   "depends_on": "eval:doc.enable_purchase_shortcuts",
+   "fieldname": "shortcuts_column_break",
+   "fieldtype": "Column Break"
   }
  ],
  "grid_page_length": 50,
