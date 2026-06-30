@@ -26,6 +26,10 @@ class PurchaseInvoiceManagementPageV1 {
         this.activeRowIndex = null;
         this.recentPanelOpen = false;
         this.wideMode = true;
+        this.initialRenderComplete = false;
+        this.supplierInvoiceTotalManual = false;
+        this.supplierInvoiceTotalAutoUpdating = false;
+        this.lastAutoSupplierInvoiceTotal = 0;
 
         this.addStyles();
         this.setupLayoutControls();
@@ -37,6 +41,11 @@ class PurchaseInvoiceManagementPageV1 {
             __("Invoice")
         );
         this.$openButton.prop("disabled", true);
+        this.$validateButton = this.page.add_inner_button(__("Validate Invoice"), () => this.validateAndReport(), __("Actions"));
+        this.$submitButton = this.page.add_inner_button(__("Submit"), () => this.submitInvoice(), __("Invoice"));
+        this.$cancelButton = this.page.add_inner_button(__("Cancel"), () => this.cancelInvoice(), __("Invoice"));
+        this.$submitButton.prop("disabled", true);
+        this.$cancelButton.prop("disabled", true);
         this.page.add_inner_button(__("Refresh"), () => this.loadBootstrap(), __("Actions"));
         this.$wideButton = this.page.add_inner_button(__("Normal Width"), () => this.toggleWideMode(), __("View"));
         this.$fullscreenButton = this.page.add_inner_button(__("Full Screen"), () => this.toggleFullScreen(), __("View"));
@@ -85,7 +94,7 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-items-header,
                 .pimv1-row-grid {
                     display: grid;
-                    grid-template-columns: 34px 1.65fr .55fr .72fr .78fr .70fr .70fr .68fr .80fr .80fr .82fr .84fr 1.15fr .72fr;
+                    grid-template-columns: 32px 1.45fr .48fr .60fr .68fr .68fr .62fr .62fr .62fr .70fr .70fr .72fr .72fr 1.00fr .62fr;
                     gap: 5px;
                     align-items: center;
                     width: 100%;
@@ -136,6 +145,26 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-shortcuts-hint { margin-top: 8px; color: var(--text-muted); font-size: 11px; }
                 .pimv1-readonly-cell { font-weight: 700; }
                 .pimv1-tax-note { margin-top: 8px; color: var(--text-muted); font-size: 11px; }
+                .pimv1-item-search-box { border:1px solid var(--border-color); border-radius:10px; padding:10px; background:var(--card-bg); }
+                .pimv1-item-search-results { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; max-height:260px; overflow:auto; }
+                .pimv1-search-card { border:1px solid var(--border-color); border-radius:10px; padding:10px; cursor:pointer; background:var(--control-bg); text-align:right; }
+                .pimv1-search-card:hover { border-color:var(--primary); background:var(--blue-50); }
+                .pimv1-search-card.is-keyboard-active {
+                    border-color: var(--primary);
+                    background: var(--blue-50);
+                    box-shadow: 0 0 0 2px rgba(59, 130, 246, .18);
+                }
+                .pimv1-search-card-title { font-weight:800; display:flex; justify-content:space-between; gap:8px; }
+                .pimv1-search-card-meta { color:var(--text-muted); font-size:11px; margin-top:4px; }
+                .pimv1-risk-badges { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+                .pimv1-risk-badge { border-radius:999px; padding:2px 7px; font-size:10px; font-weight:700; }
+                .pimv1-risk-warning { background:var(--orange-100); color:var(--orange-700); }
+                .pimv1-risk-critical { background:var(--red-100); color:var(--red-700); }
+                .pimv1-risk-ok { background:var(--green-100); color:var(--green-700); }
+                .pimv1-item-row.status-critical { background:var(--red-50); box-shadow:inset -3px 0 0 var(--red-500); }
+                .pimv1-item-row.status-warning { background:var(--orange-50); box-shadow:inset -3px 0 0 var(--orange-500); }
+                .pimv1-item-risk-dot { margin-inline-start:4px; }
+
                 .pimv1-summary { display: grid; grid-template-columns: 1.4fr .9fr; gap: 12px; margin-top: 14px; }
                 .pimv1-summary-box { border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
                 .pimv1-summary-row { display: flex; justify-content: space-between; gap: 16px; padding: 9px 12px; border-bottom: 1px solid var(--border-color); }
@@ -309,11 +338,15 @@ class PurchaseInvoiceManagementPageV1 {
                         <div class="pimv1-field" data-field="bill_date"></div>
                         <div class="pimv1-field" data-field="due_date"></div>
                         <div class="pimv1-field" data-field="taxes_and_charges"></div>
-                        <div class="pimv1-field" data-field="tax_included_in_print_rate"></div>
+                        <div class="pimv1-field" data-field="tax_included_in_print_rate" style="display:none"></div>
                         <div class="pimv1-field" data-field="invoice_discount_percentage"></div>
                         <div class="pimv1-field" data-field="additional_charge_account"></div>
                         <div class="pimv1-field" data-field="additional_charge_amount"></div>
+                        <div class="pimv1-field" data-field="supplier_invoice_total"></div>
+                        <div class="pimv1-field" data-field="fraction_adjustment"></div>
+                        <div class="pimv1-field"><label class="control-label">${__("Expected Claim Period")}</label><div class="pimv1-claim-period" data-role="claim-period">—</div></div>
                     </div>
+                    <div class="pimv1-validation-panel" data-role="validation-panel"></div>
                     <div class="pimv1-grid pimv1-grid-2" style="margin-top: 12px;">
                         <div class="pimv1-field" data-field="remarks"></div>
                         <div>
@@ -380,6 +413,8 @@ class PurchaseInvoiceManagementPageV1 {
         this.renderRows();
         this.renderRecentInvoices(this.bootstrap.recent_invoices || []);
         this.refreshCards();
+        this.offerLocalDraftRestore();
+        this.initialRenderComplete = true;
     }
 
     makeControl(fieldname, df, value, onchange) {
@@ -421,7 +456,7 @@ class PurchaseInvoiceManagementPageV1 {
         }, "", () => this.refreshSupplierClassification());
         this.makeControl("posting_date", { label: __("Posting Date"), fieldtype: "Date", reqd: 1 }, today);
         this.makeControl("bill_no", { label: __("Supplier Invoice No"), fieldtype: "Data", reqd: 1 }, "");
-        this.makeControl("bill_date", { label: __("Supplier Invoice Date"), fieldtype: "Date" }, today);
+        this.makeControl("bill_date", { label: __("Supplier Invoice Date"), fieldtype: "Date" }, today, () => this.refreshClaimPeriod());
         this.makeControl("due_date", { label: __("Due Date"), fieldtype: "Date" }, today);
         this.makeControl("taxes_and_charges", {
             label: __("Invoice Tax Template (Optional)"), fieldtype: "Link", options: "Purchase Taxes and Charges Template",
@@ -438,6 +473,14 @@ class PurchaseInvoiceManagementPageV1 {
             get_query: () => ({ filters: { company: this.value("company"), is_group: 0, root_type: "Expense", disabled: 0 } }),
         }, "");
         this.makeControl("additional_charge_amount", { label: __("Shipping / Additional Charges"), fieldtype: "Currency" }, 0, () => this.refreshCards());
+        const supplierInvoiceTotalControl = this.makeControl("supplier_invoice_total", {
+            label: __("Supplier Invoice Total"),
+            fieldtype: "Currency",
+            reqd: cint((this.bootstrap.purchase_settings || {}).require_exact_supplier_invoice_total),
+            description: __("Filled automatically from the system total. Edit only when the supplier invoice differs by a permitted rounding fraction.")
+        }, 0, () => this.refreshCards());
+        this.bindSupplierInvoiceTotalManualInput(supplierInvoiceTotalControl);
+        this.makeControl("fraction_adjustment", { label: __("Fraction Adjustment"), fieldtype: "Currency", read_only: 1 }, 0);
         this.makeControl("remarks", { label: __("Purchase Notes"), fieldtype: "Small Text" }, "");
     }
 
@@ -466,14 +509,26 @@ class PurchaseInvoiceManagementPageV1 {
             this.setActiveRow(Number($(event.currentTarget).data("row-index")));
         });
         this.$main.on("keydown.pimv1", "[data-inline-field]", (event) => {
-            if (event.key !== "Enter" || !cint(this.shortcutSetting("enter_moves_to_next_row", 1))) return;
+            const isEnter = event.key === "Enter" && cint(this.shortcutSetting("enter_moves_to_next_row", 1));
+            const isArrow = event.key === "ArrowDown" || event.key === "ArrowUp";
+            if (!isEnter && !isArrow) return;
+
             event.preventDefault();
+            event.stopPropagation();
+
             const $field = $(event.currentTarget);
             const index = Number($field.data("index"));
             const fieldname = $field.data("inline-field");
             const applied = this.applyInlineValue($field);
             if (applied === false) return;
-            window.setTimeout(() => this.focusSameFieldInNextRow(index, fieldname), 0);
+
+            if (isEnter) {
+                window.setTimeout(() => this.focusSameFieldInNextRow(index, fieldname), 0);
+                return;
+            }
+
+            const direction = event.key === "ArrowDown" ? 1 : -1;
+            window.setTimeout(() => this.focusSameFieldInAdjacentRow(index, fieldname, direction), 0);
         });
         this.$main.on("click.pimv1", "[data-action='open-invoice']", (event) => frappe.set_route("Form", "Purchase Invoice", $(event.currentTarget).data("name")));
         this.$main.on("click.pimv1", "[data-action='toggle-recent']", () => this.toggleRecentPanel());
@@ -571,15 +626,20 @@ class PurchaseInvoiceManagementPageV1 {
         this.deleteRow(this.activeRowIndex);
     }
 
+    focusSameFieldInAdjacentRow(index, fieldname, direction) {
+        const targetIndex = index + direction;
+        if (!this.rows[targetIndex]) return;
+        const $target = this.$main.find(`[data-inline-field="${fieldname}"][data-index="${targetIndex}"]`);
+        if (!$target.length) return;
+        this.setActiveRow(targetIndex);
+        $target.trigger("focus").select();
+    }
+
     focusSameFieldInNextRow(index, fieldname) {
         const nextIndex = index + 1;
         if (this.rows[nextIndex]) {
-            const $next = this.$main.find(`[data-inline-field="${fieldname}"][data-index="${nextIndex}"]`);
-            if ($next.length) {
-                this.setActiveRow(nextIndex);
-                $next.trigger("focus").select();
-                return;
-            }
+            this.focusSameFieldInAdjacentRow(index, fieldname, 1);
+            return;
         }
         this.focusItemSearch();
     }
@@ -603,12 +663,38 @@ class PurchaseInvoiceManagementPageV1 {
         this.supplierContext = response.message || {};
         if (this.supplierContext.default_payment_classification) {
             await this.controls.payment_classification.set_value(this.supplierContext.default_payment_classification);
+        } else if (this.supplierContext.custom_purchase_payment_model === "Mixed") {
+            await this.controls.payment_classification.set_value("");
         }
+        await this.refreshClaimPeriod();
         this.refreshCards();
     }
 
     refreshSupplierClassification() {
+        this.refreshClaimPeriod();
         this.refreshCards();
+    }
+
+    async refreshClaimPeriod() {
+        const supplier = this.value("supplier");
+        const billDate = this.value("bill_date");
+        const classification = this.value("payment_classification");
+        const $target = this.$main.find("[data-role='claim-period']");
+        if (!supplier || !billDate) { $target.text("—"); return; }
+        if (classification === "Cash Invoice" || classification === "Credit Invoice Outside Claim") {
+            $target.text(__("Excluded from supplier claims"));
+            return;
+        }
+        const response = await frappe.call({
+            method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.get_claim_period",
+            args: { supplier, bill_date: billDate },
+        });
+        const period = response.message || {};
+        if (period.period_from && period.period_to) {
+            $target.text(`${frappe.datetime.str_to_user(period.period_from)} → ${frappe.datetime.str_to_user(period.period_to)} (${__("Supplier Invoice Date")})`);
+        } else {
+            $target.text(__("Set claim cycle days on the Supplier."));
+        }
     }
 
     async addByBarcode() {
@@ -618,8 +704,7 @@ class PurchaseInvoiceManagementPageV1 {
         try {
             const context = await this.fetchItemContext(null, searchValue);
             const row = this.rowFromItemContext(context);
-            this.rows.push(row);
-            const index = this.rows.length - 1;
+            const index = this.addOrMergeRow(row);
             input.val("");
             this.renderRows();
             this.refreshCards();
@@ -639,21 +724,43 @@ class PurchaseInvoiceManagementPageV1 {
     }
 
     rowFromItemContext(context) {
-        const latest = context.latest_supplier_purchase || context.latest_purchase || {};
-        const printed = flt(context.custom_customer_price || latest.printed_retail_price || 0);
+        const latest=context.latest_supplier_purchase || context.latest_purchase || {};
+        const customerPrice=flt(context.custom_customer_price || latest.printed_retail_price || 0);
+        const taxRate=flt(context.default_item_tax_rate);
+        const taxMode=taxRate ? ((this.bootstrap.purchase_settings||{}).default_tax_entry_mode || "Auto by VAT %") : "No VAT";
+        const risk=this.evaluateRisk(context.risk || {},1,flt(context.conversion_factor)||1,"");
         return this.rowFromDialog({
-            item_code: context.item_code,
-            qty: 1,
-            uom: context.purchase_uom || context.stock_uom || "",
-            printed_retail_price: printed,
-            supplier_discount: flt(latest.supplier_discount || 0),
-            additional_discount: flt(latest.additional_discount || 0),
-            batch_no: "",
-            expiry_date: "",
-            item_tax_template: context.default_item_tax_template || "",
-            is_bonus: 0,
-            auto_batch_reason: "",
-        }, context);
+            item_code:context.item_code,qty:1,uom:context.purchase_uom||context.stock_uom||"",customer_price:customerPrice,
+            supplier_base_price:flt(latest.supplier_base_price || customerPrice),
+            pricing_method:(this.bootstrap.purchase_settings||{}).default_pricing_method || "Discount From Customer Price",
+            supplier_discount:flt(latest.supplier_discount||0),additional_discount:flt(latest.additional_discount||0),
+            tax_entry_mode:taxMode,vat_inclusive:1,vat_rate:taxRate,net_before_vat:0,vat_per_unit:0,total_vat:0,net_rate:0,
+            batch_no:"",expiry_date:"",item_tax_template:context.default_item_tax_template||"",is_bonus:0,auto_batch_reason:"",
+            risk_level:risk.level,risk_flags:risk.flags,risk_confirmed:0,risk_confirmation_reason:"",
+        },context);
+    }
+
+    addOrMergeRow(row) {
+        const canMerge = cint((this.bootstrap.purchase_settings || {}).auto_merge_same_item_batch)
+            && row.batch_no
+            && row.expiry_date;
+        if (canMerge) {
+            const existingIndex = this.rows.findIndex((candidate) =>
+                candidate.item_code === row.item_code
+                && cint(candidate.is_bonus) === cint(row.is_bonus)
+                && (candidate.batch_no || "") === (row.batch_no || "")
+                && (candidate.expiry_date || "") === (row.expiry_date || "")
+                && (candidate.item_tax_template || "") === (row.item_tax_template || "")
+                && Math.abs(flt(candidate.net_rate) - flt(row.net_rate)) < 0.0001
+            );
+            if (existingIndex >= 0) {
+                this.rows[existingIndex].qty = flt(this.rows[existingIndex].qty) + flt(row.qty);
+                this.recalculateRow(this.rows[existingIndex]);
+                return existingIndex;
+            }
+        }
+        this.rows.push(row);
+        return this.rows.length - 1;
     }
 
     async fetchItemContext(itemCode, searchValue) {
@@ -672,157 +779,427 @@ class PurchaseInvoiceManagementPageV1 {
         return response.message || {};
     }
 
-    openItemDialog(index = null, initialContext = null) {
-        const editing = Number.isInteger(index) && this.rows[index];
-        const existing = editing ? this.rows[index] : {};
-        let context = initialContext || (editing ? existing : {});
-        const dialog = new frappe.ui.Dialog({
-            title: editing ? __("Edit Purchase Line") : __("Add Purchase Item"),
-            size: "extra-large",
-            fields: [
-                { fieldname: "item_code", label: __("Item"), fieldtype: "Link", options: "Item", reqd: 1, default: existing.item_code || context.item_code || "", get_query: () => ({
-                    query: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.search_purchase_items",
-                    filters: { warehouse: this.value("warehouse") || "" },
-                }) },
-                { fieldname: "item_snapshot", fieldtype: "HTML" },
-                { fieldname: "item_movement", label: __("Item Movement"), fieldtype: "Button" },
-                { fieldname: "qty", label: __("Quantity"), fieldtype: "Float", reqd: 1, default: existing.qty || 1 },
-                { fieldname: "uom", label: __("Purchase UOM"), fieldtype: "Link", options: "UOM", reqd: 1, hidden: 1, default: existing.uom || context.purchase_uom || context.stock_uom || "" },
-                { fieldname: "column_1", fieldtype: "Column Break" },
-                { fieldname: "printed_retail_price", label: __("Printed Retail Price"), fieldtype: "Currency", reqd: 1, default: existing.printed_retail_price || context.custom_customer_price || 0 },
-                { fieldname: "supplier_discount", label: __("Supplier / Base Discount %"), fieldtype: "Percent", default: existing.supplier_discount || 0 },
-                { fieldname: "additional_discount", label: __("Additional Line Discount %"), fieldtype: "Percent", default: existing.additional_discount || 0 },
-                { fieldname: "discount_preview", fieldtype: "HTML" },
-                { fieldname: "batch_section", label: __("Batch & Tax"), fieldtype: "Section Break" },
-                { fieldname: "batch_no", label: __("Supplier Batch Number"), fieldtype: "Data", default: existing.batch_no || "" },
-                { fieldname: "expiry_date", label: __("Expiry Date"), fieldtype: "Data", placeholder: "DD/MM/YYYY", description: __("Example: 31/1/29 becomes 31/01/2029"), default: this.formatDateForInput(existing.expiry_date || "") },
-                { fieldname: "item_tax_template", label: __("Item Tax Template"), fieldtype: "Link", options: "Item Tax Template", default: existing.item_tax_template || context.default_item_tax_template || "", get_query: () => ({ filters: { company: this.value("company"), disabled: 0 } }) },
-                { fieldname: "column_2", fieldtype: "Column Break" },
-                { fieldname: "is_bonus", label: __("This is a Bonus Line"), fieldtype: "Check", default: existing.is_bonus || 0 },
-                { fieldname: "auto_batch_reason", label: __("Auto Batch Reason"), fieldtype: "Small Text", default: existing.auto_batch_reason || "" },
-                { fieldname: "bonus_section", label: __("Create Separate Bonus Line"), fieldtype: "Section Break", depends_on: "eval:!doc.is_bonus" },
-                { fieldname: "bonus_qty", label: __("Bonus Quantity"), fieldtype: "Float", default: 0, depends_on: "eval:!doc.is_bonus" },
-                { fieldname: "bonus_batch_no", label: __("Bonus Batch Number"), fieldtype: "Data", depends_on: "eval:!doc.is_bonus" },
-                { fieldname: "bonus_expiry_date", label: __("Bonus Expiry Date"), fieldtype: "Data", placeholder: "DD/MM/YYYY", description: __("Example: 31/1/29 becomes 31/01/2029"), depends_on: "eval:!doc.is_bonus" },
-            ],
-            primary_action_label: editing ? __("Update Line") : __("Add Line"),
-            primary_action: (values) => {
-                const expiryDate = this.parseFlexibleDate(values.expiry_date);
-                const bonusExpiryDate = this.parseFlexibleDate(values.bonus_expiry_date);
-                if ((values.expiry_date || "").trim() && !expiryDate) {
-                    frappe.msgprint({ title: __("Invalid Expiry Date"), message: __("Enter Expiry Date as DD/MM/YYYY, for example 31/1/29."), indicator: "red" });
-                    return;
-                }
-                if ((values.bonus_expiry_date || "").trim() && !bonusExpiryDate) {
-                    frappe.msgprint({ title: __("Invalid Bonus Expiry Date"), message: __("Enter Bonus Expiry Date as DD/MM/YYYY, for example 31/1/29."), indicator: "red" });
-                    return;
-                }
-                values.expiry_date = expiryDate || "";
-                values.bonus_expiry_date = bonusExpiryDate || "";
-                const row = this.rowFromDialog(values, context);
-                if (editing) this.rows[index] = row;
-                else this.rows.push(row);
-
-                if (!values.is_bonus && flt(values.bonus_qty) > 0) {
-                    this.rows.push({
-                        ...row,
-                        row_id: this.makeRowId(),
-                        qty: flt(values.bonus_qty),
-                        is_bonus: 1,
-                        supplier_discount: 0,
-                        additional_discount: 0,
-                        effective_discount: 100,
-                        net_rate: 0,
-                        amount: 0,
-                        batch_no: values.bonus_batch_no || values.batch_no || "",
-                        expiry_date: values.bonus_expiry_date || values.expiry_date || "",
-                    });
-                }
-                dialog.hide();
-                this.renderRows();
-                this.refreshCards();
-            },
+    mergeRisks(...risks) {
+        const rank={None:0,Warning:1,Critical:2};
+        const flags=[]; const messages=[]; let level="None";
+        risks.filter(Boolean).forEach((risk)=>{
+            (risk.flags||[]).forEach((flag)=>{if(!flags.includes(flag))flags.push(flag)});
+            (risk.messages||[]).forEach((message)=>{if(!messages.includes(message))messages.push(message)});
+            if((rank[risk.level]||0)>(rank[level]||0))level=risk.level;
         });
+        if(flags.length>=2 && level==="Warning")level="Critical";
+        return {level,flags,messages};
+    }
 
-        dialog.fields_dict.item_snapshot.$wrapper
-            .addClass("pimv1-item-snapshot-fixed")
-            .html(`
-                <div class="pimv1-help" style="display:flex;align-items:center;justify-content:center;text-align:center">
-                    <span>${__("Select an item to view stock and purchase history.")}</span>
-                </div>
-            `);
-
-        const refreshPreview = () => {
-            const values = dialog.get_values(true) || {};
-            const preview = this.calculateLine(values);
-            dialog.fields_dict.discount_preview.$wrapper.html(`
-                <div class="pimv1-help" style="margin-top:8px">
-                    ${__("Effective Discount")}: <strong>${this.number(preview.effective_discount)}%</strong>
-                    &nbsp; | &nbsp; ${__("Net Rate")}: <strong>${this.money(preview.net_rate)}</strong>
-                </div>
-            `);
-        };
-        const updateSnapshot = () => {
-            const latest = context.latest_supplier_purchase || context.latest_purchase;
-            const history = context.purchase_history || [];
-            const historyHtml = history.length ? `
-                <div class="pimv1-history"><table><thead><tr><th>${__("Date")}</th><th>${__("Supplier")}</th><th>${__("Printed")}</th><th>${__("Net Disc.")}</th><th>${__("Final Net Rate")}</th></tr></thead><tbody>
-                ${history.map((row) => `<tr><td>${this.escape(row.posting_date || "")}</td><td>${this.escape(row.supplier_name || row.supplier || "")}</td><td>${this.money(row.printed_retail_price)}</td><td>${this.number(row.net_discount_after_tax)}%</td><td>${this.money(row.final_net_rate)}</td></tr>`).join("")}
-                </tbody></table></div>` : "";
-            dialog.fields_dict.item_snapshot.$wrapper.html(`
-                <div class="pimv1-help">
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
-                        <div>
-                            <strong>${this.escape(context.item_name || context.item_code || "")}</strong>
-                            &nbsp; | &nbsp; ${__("Stock")}: ${this.number(context.actual_qty)} ${this.escape(context.stock_uom || "")}
-                            &nbsp; | &nbsp; ${__("Current Printed Price")}: ${this.money(context.custom_customer_price)}
-                            &nbsp; | &nbsp; ${__("Last Purchase")}: ${latest ? this.money(latest.rate) : "—"}
-                        </div>
-                        <button type="button" class="btn btn-sm btn-default pimv1-item-movement-visible">
-                            ${__("Sales & Purchase Movement")}
-                        </button>
-                    </div>
-                    ${historyHtml}
-                </div>
-            `);
-            dialog.fields_dict.item_snapshot.$wrapper
-                .off("click.pimv1-visible-movement")
-                .on("click.pimv1-visible-movement", ".pimv1-item-movement-visible", () => {
-                    const itemCode = dialog.get_value("item_code");
-                    if (!itemCode) {
-                        frappe.show_alert({ message: __("Select an item first."), indicator: "orange" }, 4);
-                        return;
-                    }
-                    this.openItemMovement(itemCode);
-                });
-        };
-
-        const loadSelectedItem = async () => {
-            const itemCode = dialog.get_value("item_code");
-            if (!itemCode) return;
-            context = await this.fetchItemContext(itemCode, null);
-            dialog.set_value("uom", context.purchase_uom || context.stock_uom || "");
-            if (!flt(dialog.get_value("printed_retail_price"))) dialog.set_value("printed_retail_price", context.custom_customer_price || 0);
-            if (!dialog.get_value("item_tax_template")) dialog.set_value("item_tax_template", context.default_item_tax_template || "");
-            updateSnapshot();
-            refreshPreview();
-        };
-
-        dialog.fields_dict.item_code.df.onchange = loadSelectedItem;
-        ["printed_retail_price", "supplier_discount", "additional_discount", "is_bonus"].forEach((fieldname) => {
-            dialog.fields_dict[fieldname].df.onchange = refreshPreview;
-        });
-        // Keep the field for backward compatibility, but the visible movement action is rendered
-        // beside stock and last-purchase information in the item snapshot.
-        dialog.fields_dict.item_movement.$wrapper.hide();
-        dialog.show();
-        if (context.item_code || existing.item_code) {
-            updateSnapshot();
-            refreshPreview();
-            if (existing.item_code && !context.purchase_uom && !context.stock_uom) {
-                loadSelectedItem();
-            }
+    expiryRisk(expiryDate) {
+        const expiryIso=this.parseFlexibleDate(expiryDate);
+        if(!expiryIso)return {level:"None",flags:[],messages:[]};
+        const postingIso=this.parseFlexibleDate(this.value("posting_date")) || frappe.datetime.get_today();
+        const expiry=new Date(`${expiryIso}T00:00:00Z`);
+        const posting=new Date(`${postingIso}T00:00:00Z`);
+        if(Number.isNaN(expiry.getTime())||Number.isNaN(posting.getTime()))return {level:"None",flags:[],messages:[]};
+        const daysRemaining=Math.ceil((expiry-posting)/86400000);
+        if(daysRemaining<0){
+            return {level:"Critical",flags:["EXPIRED_ITEM"],messages:[__("Expired item: expiry date {0} is before the receipt date.",[this.formatDateForInput(expiryIso)])],days_remaining:daysRemaining};
         }
+        const warningMonths=Math.max(1,cint((this.bootstrap.purchase_settings||{}).near_expiry_warning_months||6));
+        const threshold=new Date(posting.getTime());
+        threshold.setUTCMonth(threshold.getUTCMonth()+warningMonths);
+        if(expiry<=threshold){
+            return {level:"Warning",flags:["NEAR_EXPIRY"],messages:[__("Near expiry: {0} — {1} days remaining.",[this.formatDateForInput(expiryIso),daysRemaining])],days_remaining:daysRemaining};
+        }
+        return {level:"None",flags:[],messages:[],days_remaining:daysRemaining};
+    }
+
+    evaluateRisk(metrics, qty, conversionFactor=1, expiryDate="") {
+        const settings=this.bootstrap.purchase_settings||{};
+        const expiryRisk=this.expiryRisk(expiryDate);
+        if (!cint(settings.enable_purchase_risk_alerts)) return expiryRisk;
+        const projected=flt(metrics.current_qty)+flt(qty)*(flt(conversionFactor)||1);
+        const avg=flt(metrics.avg_daily_sales); const coverage=avg>0?projected/avg:null;
+        const flags=[]; const messages=[];
+        if (Array.isArray(metrics.flags)) { metrics.flags.forEach((f)=>{if(!flags.includes(f)) flags.push(f);}); }
+        if (Array.isArray(metrics.messages)) metrics.messages.forEach((m)=>messages.push(m));
+        const minQty=flt(settings.minimum_stock_qty_for_warning||0); const maxCoverage=cint(settings.high_stock_coverage_days||90);
+        if (projected>=minQty && (avg<=0 || (coverage!==null && coverage>=maxCoverage)) && !flags.includes("HIGH_STOCK_SLOW_MOVEMENT")) {
+            flags.push("HIGH_STOCK_SLOW_MOVEMENT"); messages.push(__("Projected stock {0}; slow movement / high stock coverage.",[this.number(projected)]));
+        }
+        const movementLevel=flags.includes("DORMANT_ITEM")||flags.length>=2?"Critical":(flags.length?"Warning":"None");
+        const merged=this.mergeRisks({level:movementLevel,flags,messages},expiryRisk);
+        return {...merged,projected_qty:projected,coverage_days:coverage,days_remaining:expiryRisk.days_remaining};
+    }
+
+    riskHtml(risk) {
+        if (!risk || risk.level==="None") return `<div class="pimv1-risk-badges"><span class="pimv1-risk-badge pimv1-risk-ok">✓ ${__("Normal movement")}</span></div>`;
+        const cls=risk.level==="Critical"?"pimv1-risk-critical":"pimv1-risk-warning";
+        return `<div class="pimv1-risk-badges">${(risk.messages||[]).map(m=>`<span class="pimv1-risk-badge ${cls}">${this.escape(m)}</span>`).join("")}</div>`;
+    }
+
+    async searchItemCards(dialog, text, selectItem) {
+        const $results=dialog.fields_dict.item_search_ui.$wrapper.find("[data-role='item-search-results']");
+        const query=(text||"").trim();
+        if (!query) {
+            $results.removeData("active-index").html(`<div class="text-muted">${__("Type item name, Arabic name, code or barcode.")}</div>`);
+            return;
+        }
+        $results.removeData("active-index").html(`<div class="text-muted">${__("Searching...")}</div>`);
+        const response=await frappe.call({
+            method:"pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.search_purchase_item_cards",
+            args:{
+                search_text:query,
+                warehouse:this.value("warehouse"),
+                supplier:this.value("supplier"),
+                limit:cint((this.bootstrap.purchase_settings||{}).item_search_result_limit||10)
+            }
+        });
+        const rows=response.message||[];
+        $results.html(rows.length?rows.map((row,index)=>{
+            const risk=row.risk||{};
+            const cls=risk.level==="Critical"?"pimv1-risk-critical":(risk.level==="Warning"?"pimv1-risk-warning":"pimv1-risk-ok");
+            return `<button type="button"
+                class="pimv1-search-card ${index===0?"is-keyboard-active":""}"
+                data-search-index="${index}"
+                data-item-code="${this.escape(row.item_code)}">
+                <div class="pimv1-search-card-title">
+                    <span>${this.escape(row.item_name||row.item_code)}</span>
+                    <span>${this.escape(row.item_code)}</span>
+                </div>
+                <div class="pimv1-search-card-meta">
+                    ${__("Stock")}: <strong>${this.number(row.actual_qty)} ${this.escape(row.stock_uom||"")}</strong>
+                    • ${__("Customer Price")}: ${this.money(row.customer_price)}
+                    • ${__("Last Purchase")}: ${row.last_purchase_rate?this.money(row.last_purchase_rate):"—"}
+                </div>
+                <div class="pimv1-risk-badges">
+                    <span class="pimv1-risk-badge ${cls}">
+                        ${risk.level==="None"?"✓ "+__("Normal movement"):(risk.messages||[]).slice(0,2).map(x=>this.escape(x)).join(" • ")}
+                    </span>
+                </div>
+            </button>`;
+        }).join(""):`<div class="text-muted">${__("No matching items.")}</div>`);
+
+        if (rows.length) $results.data("active-index",0);
+
+        $results.off("click.pimv1-card").on("click.pimv1-card","[data-item-code]",(e)=>{
+            const $card=$(e.currentTarget);
+            $results.find(".pimv1-search-card").removeClass("is-keyboard-active");
+            $card.addClass("is-keyboard-active");
+            $results.data("active-index",Number($card.data("search-index"))||0);
+            selectItem($card.data("item-code"));
+        });
+    }
+
+    focusOpenItemDialogSearch(dialog = null, immediate = false) {
+        const activeDialog = dialog || this.activeItemDialog;
+        if (!activeDialog || !activeDialog.$wrapper || !activeDialog.fields_dict.item_search_ui) return;
+
+        const $input = activeDialog.fields_dict.item_search_ui.$wrapper.find("[data-role='item-card-search']");
+        if (!$input.length) return;
+
+        const input = $input.get(0);
+        const $modal = activeDialog.$wrapper.is(".modal")
+            ? activeDialog.$wrapper
+            : activeDialog.$wrapper.find(".modal").first();
+
+        let userTyped = false;
+        let userMovedElsewhere = false;
+        let finalFocusApplied = false;
+
+        $input.off("input.pimv1-focus-state").on("input.pimv1-focus-state", () => {
+            userTyped = true;
+        });
+
+        activeDialog.$wrapper
+            .off("pointerdown.pimv1-focus-cancel")
+            .on("pointerdown.pimv1-focus-cancel", (event) => {
+                if (event.target !== input && !$(event.target).closest("[data-role='item-card-search']").length) {
+                    userMovedElsewhere = true;
+                }
+            });
+
+        const applyFocus = ({ final = false } = {}) => {
+            if (!activeDialog.$wrapper.is(":visible") || userMovedElsewhere) return;
+            if (final && finalFocusApplied) return;
+
+            try {
+                input.focus({ preventScroll: true });
+            } catch (_error) {
+                $input.trigger("focus");
+            }
+
+            if (userTyped) {
+                const end = String(input.value || "").length;
+                if (typeof input.setSelectionRange === "function") {
+                    input.setSelectionRange(end, end);
+                }
+            } else if (typeof input.select === "function") {
+                input.select();
+            }
+
+            if (final) finalFocusApplied = true;
+        };
+
+        if (immediate) {
+            applyFocus({ final: true });
+            return;
+        }
+
+        // Give immediate visual feedback, then focus once more only after Bootstrap/Frappe
+        // has completed the modal transition and its own first-field autofocus.
+        window.requestAnimationFrame(() => applyFocus());
+
+        const finalAfterShown = () => {
+            window.requestAnimationFrame(() => {
+                window.setTimeout(() => applyFocus({ final: true }), 0);
+            });
+        };
+
+        ($modal.length ? $modal : activeDialog.$wrapper)
+            .off("shown.bs.modal.pimv1-final-search-focus")
+            .one("shown.bs.modal.pimv1-final-search-focus", finalAfterShown);
+
+        // Fallback for themes/builds where shown.bs.modal is not emitted on the expected node.
+        window.setTimeout(() => applyFocus({ final: true }), 650);
+    }
+
+    openItemDialog(index = null, initialContext = null) {
+        if (!Number.isInteger(index) && !initialContext && this.activeItemDialog && this.activeItemDialog.$wrapper && this.activeItemDialog.$wrapper.is(":visible")) {
+            this.focusOpenItemDialogSearch(this.activeItemDialog, true);
+            return;
+        }
+        const editing=Number.isInteger(index)&&this.rows[index];
+        const existing=editing?this.rows[index]:{};
+        let context=initialContext||(editing?existing:{}), searchTimer=null, updating=false, pricingMethodTouched=!!editing, supplierPriceTouched=!!editing;
+        const dialog=new frappe.ui.Dialog({title:editing?__("Edit Purchase Line"):__("Add Purchase Item"),size:"extra-large",fields:[
+            {fieldname:"item_search_ui",fieldtype:"HTML"},{fieldname:"item_code",fieldtype:"Data",hidden:1,default:existing.item_code||context.item_code||""},
+            {fieldname:"item_snapshot",fieldtype:"HTML"},{fieldname:"qty",label:__("Quantity"),fieldtype:"Float",reqd:1,default:existing.qty||1},
+            {fieldname:"uom",fieldtype:"Data",hidden:1,default:existing.uom||context.purchase_uom||context.stock_uom||""},{fieldname:"column_1",fieldtype:"Column Break"},
+            {fieldname:"customer_price",label:__("Customer Price"),fieldtype:"Currency",reqd:1,default:existing.customer_price||context.custom_customer_price||0},
+            {fieldname:"pricing_method",label:__("Purchase Pricing Method"),fieldtype:"Select",options:"Discount From Customer Price\nDiscount From Supplier Base Price\nDirect Net Before VAT\nDirect Final Net Rate",default:existing.pricing_method||(this.bootstrap.purchase_settings||{}).default_pricing_method||"Discount From Customer Price"},
+            {fieldname:"supplier_base_price",label:__("Supplier Invoice Price"),fieldtype:"Currency",default:existing.supplier_base_price||0},
+            {fieldname:"supplier_discount",label:__("Supplier / Base Discount %"),fieldtype:"Percent",default:existing.supplier_discount||0},
+            {fieldname:"additional_discount",label:__("Additional Line Discount %"),fieldtype:"Percent",default:existing.additional_discount||0},
+            {fieldname:"tax_section",label:__("VAT & Final Cost"),fieldtype:"Section Break"},
+            {fieldname:"item_tax_template",label:__("Item Tax Template"),fieldtype:"Link",options:"Item Tax Template",default:existing.item_tax_template||context.default_item_tax_template||"",get_query:()=>({filters:{company:this.value("company"),disabled:0}})},
+            {fieldname:"tax_entry_mode",label:__("VAT Entry Mode"),fieldtype:"Select",options:"No VAT\nAuto by VAT %\nVAT Per Unit\nTotal VAT for Line",default:existing.tax_entry_mode||((this.bootstrap.purchase_settings||{}).default_tax_entry_mode)||"Auto by VAT %"},
+            {fieldname:"vat_inclusive",label:__("VAT Included in Final Net Rate"),fieldtype:"Check",default:existing.vat_inclusive === undefined ? 1 : cint(existing.vat_inclusive),description:__("Enabled: entered VAT is already inside the discounted item total. Disabled: VAT is added above the discounted item total.")},
+            {fieldname:"vat_rate",label:__("VAT Rate %"),fieldtype:"Percent",default:existing.vat_rate||context.default_item_tax_rate||0},
+            {fieldname:"net_before_vat",label:__("Net Before VAT"),fieldtype:"Currency",default:existing.entered_net_before_vat||existing.net_before_vat||0,description:__("When Direct Net Before VAT is selected, this is the supplier net before the separate Additional Discount.")},
+            {fieldname:"tax_column",fieldtype:"Column Break"},{fieldname:"vat_per_unit",label:__("VAT Per Unit"),fieldtype:"Currency",default:existing.vat_per_unit||0},
+            {fieldname:"total_vat",label:__("Total VAT for Line"),fieldtype:"Currency",default:existing.total_vat||0},
+            {fieldname:"net_rate",label:__("Final Net Rate"),fieldtype:"Currency",reqd:1,default:existing.net_rate||0},{fieldname:"discount_preview",fieldtype:"HTML"},
+            {fieldname:"batch_section",label:__("Batch & Expiry"),fieldtype:"Section Break"},{fieldname:"batch_no",label:__("Supplier Batch Number"),fieldtype:"Data",default:existing.batch_no||""},
+            {fieldname:"expiry_date",label:__("Expiry Date"),fieldtype:"Data",placeholder:"DD/MM/YYYY",default:this.formatDateForInput(existing.expiry_date||"")},
+            {fieldname:"batch_column",fieldtype:"Column Break"},{fieldname:"is_bonus",label:__("This is a Bonus Line"),fieldtype:"Check",default:existing.is_bonus||0},
+            {fieldname:"auto_batch_reason",label:__("Auto Batch Reason"),fieldtype:"Small Text",default:existing.auto_batch_reason||""},
+            {fieldname:"risk_section",label:__("Purchase Risk Review"),fieldtype:"Section Break"},{fieldname:"risk_snapshot",fieldtype:"HTML"},
+            {fieldname:"risk_confirmed",label:__("Confirm Item and Quantity"),fieldtype:"Check",default:existing.risk_confirmed||0},
+            {fieldname:"risk_confirmation_reason",label:__("Confirmation Reason"),fieldtype:"Select",options:"\nRequested by Pharmacy\nCustomer Special Order\nApproved Promotion\nIntentional Stock Increase\nReplacement / Correction\nOther",default:existing.risk_confirmation_reason||""},
+            {fieldname:"bonus_section",label:__("Create Separate Bonus Line"),fieldtype:"Section Break",depends_on:"eval:!doc.is_bonus"},
+            {fieldname:"bonus_qty",label:__("Bonus Quantity"),fieldtype:"Float",default:0,depends_on:"eval:!doc.is_bonus"},{fieldname:"bonus_batch_no",label:__("Bonus Batch Number"),fieldtype:"Data",depends_on:"eval:!doc.is_bonus"},
+            {fieldname:"bonus_expiry_date",label:__("Bonus Expiry Date"),fieldtype:"Data",placeholder:"DD/MM/YYYY",depends_on:"eval:!doc.is_bonus"},
+        ],primary_action_label:editing?__("Update Line"):__("Add Line"),primary_action:(values)=>{
+            if (!values.item_code) { frappe.show_alert({message:__("Select an item."),indicator:"red"},4); return; }
+            const expiry=this.parseFlexibleDate(values.expiry_date), bonusExpiry=this.parseFlexibleDate(values.bonus_expiry_date);
+            if ((values.expiry_date||"").trim()&&!expiry) { frappe.msgprint(__("Invalid Expiry Date.")); return; }
+            values.expiry_date=expiry||""; values.bonus_expiry_date=bonusExpiry||"";
+            const risk=this.evaluateRisk(context.risk||{},values.qty,context.conversion_factor||1,values.expiry_date);
+            if (risk.level!=="None"&&cint((this.bootstrap.purchase_settings||{}).require_risk_confirmation)&&(!cint(values.risk_confirmed)||!values.risk_confirmation_reason)) { frappe.msgprint({title:__("Confirm Risk Item"),message:__("Confirm the item and quantity and select a reason."),indicator:"orange"}); return; }
+            values.vat_inclusive=cint(dialog.get_value("vat_inclusive"));
+            values.tax_entry_mode=dialog.get_value("tax_entry_mode")||"No VAT";
+            values.vat_per_unit=flt(dialog.get_value("vat_per_unit"));
+            values.total_vat=flt(dialog.get_value("total_vat"));
+            const row=this.rowFromDialog(values,context); if(editing)this.rows[index]=row;else this.addOrMergeRow(row);
+            if(!values.is_bonus&&flt(values.bonus_qty)>0){
+                const bonusDraft={
+                    ...row,
+                    row_id:this.makeRowId(),
+                    qty:flt(values.bonus_qty),
+                    is_bonus:1,
+                    // The taxable basis of an automatic bonus follows the purchased unit's
+                    // net value before VAT. The item itself remains free; only VAT is payable.
+                    supplier_base_price:flt(row.net_before_vat)||flt(row.supplier_base_price)||flt(row.customer_base_before_vat),
+                    supplier_discount:100,
+                    additional_discount:0,
+                    net_before_vat:0,
+                    batch_no:values.bonus_batch_no||values.batch_no||"",
+                    expiry_date:values.bonus_expiry_date||values.expiry_date||"",
+                    risk_level:"None",
+                    risk_flags:[],
+                    risk_confirmed:1
+                };
+                const bonusCalc=this.calculateLine(bonusDraft);
+                Object.assign(bonusDraft,{
+                    effective_discount:bonusCalc.effective_discount,
+                    customer_base_before_vat:bonusCalc.customer_base_before_vat,
+                    supplier_base_price:bonusCalc.supplier_base_price,
+                    vat_rate:bonusCalc.vat_rate,
+                    vat_per_unit:bonusCalc.vat_per_unit,
+                    total_vat:bonusCalc.total_vat,
+                    net_rate:bonusCalc.net_rate,
+                    amount:bonusCalc.amount
+                });
+                this.addOrMergeRow(bonusDraft);
+            }
+            dialog.hide();this.renderRows();this.refreshCards();
+        }});
+        dialog.fields_dict.item_search_ui.$wrapper.html(`<div class="pimv1-item-search-box"><input class="form-control" data-role="item-card-search" placeholder="${__("Search English / Arabic name, code or barcode")}"><div class="pimv1-item-search-results" data-role="item-search-results"><div class="text-muted">${__("Start typing to search items.")}</div></div></div>`);
+        const setIf=async(name,val)=>{if(String(dialog.get_value(name)||"")!==String(val??""))await dialog.set_value(name,val)};
+        const refresh=async()=>{if(updating)return;updating=true;try{const v=dialog.get_values(true)||{};v.vat_inclusive=cint(dialog.get_value("vat_inclusive"));v.tax_entry_mode=dialog.get_value("tax_entry_mode")||"No VAT";v.vat_per_unit=flt(dialog.get_value("vat_per_unit"));v.total_vat=flt(dialog.get_value("total_vat"));if((v.pricing_method||"")==="Direct Net Before VAT")v.entered_net_before_vat=flt(dialog.get_value("net_before_vat"));const c=this.calculateLine(v);await setIf("supplier_discount",c.supplier_discount);if(!supplierPriceTouched)await setIf("supplier_base_price",c.supplier_base_price);await setIf("vat_rate",c.vat_rate);if((v.pricing_method||"")!=="Direct Net Before VAT")await setIf("net_before_vat",c.net_before_vat);await setIf("vat_per_unit",c.vat_per_unit);await setIf("total_vat",c.total_vat);await setIf("net_rate",c.net_rate);const directBreakdown=(v.pricing_method||"")==="Direct Net Before VAT"?` • ${__("Net Before VAT After Additional Disc.")}: <strong>${this.money(c.net_before_vat)}</strong>`:"";dialog.fields_dict.discount_preview.$wrapper.html(`<div class="pimv1-help">${__("Net Disc.")}: <strong>${this.number(c.effective_discount)}%</strong>${directBreakdown} • ${__("Final Net Rate")}: <strong>${this.money(c.net_rate)}</strong> • ${__("Line Total")}: <strong>${this.money(c.amount)}</strong></div>`);const risk=this.evaluateRisk(context.risk||{},v.qty,context.conversion_factor||1,v.expiry_date);dialog.fields_dict.risk_snapshot.$wrapper.html(this.riskHtml(risk));}finally{updating=false}};
+        const snapshot=()=>{const latest=context.latest_supplier_purchase||context.latest_purchase;const history=context.purchase_history||[];dialog.fields_dict.item_snapshot.$wrapper.addClass("pimv1-item-snapshot-fixed").html(`<div class="pimv1-help"><div><strong>${this.escape(context.item_name||context.item_code||"")}</strong> • ${__("Stock")}: ${this.number(context.actual_qty)} ${this.escape(context.stock_uom||"")} • ${__("Customer Price")}: ${this.money(context.custom_customer_price)} • ${__("Last Purchase")}: ${latest?this.money(latest.final_net_rate||latest.rate):"—"} <button type="button" class="btn btn-xs btn-default pimv1-move">${__("Sales & Purchase Movement")}</button></div>${history.length?`<div class="pimv1-history"><table><thead><tr><th>${__("Date")}</th><th>${__("Supplier")}</th><th>${__("Printed")}</th><th>${__("Net Disc.")}</th><th>${__("Final Net Rate")}</th></tr></thead><tbody>${history.map(r=>`<tr><td>${this.escape(r.posting_date||"")}</td><td>${this.escape(r.supplier_name||r.supplier||"")}</td><td>${this.money(r.printed_retail_price)}</td><td>${this.number(r.net_discount_after_tax)}%</td><td>${this.money(r.final_net_rate)}</td></tr>`).join("")}</tbody></table></div>`:""}</div>`);dialog.fields_dict.item_snapshot.$wrapper.off("click.pimv1-move").on("click.pimv1-move",".pimv1-move",()=>this.openItemMovement(context.item_code));};
+        const applyTaxTemplate = async () => {
+            if (updating) return;
+            updating = true;
+            try {
+                const template = dialog.get_value("item_tax_template") || "";
+                const rate = template ? this.taxRateForTemplate(template) : 0;
+                await setIf("tax_entry_mode", template ? "Auto by VAT %" : "No VAT");
+                await setIf("vat_rate", rate);
+                if (template && !pricingMethodTouched) {
+                    await setIf("pricing_method", "Discount From Customer Price");
+                }
+                const customerPrice = flt(dialog.get_value("customer_price"));
+                if (!supplierPriceTouched && (dialog.get_value("pricing_method") || "") === "Discount From Customer Price") {
+                    await setIf("supplier_base_price", customerPrice);
+                }
+            } finally {
+                updating = false;
+            }
+            await refresh();
+        };
+        const selectItem=async(code)=>{
+            context=await this.fetchItemContext(code,null);
+            updating=true;
+            try {
+                await setIf("item_code",code);
+                await setIf("uom",context.purchase_uom||context.stock_uom||"");
+                if(!editing){
+                    const customerPrice=flt(context.custom_customer_price||0);
+                    const template=context.default_item_tax_template||"";
+                    const rate=flt(context.default_item_tax_rate||0);
+                    await setIf("customer_price",customerPrice);
+                    await setIf("item_tax_template",template);
+                    await setIf("tax_entry_mode",template?"Auto by VAT %":"No VAT");
+                    await setIf("vat_rate",rate);
+                    // Pharmacy printed/customer prices are VAT-inclusive; use them as the default discount basis.
+                    await setIf("pricing_method","Discount From Customer Price");
+                    await setIf("supplier_base_price",customerPrice);
+                    await setIf("vat_inclusive",1);
+                    supplierPriceTouched=false;
+                }
+            } finally {
+                updating=false;
+            }
+            snapshot();
+            await refresh();
+            dialog.fields_dict.item_search_ui.$wrapper.find("[data-role='item-card-search']").val(context.item_name||code);
+        };
+        const $search=dialog.fields_dict.item_search_ui.$wrapper.find("[data-role='item-card-search']");
+        $search.on("input",()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>this.searchItemCards(dialog,$search.val(),selectItem),300)});
+
+        let keyboardAdding=false;
+        const activeSearchCard=()=>{
+            const $results=dialog.fields_dict.item_search_ui.$wrapper.find("[data-role='item-search-results']");
+            let $cards=$results.find(".pimv1-search-card");
+            if(!$cards.length)return $();
+            let index=Number($results.data("active-index"));
+            if(!Number.isInteger(index)||index<0||index>=$cards.length)index=0;
+            $cards.removeClass("is-keyboard-active");
+            const $active=$cards.eq(index).addClass("is-keyboard-active");
+            $results.data("active-index",index);
+            return $active;
+        };
+        const moveSearchSelection=(direction)=>{
+            const $results=dialog.fields_dict.item_search_ui.$wrapper.find("[data-role='item-search-results']");
+            const $cards=$results.find(".pimv1-search-card");
+            if(!$cards.length)return;
+            let index=Number($results.data("active-index"));
+            if(!Number.isInteger(index))index=0;
+            index=(index+direction+$cards.length)%$cards.length;
+            $results.data("active-index",index);
+            $cards.removeClass("is-keyboard-active");
+            const element=$cards.eq(index).addClass("is-keyboard-active").get(0);
+            if(element)element.scrollIntoView({block:"nearest"});
+        };
+        const addActiveSearchResult=async()=>{
+            if(keyboardAdding)return;
+            const $active=activeSearchCard();
+            if(!$active.length)return;
+            const code=$active.data("item-code");
+            if(!code)return;
+            keyboardAdding=true;
+            try{
+                await selectItem(code);
+                // Enter from the result list is a true keyboard quick-add.
+                // The normal primary action still performs all validation and risk checks.
+                dialog.get_primary_btn().trigger("click");
+            }finally{
+                keyboardAdding=false;
+            }
+        };
+        $search.off("keydown.pimv1-search-nav").on("keydown.pimv1-search-nav",async(event)=>{
+            if(event.key==="ArrowDown"){
+                event.preventDefault();event.stopImmediatePropagation();moveSearchSelection(1);return;
+            }
+            if(event.key==="ArrowUp"){
+                event.preventDefault();event.stopImmediatePropagation();moveSearchSelection(-1);return;
+            }
+            if(event.key==="Enter"){
+                event.preventDefault();event.stopImmediatePropagation();await addActiveSearchResult();
+            }
+        });
+
+        ["qty","customer_price","supplier_discount","additional_discount","tax_entry_mode","vat_inclusive","vat_rate","vat_per_unit","total_vat","is_bonus"].forEach(f=>{
+            dialog.fields_dict[f].df.onchange=refresh;
+        });
+        dialog.fields_dict.supplier_base_price.df.onchange=async()=>{
+            if(updating)return;
+            supplierPriceTouched=true;
+            pricingMethodTouched=true;
+            const currentMethod=dialog.get_value("pricing_method")||"";
+            if(!currentMethod.startsWith("Direct")){
+                updating=true;
+                try{await setIf("pricing_method","Discount From Supplier Base Price");}finally{updating=false;}
+            }
+            await refresh();
+        };
+        dialog.fields_dict.pricing_method.df.onchange=async()=>{
+            if(updating)return;
+            pricingMethodTouched=true;
+            await refresh();
+        };
+        dialog.fields_dict.item_tax_template.df.onchange=applyTaxTemplate;
+        dialog.fields_dict.net_before_vat.df.onchange=async()=>{
+            if(updating)return;
+            updating=true;
+            try{await setIf("pricing_method","Direct Net Before VAT");}finally{updating=false;}
+            await refresh();
+        };
+        dialog.fields_dict.net_rate.df.onchange=async()=>{
+            if(updating)return;
+            updating=true;
+            try{await setIf("pricing_method","Direct Final Net Rate");}finally{updating=false;}
+            await refresh();
+        };
+
+        this.activeItemDialog = dialog;
+        dialog.$wrapper.off("hidden.bs.modal.pimv1-active-dialog").on("hidden.bs.modal.pimv1-active-dialog", () => {
+            if (this.activeItemDialog === dialog) this.activeItemDialog = null;
+        });
+        dialog.show();
+        this.focusOpenItemDialogSearch(dialog);
+        dialog.$wrapper.off("keydown.pimv1-add-line-enter").on("keydown.pimv1-add-line-enter",(event)=>{
+            if(event.key!=="Enter"||event.shiftKey||event.ctrlKey||event.altKey||event.metaKey)return;
+            const $target=$(event.target);
+            if($target.is("textarea,select")||$target.closest(".modal-footer").length)return;
+            const $visibleAutocomplete=dialog.$wrapper.find(".awesomplete ul:visible, .autocomplete-items:visible");
+            if($visibleAutocomplete.length)return;
+            if($target.is("[data-role='item-card-search']"))return;
+            if(!dialog.get_value("item_code"))return;
+            event.preventDefault();
+            event.stopPropagation();
+            dialog.get_primary_btn().trigger("click");
+        });
+        if(existing.item_code)selectItem(existing.item_code);
     }
 
     async openItemMovement(itemCode) {
@@ -889,40 +1266,139 @@ class PurchaseInvoiceManagementPageV1 {
     }
 
     rowFromDialog(values, context) {
-        const calculated = this.calculateLine(values);
+        const calculated=this.calculateLine(values);
+        const risk=this.evaluateRisk(context.risk||values.risk_metrics||{},flt(values.qty),flt(context.conversion_factor)||flt(values.conversion_factor)||1,values.expiry_date);
         return {
-            row_id: this.makeRowId(),
-            item_code: values.item_code,
-            item_name: context.item_name || values.item_code,
-            qty: flt(values.qty),
-            uom: values.uom || context.purchase_uom || context.stock_uom,
-            conversion_factor: flt(context.conversion_factor) || 1,
-            printed_retail_price: flt(values.printed_retail_price),
-            supplier_discount: flt(values.supplier_discount),
-            additional_discount: flt(values.additional_discount),
-            effective_discount: calculated.effective_discount,
-            net_rate: calculated.net_rate,
-            amount: calculated.amount,
-            batch_no: values.batch_no || "",
-            expiry_date: values.expiry_date || "",
-            item_tax_template: values.item_tax_template || "",
-            item_tax_rate: this.taxRateForTemplate(values.item_tax_template || context.default_item_tax_template || "") || flt(context.default_item_tax_rate),
-            is_bonus: cint(values.is_bonus),
-            auto_batch_reason: values.auto_batch_reason || "",
-            has_batch_no: cint(context.has_batch_no),
-            has_expiry_date: cint(context.has_expiry_date),
+            row_id:values.row_id||this.makeRowId(),item_code:values.item_code,item_name:context.item_name||values.item_name||values.item_code,
+            qty:flt(values.qty),uom:values.uom||context.purchase_uom||context.stock_uom,conversion_factor:flt(context.conversion_factor)||flt(values.conversion_factor)||1,
+            customer_price:flt(values.customer_price),printed_retail_price:flt(values.customer_price),customer_base_before_vat:calculated.customer_base_before_vat,
+            supplier_base_price:calculated.supplier_base_price,pricing_method:values.pricing_method||"Discount From Customer Price",
+            entered_net_before_vat:(values.pricing_method||"")==="Direct Net Before VAT"?flt(values.net_before_vat):flt(calculated.entered_net_before_vat||0),
+            supplier_discount:calculated.supplier_discount,additional_discount:flt(values.additional_discount),effective_discount:calculated.effective_discount,
+            tax_entry_mode:values.tax_entry_mode||"No VAT",vat_inclusive:values.vat_inclusive===undefined?1:cint(values.vat_inclusive),vat_rate:calculated.vat_rate,net_before_vat:calculated.net_before_vat,
+            vat_per_unit:calculated.vat_per_unit,total_vat:calculated.total_vat,net_rate:calculated.net_rate,amount:calculated.amount,
+            batch_no:values.batch_no||"",expiry_date:values.expiry_date||"",item_tax_template:values.item_tax_template||"",item_tax_rate:calculated.vat_rate,
+            is_bonus:cint(values.is_bonus),auto_batch_reason:values.auto_batch_reason||"",has_batch_no:cint(context.has_batch_no||values.has_batch_no),
+            has_expiry_date:cint(context.has_expiry_date||values.has_expiry_date),current_customer_price:flt(context.custom_customer_price||values.current_customer_price),
+            risk_level:risk.level,risk_flags:risk.flags,risk_messages:risk.messages,risk_confirmed:cint(values.risk_confirmed),
+            risk_confirmation_reason:values.risk_confirmation_reason||"",risk_metrics:context.risk||values.risk_metrics||{},
         };
     }
 
     calculateLine(values) {
-        const printed = flt(values.printed_retail_price);
-        const qty = flt(values.qty);
-        if (cint(values.is_bonus)) return { effective_discount: 100, net_rate: 0, amount: 0 };
-        const supplierDiscount = Math.max(0, Math.min(100, flt(values.supplier_discount)));
-        const additionalDiscount = Math.max(0, Math.min(100, flt(values.additional_discount)));
-        const effectiveDiscount = 100 * (1 - (1 - supplierDiscount / 100) * (1 - additionalDiscount / 100));
-        const netRate = printed * (1 - effectiveDiscount / 100);
-        return { effective_discount: effectiveDiscount, net_rate: netRate, amount: qty * netRate };
+        const customerPrice=flt(values.customer_price||values.printed_retail_price);
+        const qty=flt(values.qty)||1;
+        const mode=values.tax_entry_mode||"No VAT";
+        const vatInclusive=cint(values.vat_inclusive);
+        const templateRate=this.taxRateForTemplate(values.item_tax_template);
+        const vatRate=Math.max(0,flt(values.vat_rate)||(mode!=="No VAT"?templateRate:0));
+
+        if (cint(values.is_bonus)) {
+            const customerBase=(mode!=="No VAT"&&vatRate)?customerPrice/(1+vatRate/100):customerPrice;
+            const taxableBase=Math.max(0,flt(values.supplier_base_price)||customerBase);
+            let vatPerUnit=0;
+            if(mode==="VAT Per Unit") vatPerUnit=Math.max(0,flt(values.vat_per_unit));
+            else if(mode==="Total VAT for Line") vatPerUnit=Math.max(0,flt(values.total_vat))/qty;
+            else if(mode==="Auto by VAT %") vatPerUnit=taxableBase*vatRate/100;
+            const totalVat=mode==="Total VAT for Line"?Math.max(0,flt(values.total_vat)):vatPerUnit*qty;
+            const finalRate=vatPerUnit;
+            const effective=customerPrice?100*(1-finalRate/customerPrice):100;
+            return {
+                supplier_discount:100,
+                effective_discount:effective,
+                customer_base_before_vat:customerBase,
+                supplier_base_price:taxableBase,
+                net_before_vat:0,
+                vat_rate:vatRate,
+                vat_per_unit:vatPerUnit,
+                total_vat:totalVat,
+                net_rate:finalRate,
+                amount:qty*finalRate
+            };
+        }
+
+        const method=values.pricing_method||"Discount From Customer Price";
+        const supplierInvoicePrice=Math.max(
+            0,
+            method==="Discount From Customer Price"
+                ? customerPrice
+                : (flt(values.supplier_base_price)||customerPrice)
+        );
+        const additional=Math.max(0,Math.min(100,flt(values.additional_discount)));
+        let supplierDiscount=Math.max(0,Math.min(100,flt(values.supplier_discount)));
+        let netBefore=0;
+        let vatPerUnit=0;
+        let finalRate=0;
+
+        if(method==="Direct Final Net Rate"&&flt(values.net_rate)>0){
+            finalRate=Math.max(0,flt(values.net_rate));
+            if(mode==="VAT Per Unit") vatPerUnit=Math.max(0,flt(values.vat_per_unit));
+            else if(mode==="Total VAT for Line") vatPerUnit=Math.max(0,flt(values.total_vat))/qty;
+            else if(mode==="Auto by VAT %"&&vatRate) vatPerUnit=finalRate-finalRate/(1+vatRate/100);
+            netBefore=Math.max(0,finalRate-vatPerUnit);
+
+            const discountComparable=vatInclusive?finalRate:netBefore;
+            const denominator=supplierInvoicePrice*Math.max(0.000001,1-additional/100);
+            supplierDiscount=denominator?Math.max(0,Math.min(100,100*(1-discountComparable/denominator))):0;
+        }else if(method==="Direct Net Before VAT"){
+            const enteredNetBefore=Math.max(0,flt(values.entered_net_before_vat||values.net_before_vat));
+            // The entered supplier net already reflects the base supplier discount.
+            // Additional Discount is a second, separate discount applied afterwards.
+            netBefore=enteredNetBefore*(1-additional/100);
+            if(mode==="VAT Per Unit") vatPerUnit=Math.max(0,flt(values.vat_per_unit));
+            else if(mode==="Total VAT for Line") vatPerUnit=Math.max(0,flt(values.total_vat))/qty;
+            else if(mode==="Auto by VAT %") vatPerUnit=netBefore*vatRate/100;
+            finalRate=netBefore+vatPerUnit;
+
+            supplierDiscount=supplierInvoicePrice?Math.max(0,Math.min(100,100*(1-enteredNetBefore/supplierInvoicePrice))):0;
+        }else{
+            const discountedInvoicePrice=supplierInvoicePrice*(1-supplierDiscount/100)*(1-additional/100);
+
+            if(mode==="No VAT"){
+                netBefore=discountedInvoicePrice;
+                vatPerUnit=0;
+                finalRate=discountedInvoicePrice;
+            }else if(mode==="Auto by VAT %"){
+                if(vatInclusive){
+                    finalRate=discountedInvoicePrice;
+                    netBefore=vatRate?finalRate/(1+vatRate/100):finalRate;
+                    vatPerUnit=finalRate-netBefore;
+                }else{
+                    netBefore=discountedInvoicePrice;
+                    vatPerUnit=netBefore*vatRate/100;
+                    finalRate=netBefore+vatPerUnit;
+                }
+            }else{
+                if(mode==="VAT Per Unit") vatPerUnit=Math.max(0,flt(values.vat_per_unit));
+                else if(mode==="Total VAT for Line") vatPerUnit=Math.max(0,flt(values.total_vat))/qty;
+
+                if(vatInclusive){
+                    finalRate=discountedInvoicePrice;
+                    netBefore=Math.max(0,finalRate-vatPerUnit);
+                }else{
+                    netBefore=discountedInvoicePrice;
+                    finalRate=netBefore+vatPerUnit;
+                }
+            }
+        }
+
+        const totalVat=mode==="Total VAT for Line"?Math.max(0,flt(values.total_vat)):vatPerUnit*qty;
+        const effective=customerPrice?100*(1-finalRate/customerPrice):0;
+        const customerBase=(mode!=="No VAT"&&vatRate&&vatInclusive)?supplierInvoicePrice/(1+vatRate/100):supplierInvoicePrice;
+
+        return {
+            supplier_discount:supplierDiscount,
+            effective_discount:effective,
+            customer_base_before_vat:customerBase,
+            supplier_base_price:supplierInvoicePrice,
+            entered_net_before_vat:method==="Direct Net Before VAT"?Math.max(0,flt(values.entered_net_before_vat||values.net_before_vat)):0,
+            net_before_vat:netBefore,
+            vat_rate:vatRate,
+            vat_per_unit:vatPerUnit,
+            total_vat:totalVat,
+            net_rate:finalRate,
+            amount:qty*finalRate
+        };
     }
 
     taxRateForTemplate(templateName) {
@@ -940,12 +1416,7 @@ class PurchaseInvoiceManagementPageV1 {
     }
 
     recalculateRow(row) {
-        const calculated = this.calculateLine(row);
-        row.effective_discount = calculated.effective_discount;
-        row.net_rate = calculated.net_rate;
-        row.amount = calculated.amount;
-        row.item_tax_rate = this.taxRateForTemplate(row.item_tax_template);
-        return row;
+        const c=this.calculateLine(row);Object.assign(row,{entered_net_before_vat:c.entered_net_before_vat||row.entered_net_before_vat||0,supplier_discount:c.supplier_discount,effective_discount:c.effective_discount,customer_base_before_vat:c.customer_base_before_vat,supplier_base_price:c.supplier_base_price,net_before_vat:c.net_before_vat,vat_rate:c.vat_rate,vat_per_unit:c.vat_per_unit,total_vat:c.total_vat,net_rate:c.net_rate,amount:c.amount});return row;
     }
 
     applyInlineValue($field) {
@@ -953,7 +1424,7 @@ class PurchaseInvoiceManagementPageV1 {
         const fieldname = $field.data("inline-field");
         const row = this.rows[index];
         if (!row || !fieldname) return false;
-        const numericFields = new Set(["qty", "printed_retail_price", "supplier_discount", "additional_discount"]);
+        const numericFields = new Set(["qty", "customer_price", "printed_retail_price", "supplier_base_price", "supplier_discount", "additional_discount", "net_rate"]);
         if (fieldname === "expiry_date") {
             const entered = ($field.val() || "").trim();
             const parsed = this.parseFlexibleDate(entered);
@@ -966,10 +1437,48 @@ class PurchaseInvoiceManagementPageV1 {
         } else {
             row[fieldname] = numericFields.has(fieldname) ? flt($field.val()) : $field.val();
         }
+        if (fieldname === "item_tax_template") {
+            const rate = row.item_tax_template ? this.taxRateForTemplate(row.item_tax_template) : 0;
+            row.tax_entry_mode = row.item_tax_template ? "Auto by VAT %" : "No VAT";
+            row.vat_rate = rate;
+            if (!flt(row.supplier_base_price)) row.supplier_base_price = flt(row.customer_price);
+        }
+        if (fieldname === "net_rate") row.pricing_method = "Direct Final Net Rate";
+        if (fieldname === "supplier_base_price" && !String(row.pricing_method||"").startsWith("Direct")) row.pricing_method = "Discount From Supplier Base Price";
+        if (fieldname === "supplier_discount" && String(row.pricing_method||"").startsWith("Direct")) row.pricing_method = "Discount From Supplier Base Price";
+        if (fieldname === "additional_discount" && row.pricing_method === "Direct Final Net Rate") row.pricing_method = "Discount From Supplier Base Price";
         this.recalculateRow(row);
+        const refreshedRisk=this.evaluateRisk(row.risk_metrics||{},row.qty,row.conversion_factor||1,row.expiry_date);
+        const previousFlags=JSON.stringify(row.risk_flags||[]);
+        row.risk_level=refreshedRisk.level;
+        row.risk_flags=refreshedRisk.flags;
+        row.risk_messages=refreshedRisk.messages;
+        if(previousFlags!==JSON.stringify(refreshedRisk.flags||[])){
+            row.risk_confirmed=0;
+            row.risk_confirmation_reason="";
+        }
+
+        const requiresNearExpiryConfirmation =
+            fieldname === "expiry_date"
+            && cint((this.bootstrap.purchase_settings || {}).require_risk_confirmation)
+            && (refreshedRisk.flags || []).includes("NEAR_EXPIRY")
+            && !cint(row.risk_confirmed);
+
         this.activeRowIndex = index;
         this.renderRows();
         this.refreshCards();
+
+        if (requiresNearExpiryConfirmation) {
+            frappe.show_alert({
+                message: __("Near-expiry item requires confirmation and a reason."),
+                indicator: "orange"
+            }, 7);
+
+            window.setTimeout(() => {
+                this.openItemDialog(index);
+            }, 120);
+        }
+
         return true;
     }
 
@@ -992,10 +1501,11 @@ class PurchaseInvoiceManagementPageV1 {
                 <div>${__("Item")}</div>
                 <div>${__("Type")}</div>
                 <div>${__("Qty / UOM")}</div>
-                <div>${__("Printed Price")}</div>
+                <div>${__("Customer Price")}</div>
+                <div>${__("Supplier Price")}</div>
                 <div>${__("Supplier Disc.")}</div>
                 <div>${__("Additional Disc.")}</div>
-                <div>${__("Effective Disc.")}</div>
+                <div>${__("Net Disc.")}</div>
                 <div>${__("Net Rate")}</div>
                 <div>${__("Amount")}</div>
                 <div>${__("Batch")}</div>
@@ -1004,17 +1514,18 @@ class PurchaseInvoiceManagementPageV1 {
                 <div>${__("Actions")}</div>
             </div>`;
         const rows = this.rows.map((row, index) => `
-            <div class="pimv1-item-row ${index === this.activeRowIndex ? "is-active" : ""}" data-row-index="${index}">
+            <div class="pimv1-item-row ${this.rowStatus(row)} ${index === this.activeRowIndex ? "is-active" : ""}" data-row-index="${index}">
                 <div class="pimv1-row-grid">
                     <div class="pimv1-row-field"><span class="pimv1-row-number">${index + 1}</span></div>
-                    <div class="pimv1-row-field"><div class="pimv1-item-one-line" title="${this.escape(row.item_name || row.item_code)}"><span class="pimv1-item-name">${this.escape(row.item_name || row.item_code)}</span><span class="pimv1-item-code">${this.escape(row.item_code)}</span></div></div>
+                    <div class="pimv1-row-field"><div class="pimv1-item-one-line" title="${this.escape(row.item_name || row.item_code)}"><span class="pimv1-item-name">${this.escape(row.item_name || row.item_code)}${(()=>{const live=this.evaluateRisk(row.risk_metrics||{},row.qty,row.conversion_factor||1,row.expiry_date);return live.level!=="None"?`<span class="pimv1-item-risk-dot" title="${this.escape((live.messages||[]).join(" • "))}">${live.level==="Critical"?"⛔":"⚠"}</span>`:""})()}</span><span class="pimv1-item-code">${this.escape(row.item_code)}</span></div></div>
                     <div class="pimv1-row-field"><span class="pimv1-pill ${row.is_bonus ? "pimv1-pill-bonus" : "pimv1-pill-normal"}">${row.is_bonus ? __("Bonus") : __("Purchase")}</span></div>
                     <div class="pimv1-row-field"><div class="pimv1-qty-wrap"><input class="pimv1-inline-input" type="number" min="0.001" step="0.001" value="${this.number(row.qty)}" data-index="${index}" data-inline-field="qty"><span class="pimv1-uom-inline">${this.escape(row.uom || "")}</span></div></div>
-                    <div class="pimv1-row-field"><input class="pimv1-inline-input" type="number" min="0" step="0.01" value="${this.number(row.printed_retail_price)}" data-index="${index}" data-inline-field="printed_retail_price"></div>
+                    <div class="pimv1-row-field"><input class="pimv1-inline-input" type="number" min="0" step="0.01" value="${this.number(row.customer_price || row.printed_retail_price)}" data-index="${index}" data-inline-field="customer_price"></div>
+                    <div class="pimv1-row-field"><input class="pimv1-inline-input" type="number" min="0" step="0.01" value="${this.number(row.supplier_base_price)}" data-index="${index}" data-inline-field="supplier_base_price" ${row.is_bonus ? "disabled" : ""}></div>
                     <div class="pimv1-row-field"><input class="pimv1-inline-input" type="number" min="0" max="100" step="0.01" value="${this.number(row.supplier_discount)}" data-index="${index}" data-inline-field="supplier_discount" ${row.is_bonus ? "disabled" : ""}></div>
                     <div class="pimv1-row-field"><input class="pimv1-inline-input" type="number" min="0" max="100" step="0.01" value="${this.number(row.additional_discount)}" data-index="${index}" data-inline-field="additional_discount" ${row.is_bonus ? "disabled" : ""}></div>
                     <div class="pimv1-row-field"><div class="pimv1-readonly-cell">${this.number(row.effective_discount)}%</div></div>
-                    <div class="pimv1-row-field"><div class="pimv1-readonly-cell">${this.money(row.net_rate)}</div></div>
+                    <div class="pimv1-row-field"><input class="pimv1-inline-input" type="number" min="0" step="0.01" value="${this.number(row.net_rate)}" data-index="${index}" data-inline-field="net_rate" ${row.is_bonus ? "disabled" : ""}></div>
                     <div class="pimv1-row-field"><div class="pimv1-readonly-cell">${this.money(row.amount)}</div></div>
                     <div class="pimv1-row-field"><input class="pimv1-inline-input" type="text" value="${this.escape(row.batch_no || "")}" placeholder="AUTO" data-index="${index}" data-inline-field="batch_no"></div>
                     <div class="pimv1-row-field"><input class="pimv1-inline-input" type="text" inputmode="numeric" value="${this.escape(this.formatDateForInput(row.expiry_date || ""))}" placeholder="DD/MM/YYYY" data-index="${index}" data-inline-field="expiry_date"></div>
@@ -1025,6 +1536,17 @@ class PurchaseInvoiceManagementPageV1 {
         `).join("");
         $body.html(header + rows);
         this.renderSummary();
+    }
+
+    rowStatus(row) {
+        if (cint(row.is_bonus)) return "status-bonus";
+        const liveRisk=this.evaluateRisk(row.risk_metrics||{},row.qty,row.conversion_factor||1,row.expiry_date);
+        if (liveRisk.level === "Critical" && !cint(row.risk_confirmed)) return "status-critical";
+        if (liveRisk.level === "Warning" && !cint(row.risk_confirmed)) return "status-warning";
+        if (!row.item_code || flt(row.qty) <= 0 || flt(row.customer_price || row.printed_retail_price) <= 0 || flt(row.supplier_base_price) <= 0 || flt(row.net_rate) <= 0) return "status-error";
+        if ((row.has_batch_no && !row.batch_no && !this.automaticBatchEnabled()) || (row.has_expiry_date && !row.expiry_date)) return "status-error";
+        if (row.current_customer_price && Math.abs(flt(row.customer_price) - flt(row.current_customer_price)) > 0.001) return "status-warning";
+        return "status-valid";
     }
 
     deleteRow(index) {
@@ -1038,53 +1560,177 @@ class PurchaseInvoiceManagementPageV1 {
         });
     }
 
+    automaticBatchEnabled() {
+        return cint((this.bootstrap.purchase_settings || {}).enable_automatic_batch_generation);
+    }
+
+    bindSupplierInvoiceTotalManualInput(control) {
+        const $input = control && control.$input && control.$input.length
+            ? control.$input
+            : (control && control.$wrapper ? control.$wrapper.find("input").first() : $());
+
+        if (!$input.length) return;
+
+        $input
+            .off(".pimv1SupplierInvoiceTotal")
+            .on("input.pimv1SupplierInvoiceTotal", (event) => {
+                // Frappe set_value() also fires onchange. Only a real browser input event
+                // is allowed to switch the field from automatic mode to manual mode.
+                if (!this.initialRenderComplete || this.supplierInvoiceTotalAutoUpdating || !event.originalEvent) return;
+
+                const rawValue = String($input.val() ?? "").replace(/,/g, "").trim();
+                const numericValue = flt(rawValue);
+
+                // Clearing the field returns it to automatic mode.
+                if (!rawValue || Math.abs(numericValue) < 0.0001) {
+                    this.supplierInvoiceTotalManual = false;
+                    window.setTimeout(() => this.refreshCards(), 0);
+                    return;
+                }
+
+                this.supplierInvoiceTotalManual = true;
+                this.refreshCards();
+            });
+    }
+
+    syncSupplierInvoiceTotal(systemTotal) {
+        const control = this.controls.supplier_invoice_total;
+        if (!control) return;
+
+        if (!this.rows.length) {
+            this.lastAutoSupplierInvoiceTotal = 0;
+            if (!this.supplierInvoiceTotalManual && Math.abs(flt(this.value("supplier_invoice_total"))) > 0.0001) {
+                this.supplierInvoiceTotalAutoUpdating = true;
+                Promise.resolve(control.set_value(0)).finally(() => {
+                    window.setTimeout(() => { this.supplierInvoiceTotalAutoUpdating = false; }, 50);
+                });
+            }
+            return;
+        }
+
+        const rounded = Math.round(flt(systemTotal) * 100) / 100;
+        const currentValue = flt(this.value("supplier_invoice_total"));
+
+        // Recover automatically from the old race condition where a zero field
+        // was incorrectly marked as a manual value.
+        if (this.supplierInvoiceTotalManual && currentValue <= 0 && rounded > 0) {
+            this.supplierInvoiceTotalManual = false;
+        }
+
+        if (this.supplierInvoiceTotalManual) return;
+
+        this.lastAutoSupplierInvoiceTotal = rounded;
+        if (Math.abs(currentValue - rounded) < 0.0001) return;
+
+        this.supplierInvoiceTotalAutoUpdating = true;
+        Promise.resolve(control.set_value(rounded)).finally(() => {
+            window.setTimeout(() => {
+                this.supplierInvoiceTotalAutoUpdating = false;
+            }, 50);
+        });
+    }
+
+    applySavedItemUpdates(savedItems) {
+        if (!Array.isArray(savedItems) || !savedItems.length) return;
+        savedItems.forEach((saved, index) => {
+            const row = this.rows[index];
+            if (!row || (saved.item_code && row.item_code !== saved.item_code)) return;
+            if (saved.batch_no) row.batch_no = saved.batch_no;
+            if (saved.expiry_date) row.expiry_date = saved.expiry_date;
+            row.auto_batch_generated = cint(saved.auto_batch_generated);
+            row.serial_and_batch_bundle = saved.serial_and_batch_bundle || row.serial_and_batch_bundle || "";
+        });
+        this.renderRows();
+    }
+
     totals() {
-        const normal = this.rows.filter((row) => !row.is_bonus);
-        const bonus = this.rows.filter((row) => row.is_bonus);
-        const gross = normal.reduce((sum, row) => sum + flt(row.qty) * flt(row.printed_retail_price), 0);
-        const net = normal.reduce((sum, row) => sum + flt(row.amount), 0);
-        const lineDiscount = gross - net;
-        const bonusValue = bonus.reduce((sum, row) => sum + flt(row.qty) * flt(row.printed_retail_price), 0);
-        const invoiceDiscountPct = Math.max(0, Math.min(100, flt(this.value("invoice_discount_percentage"))));
-        const invoiceDiscount = net * invoiceDiscountPct / 100;
-        const netAfterDiscount = net - invoiceDiscount;
-        const invoiceDiscountFactor = 1 - invoiceDiscountPct / 100;
-        const taxIncluded = cint(this.value("tax_included_in_print_rate"));
-        const estimatedTax = normal.reduce((sum, row) => {
-            const taxableAmount = flt(row.amount) * invoiceDiscountFactor;
-            const rate = flt(row.item_tax_rate || this.taxRateForTemplate(row.item_tax_template));
-            if (!rate) return sum;
-            return sum + (taxIncluded ? taxableAmount * rate / (100 + rate) : taxableAmount * rate / 100);
-        }, 0);
-        const estimatedTaxAdded = taxIncluded ? 0 : estimatedTax;
-        const estimatedTaxIncluded = taxIncluded ? estimatedTax : 0;
-        const charges = flt(this.value("additional_charge_amount"));
-        const estimatedBeforeTax = netAfterDiscount + charges;
-        const estimatedGrand = estimatedBeforeTax + estimatedTaxAdded;
-        return { gross, net, lineDiscount, bonusValue, invoiceDiscountPct, invoiceDiscount, netAfterDiscount, taxIncluded, estimatedTax, estimatedTaxAdded, estimatedTaxIncluded, charges, estimatedBeforeTax, estimatedGrand };
+        const normal=this.rows.filter(r=>!r.is_bonus),bonus=this.rows.filter(r=>r.is_bonus);
+        const customerGross=normal.reduce((s,r)=>s+flt(r.qty)*flt(r.customer_price),0);
+
+        // Commercial purchase breakdown is based on the supplier invoice price,
+        // not the pharmacy's current customer price.
+        const supplierInvoiceGross=normal.reduce((sum,row)=>{
+            return sum+flt(row.qty)*flt(row.supplier_base_price);
+        },0);
+
+        const supplierDiscount=normal.reduce((sum,row)=>{
+            const qty=flt(row.qty);
+            const supplierPrice=flt(row.supplier_base_price);
+            const supplierDiscountPct=Math.max(0,Math.min(100,flt(row.supplier_discount)));
+            return sum+qty*supplierPrice*supplierDiscountPct/100;
+        },0);
+
+        const additionalLineDiscount=normal.reduce((sum,row)=>{
+            const qty=flt(row.qty);
+            const supplierPrice=flt(row.supplier_base_price);
+            const supplierDiscountPct=Math.max(0,Math.min(100,flt(row.supplier_discount)));
+            const additionalDiscountPct=Math.max(0,Math.min(100,flt(row.additional_discount)));
+            const afterSupplierDiscount=supplierPrice*(1-supplierDiscountPct/100);
+            return sum+qty*afterSupplierDiscount*additionalDiscountPct/100;
+        },0);
+
+        const netBeforeVat=normal.reduce((s,r)=>s+flt(r.qty)*flt(r.net_before_vat),0);
+        const vat=this.rows.reduce((s,r)=>s+flt(r.total_vat),0);
+        const normalFinal=normal.reduce((s,r)=>s+flt(r.amount),0);
+        const bonusVatPayable=bonus.reduce((s,r)=>s+flt(r.amount),0);
+        const finalNet=normalFinal+bonusVatPayable;
+        const lineDiscount=customerGross-normalFinal;
+        const bonusValue=bonus.reduce((s,r)=>s+flt(r.qty)*flt(r.customer_price),0);
+        const invoiceDiscountPct=Math.max(0,Math.min(100,flt(this.value("invoice_discount_percentage"))));
+        const invoiceDiscount=finalNet*invoiceDiscountPct/100;const netAfterDiscount=finalNet-invoiceDiscount;
+        const charges=flt(this.value("additional_charge_amount"));const estimatedGrand=netAfterDiscount+charges;
+        const enteredSupplierTotal=flt(this.value("supplier_invoice_total"));
+        const supplierInvoiceTotal=(!this.supplierInvoiceTotalManual&&this.rows.length)?estimatedGrand:enteredSupplierTotal;
+        const fractionAdjustment=supplierInvoiceTotal?supplierInvoiceTotal-estimatedGrand:0;
+        return {
+            customerGross,
+            supplierGross:supplierInvoiceGross,
+            supplierInvoiceGross,
+            supplierDiscount,
+            additionalLineDiscount,
+            netBeforeVat,
+            estimatedTax:vat,
+            net:finalNet,
+            lineDiscount,
+            bonusValue,
+            bonusVatPayable,
+            invoiceDiscountPct,
+            invoiceDiscount,
+            netAfterDiscount,
+            charges,
+            estimatedBeforeTax:netBeforeVat,
+            estimatedGrand,
+            supplierInvoiceTotal,
+            fractionAdjustment,
+            taxIncluded:1
+        };
     }
 
     renderSummary() {
-        const totals = this.totals();
-        const savedTax = this.lastSavedTotals ? flt(this.lastSavedTotals.total_taxes_and_charges) : null;
-        const invoiceTaxTemplate = this.value("taxes_and_charges");
+        const t=this.totals();const savedTax=this.lastSavedTotals?flt(this.lastSavedTotals.total_taxes_and_charges):null;
         this.$main.find("[data-role='summary']").html(`
-            <div class="pimv1-summary-row"><span>${__("Printed Retail Gross")}</span><span>${this.money(totals.gross)}</span></div>
-            <div class="pimv1-summary-row"><span>${__("Line Discounts")}</span><span>-${this.money(totals.lineDiscount)}</span></div>
-            <div class="pimv1-summary-row"><span>${__("Purchase Net Before Invoice Discount")}</span><span>${this.money(totals.net)}</span></div>
-            <div class="pimv1-summary-row"><span>${__("Additional Invoice Discount")}</span><span>-${this.money(totals.invoiceDiscount)}</span></div>
-            <div class="pimv1-summary-row"><span>${__("Net After Invoice Discount")}</span><span>${this.money(totals.netAfterDiscount)}</span></div>
-            <div class="pimv1-summary-row"><span>${totals.taxIncluded ? __("Estimated VAT Included in Purchase Rate") : __("Estimated VAT Added to Invoice")}</span><span>${totals.taxIncluded ? "" : "+"}${this.money(totals.estimatedTax)}</span></div>
-            <div class="pimv1-summary-row"><span>${__("Shipping / Additional Charges")}</span><span>+${this.money(totals.charges)}</span></div>
-            <div class="pimv1-summary-row"><span>${__("Bonus Retail Value")}</span><span>${this.money(totals.bonusValue)}</span></div>
-            ${savedTax !== null ? `<div class="pimv1-summary-row"><span>${__("Actual Taxes and Charges After Save")}</span><span>${this.money(savedTax)}</span></div>` : ""}
-            <div class="pimv1-summary-row pimv1-summary-grand"><strong>${__("Estimated Grand Total")}</strong><strong>${this.money(totals.estimatedGrand)}</strong></div>
-            <div class="pimv1-tax-note">${invoiceTaxTemplate ? `${__("Invoice tax template")}: ${this.escape(invoiceTaxTemplate)}. ` : ""}${totals.taxIncluded ? __("Tax is included in the entered purchase rate and is not added again to the estimated grand total.") : __("Tax is added above the entered purchase rate.")} ${__("ERPNext is the accounting source of truth after Save Draft.")}</div>
+            <div class="pimv1-summary-row"><span>${__("Customer Price Gross")}</span><span>${this.money(t.customerGross)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Supplier Invoice Gross")}</span><span>${this.money(t.supplierInvoiceGross)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Supplier Discount")}</span><span>-${this.money(t.supplierDiscount)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Additional Line Discount")}</span><span>-${this.money(t.additionalLineDiscount)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Net Before VAT")}</span><span>${this.money(t.netBeforeVat)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("VAT from Item Lines")}</span><span>${this.money(t.estimatedTax)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Final Item Total")}</span><span>${this.money(t.net)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Additional Invoice Discount")}</span><span>-${this.money(t.invoiceDiscount)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Shipping / Additional Charges")}</span><span>+${this.money(t.charges)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Bonus Retail Value")}</span><span>${this.money(t.bonusValue)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Bonus VAT Payable")}</span><span>${this.money(t.bonusVatPayable)}</span></div>
+            ${savedTax!==null?`<div class="pimv1-summary-row"><span>${__("Actual Taxes and Charges After Save")}</span><span>${this.money(savedTax)}</span></div>`:""}
+            <div class="pimv1-summary-row"><span>${__("Supplier Invoice Total")}</span><span>${this.money(t.supplierInvoiceTotal)}</span></div>
+            <div class="pimv1-summary-row"><span>${__("Fraction Adjustment")}</span><span>${this.money(t.fractionAdjustment)}</span></div>
+            <div class="pimv1-summary-row pimv1-summary-grand"><strong>${__("Estimated Grand Total")}</strong><strong>${this.money(t.estimatedGrand+t.fractionAdjustment)}</strong></div>
+            <div class="pimv1-tax-note">${__("Final Net Rate includes the VAT amount entered for each item. VAT is not added a second time to the invoice total.")}</div>
         `);
     }
 
     refreshCards() {
         const totals = this.totals();
+        this.syncSupplierInvoiceTotal(totals.estimatedGrand);
         const balance = this.supplierContext.balance;
         this.$main.find("[data-role='supplier-balance']").text(balance === undefined ? "—" : this.money(Math.abs(balance)));
         this.$main.find("[data-role='supplier-type']").text([
@@ -1096,34 +1742,121 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.find("[data-role='estimated-net']").text(this.money(totals.estimatedBeforeTax));
         this.$main.find("[data-role='estimated-tax']").text(this.money(totals.estimatedTax));
         this.$main.find("[data-role='estimated-tax-note']").text(totals.taxIncluded ? __("Included in purchase rate") : __("Added above purchase rate"));
-        this.$main.find("[data-role='estimated-grand']").text(this.money(totals.estimatedGrand));
+        this.$main.find("[data-role='estimated-grand']").text(this.money(totals.estimatedGrand + totals.fractionAdjustment));
+        if (this.controls.fraction_adjustment) this.controls.fraction_adjustment.set_value(totals.fractionAdjustment);
+        this.renderValidationPanel();
         this.renderSummary();
     }
 
-    validatePage() {
+    validationIssues() {
         const errors = [];
-        if (!this.value("supplier")) errors.push(__("Supplier is required."));
-        if (!this.value("warehouse")) errors.push(__("Receiving Warehouse is required."));
-        if (!this.value("bill_no")) errors.push(__("Supplier Invoice Number is required."));
-        if (!this.rows.length) errors.push(__("Add at least one purchase item."));
+        const warnings = [];
+        if (!this.value("company")) errors.push({ message: __("Company is required."), field: "company" });
+        if (!this.value("supplier")) errors.push({ message: __("Supplier is required."), field: "supplier" });
+        if (!this.value("warehouse")) errors.push({ message: __("Receiving Warehouse is required."), field: "warehouse" });
+        if (!this.value("bill_no")) errors.push({ message: __("Supplier Invoice Number is required."), field: "bill_no" });
+        if (!this.value("bill_date")) errors.push({ message: __("Supplier Invoice Date is required."), field: "bill_date" });
+        if (!this.value("payment_classification")) errors.push({ message: __("Payment Classification is required, especially for mixed suppliers."), field: "payment_classification" });
+        const effectiveSupplierInvoiceTotal = flt(this.totals().supplierInvoiceTotal);
+        if (cint((this.bootstrap.purchase_settings || {}).require_exact_supplier_invoice_total) && effectiveSupplierInvoiceTotal <= 0) errors.push({ message: __("Supplier Invoice Total is required."), field: "supplier_invoice_total" });
+        if (!this.rows.length) errors.push({ message: __("Add at least one purchase item."), action: "add-item" });
         this.rows.forEach((row, index) => {
-            if (!row.item_code || flt(row.qty) <= 0) errors.push(__("Invalid item or quantity on row {0}.", [index + 1]));
-            if (!row.is_bonus && flt(row.printed_retail_price) <= 0) errors.push(__("Printed Retail Price is required on row {0}.", [index + 1]));
-            if (row.has_expiry_date && !row.expiry_date) errors.push(__("Expiry Date is required on row {0}.", [index + 1]));
+            if (!row.item_code || flt(row.qty) <= 0) errors.push({ message: __("Invalid item or quantity on row {0}.", [index + 1]), row: index });
+            if (!row.is_bonus && flt(row.customer_price || row.printed_retail_price) <= 0) errors.push({ message: __("Customer Price is required on row {0}.", [index + 1]), row: index });
+            if (!row.is_bonus && flt(row.supplier_base_price) <= 0) errors.push({ message: __("Supplier Base Price is required on row {0}.", [index + 1]), row: index });
+            if (!row.is_bonus && flt(row.net_rate) <= 0) errors.push({ message: __("Net Rate is required on row {0}.", [index + 1]), row: index });
+            if (row.has_batch_no && !row.batch_no && !this.automaticBatchEnabled()) errors.push({ message: __("Batch is required on row {0}.", [index + 1]), row: index });
+            if (row.has_expiry_date && !row.expiry_date) errors.push({ message: __("Expiry Date is required on row {0}.", [index + 1]), row: index });
+            const liveRisk=this.evaluateRisk(row.risk_metrics||{},row.qty,row.conversion_factor||1,row.expiry_date);
+            if ((liveRisk.flags||[]).includes("EXPIRED_ITEM")) errors.push({ message: __("Expired item on row {0}: {1}", [index+1,(liveRisk.messages||[]).join(" • ")]), row:index });
+            if (row.tax_entry_mode !== "No VAT" && !row.item_tax_template) errors.push({ message: __("Item Tax Template is required for taxable row {0}.", [index + 1]), row:index });
+            const requireRiskConfirmation = cint((this.bootstrap.purchase_settings || {}).require_risk_confirmation);
+            const nearExpiryPending =
+                requireRiskConfirmation
+                && (liveRisk.flags || []).includes("NEAR_EXPIRY")
+                && (!cint(row.risk_confirmed) || !(row.risk_confirmation_reason || "").trim());
+
+            if (nearExpiryPending) {
+                errors.push({
+                    message: __("Near-expiry confirmation and reason are required on row {0}: {1}", [index+1,(liveRisk.messages||[]).join(" • ")]),
+                    row:index,
+                    action:"review-risk"
+                });
+            } else if (liveRisk.level !== "None" && !cint(row.risk_confirmed)) {
+                warnings.push({
+                    message: __("Risk confirmation is pending on row {0}: {1}", [index+1,(liveRisk.messages||[]).join(" • ")]),
+                    row:index,
+                    action:"review-risk"
+                });
+            } else if (this.rowStatus(row) === "status-warning") {
+                warnings.push({ message: __("Review price warning on row {0}.", [index + 1]), row: index });
+            }
         });
-        if (errors.length) {
-            frappe.msgprint({ title: __("Complete Purchase Invoice"), message: `<ul>${errors.map((error) => `<li>${this.escape(error)}</li>`).join("")}</ul>`, indicator: "orange" });
+        const totals = this.totals();
+        const maxAdjustment = flt((this.bootstrap.purchase_settings || {}).max_fraction_adjustment || 0);
+        if (totals.supplierInvoiceTotal && Math.abs(totals.fractionAdjustment) > maxAdjustment + 0.0001) errors.push({ message: __("Invoice difference {0} exceeds the permitted fraction adjustment {1}.", [this.money(totals.fractionAdjustment), this.money(maxAdjustment)]), field: "supplier_invoice_total" });
+        return { errors, warnings };
+    }
+
+    renderValidationPanel() {
+        const issues = this.validationIssues();
+        const $panel = this.$main.find("[data-role='validation-panel']");
+        const cls = issues.errors.length ? "has-errors" : (issues.warnings.length ? "has-warnings" : "is-ready");
+        const title = issues.errors.length ? __("Invoice needs correction") : (issues.warnings.length ? __("Invoice has warnings") : __("Invoice Ready ✓"));
+        const rows = [...issues.errors.map(x => ({...x, type:"error"})), ...issues.warnings.map(x => ({...x, type:"warning"}))];
+        $panel.removeClass("is-ready has-errors has-warnings").addClass(cls).html(`<strong>${title}</strong>${rows.length ? `<div style="margin-top:6px">${rows.map((x,i)=>`<div class="pimv1-validation-issue" data-validation-index="${i}">• ${this.escape(x.message)}</div>`).join("")}</div>` : ""}`);
+        $panel.data("issues", rows);
+        $panel.off("click.pimv1-validation").on("click.pimv1-validation", "[data-validation-index]", (event) => {
+            const issue = rows[Number($(event.currentTarget).data("validation-index"))];
+            if (issue.action === "review-risk" && Number.isInteger(issue.row)) {
+                this.openItemDialog(issue.row);
+            } else if (issue.field && this.controls[issue.field]) {
+                this.controls[issue.field].set_focus();
+            } else if (Number.isInteger(issue.row)) {
+                this.setActiveRow(issue.row);
+                this.$main.find(`[data-row-index="${issue.row}"] input:enabled:first`).trigger("focus");
+            } else if (issue.action === "add-item") {
+                this.openItemDialog();
+            }
+        });
+        return issues;
+    }
+
+    validateAndReport() {
+        const issues = this.renderValidationPanel();
+        frappe.show_alert({ message: issues.errors.length ? __("Fix validation errors before saving.") : __("Validation completed."), indicator: issues.errors.length ? "red" : (issues.warnings.length ? "orange" : "green") }, 5);
+        return !issues.errors.length;
+    }
+
+    validatePage() {
+        const issues = this.renderValidationPanel();
+        if (issues.errors.length) {
+            frappe.msgprint({
+                title: __("Complete Purchase Invoice"),
+                message: `<ul>${issues.errors.map((x) => `<li>${this.escape(x.message)}</li>`).join("")}</ul>`,
+                indicator: "orange"
+            });
+
+            const riskIssue = issues.errors.find((issue) =>
+                issue.action === "review-risk" && Number.isInteger(issue.row)
+            );
+            if (riskIssue) {
+                window.setTimeout(() => this.openItemDialog(riskIssue.row), 180);
+            }
             return false;
         }
         return true;
     }
 
     payload() {
+        const totals = this.totals();
         return {
             name: this.draftName,
             company: this.value("company"),
             supplier: this.value("supplier"),
             warehouse: this.value("warehouse"),
+            supplier_invoice_total: flt(totals.supplierInvoiceTotal),
+            supplier_invoice_total_manual: cint(this.supplierInvoiceTotalManual),
             payment_classification: this.value("payment_classification"),
             exclude_from_claim: this.value("payment_classification") === "Cash Invoice" ? 1 : 0,
             posting_date: this.value("posting_date"),
@@ -1131,7 +1864,7 @@ class PurchaseInvoiceManagementPageV1 {
             bill_date: this.value("bill_date"),
             due_date: this.value("due_date"),
             taxes_and_charges: this.value("taxes_and_charges"),
-            tax_included_in_print_rate: cint(this.value("tax_included_in_print_rate")),
+            tax_included_in_print_rate: 1,
             invoice_discount_percentage: flt(this.value("invoice_discount_percentage")),
             additional_charge_account: this.value("additional_charge_account"),
             additional_charge_amount: flt(this.value("additional_charge_amount")),
@@ -1157,12 +1890,16 @@ class PurchaseInvoiceManagementPageV1 {
             const invoice = message.invoice || {};
             this.draftName = invoice.name;
             this.lastSavedTotals = invoice;
+            this.applySavedItemUpdates(invoice.items || []);
             this.bootstrap.recent_invoices = message.recent_invoices || [];
             this.$main.find("[data-role='draft-badge']").text(invoice.name || __("Saved Draft"));
             this.$main.find("[data-role='saved-grand']").text(`${this.money(invoice.total_taxes_and_charges)} / ${this.money(invoice.grand_total)}`);
             this.$main.find("[data-role='saved-status']").text(`${invoice.status || __("Draft")} • ${__("Tax / Grand")}`);
             this.renderSummary();
             this.$openButton.prop("disabled", false);
+            this.$submitButton.prop("disabled", invoice.docstatus !== 0);
+            this.$cancelButton.prop("disabled", invoice.docstatus !== 1);
+            this.clearLocalDraft();
             this.renderRecentInvoices(this.bootstrap.recent_invoices);
             frappe.show_alert({ message: __("Purchase Invoice {0} saved as Draft.", [invoice.name]), indicator: "green" }, 7);
         } finally {
@@ -1189,8 +1926,12 @@ class PurchaseInvoiceManagementPageV1 {
             this.draftName = null;
             this.attachmentUrl = "";
             this.lastSavedTotals = null;
+            this.supplierInvoiceTotalManual = false;
+            this.supplierInvoiceTotalAutoUpdating = true;
+            this.lastAutoSupplierInvoiceTotal = 0;
             ["supplier", "bill_no", "payment_classification", "taxes_and_charges", "additional_charge_account", "remarks"].forEach((field) => this.controls[field] && this.controls[field].set_value(""));
-            ["invoice_discount_percentage", "additional_charge_amount"].forEach((field) => this.controls[field] && this.controls[field].set_value(0));
+            ["invoice_discount_percentage", "additional_charge_amount", "supplier_invoice_total"].forEach((field) => this.controls[field] && this.controls[field].set_value(0));
+            window.setTimeout(() => { this.supplierInvoiceTotalAutoUpdating = false; }, 0);
             if (this.controls.tax_included_in_print_rate) this.controls.tax_included_in_print_rate.set_value(1);
             const today = this.bootstrap.posting_date || frappe.datetime.get_today();
             this.controls.posting_date.set_value(today);
@@ -1207,6 +1948,80 @@ class PurchaseInvoiceManagementPageV1 {
         };
         if (this.rows.length || this.draftName) frappe.confirm(__("Start a new invoice and clear current data?"), reset);
         else reset();
+    }
+
+    async submitInvoice() {
+        if (!this.draftName || !this.validateAndReport()) return;
+        frappe.confirm(__("Submit this Purchase Invoice? Stock and accounting entries will be created."), async () => {
+            const response = await frappe.call({ method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.submit_invoice", args: { name: this.draftName }, freeze: true, freeze_message: __("Submitting Purchase Invoice...") });
+            const invoice = (response.message || {}).invoice || {};
+            this.lastSavedTotals = invoice;
+            this.$submitButton.prop("disabled", true);
+            this.$cancelButton.prop("disabled", false);
+            this.$main.find("[data-role='saved-status']").text(invoice.status || __("Submitted"));
+            frappe.show_alert({ message: __("Purchase Invoice submitted successfully."), indicator: "green" }, 6);
+        });
+    }
+
+    async cancelInvoice() {
+        if (!this.draftName) return;
+        frappe.confirm(__("Cancel this Purchase Invoice and reverse stock/accounting entries?"), async () => {
+            const response = await frappe.call({ method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.cancel_invoice", args: { name: this.draftName }, freeze: true, freeze_message: __("Cancelling Purchase Invoice...") });
+            const invoice = (response.message || {}).invoice || {};
+            this.lastSavedTotals = invoice;
+            this.$cancelButton.prop("disabled", true);
+            this.$main.find("[data-role='saved-status']").text(invoice.status || __("Cancelled"));
+            frappe.show_alert({ message: __("Purchase Invoice cancelled."), indicator: "orange" }, 6);
+        });
+    }
+
+    localDraftKey() {
+        return `pharma_purchase_page:${frappe.session.user}:${this.value("company") || "default"}`;
+    }
+
+    persistLocalDraft() {
+        if (!this.initialRenderComplete || !cint((this.bootstrap.purchase_settings || {}).enable_local_draft_recovery) || this.isSaving) return;
+        try { localStorage.setItem(this.localDraftKey(), JSON.stringify({ saved_at: Date.now(), payload: this.payload() })); } catch (e) {}
+    }
+
+    offerLocalDraftRestore() {
+        if (!cint((this.bootstrap.purchase_settings || {}).enable_local_draft_recovery)) return;
+        let stored = null;
+        try { stored = JSON.parse(localStorage.getItem(this.localDraftKey()) || "null"); } catch (e) {}
+        const payload = stored && stored.payload;
+        if (!payload || !(payload.items || []).length || payload.name) return;
+        frappe.confirm(__("Restore the unsaved purchase invoice found in this browser?"), () => {
+            this.supplierInvoiceTotalAutoUpdating = true;
+            this.supplierInvoiceTotalManual = cint(payload.supplier_invoice_total_manual);
+
+            ["supplier", "warehouse", "payment_classification", "posting_date", "bill_no", "bill_date", "due_date", "taxes_and_charges", "invoice_discount_percentage", "additional_charge_account", "additional_charge_amount", "supplier_invoice_total", "remarks"].forEach((fieldname) => {
+                if (this.controls[fieldname] && payload[fieldname] !== undefined) this.controls[fieldname].set_value(payload[fieldname]);
+            });
+            if (this.controls.tax_included_in_print_rate) this.controls.tax_included_in_print_rate.set_value(cint(payload.tax_included_in_print_rate));
+
+            this.rows = payload.items || [];
+            this.attachmentUrl = payload.attachment || "";
+
+            // Old browser drafts did not store the manual/automatic flag.
+            if (payload.supplier_invoice_total_manual === undefined) {
+                this.supplierInvoiceTotalManual = false;
+                const systemTotal = flt(this.totals().estimatedGrand);
+                const restoredTotal = flt(payload.supplier_invoice_total);
+                this.supplierInvoiceTotalManual = restoredTotal > 0 && Math.abs(restoredTotal - systemTotal) > 0.005;
+            }
+
+            window.setTimeout(() => {
+                this.supplierInvoiceTotalAutoUpdating = false;
+                this.renderRows();
+                this.refreshCards();
+            }, 0);
+
+            frappe.show_alert({ message: __("Unsaved purchase draft restored."), indicator: "green" }, 5);
+        });
+    }
+
+    clearLocalDraft() {
+        try { localStorage.removeItem(this.localDraftKey()); } catch (e) {}
     }
 
     openOfficialDocument() {

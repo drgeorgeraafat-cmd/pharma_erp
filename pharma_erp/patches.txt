@@ -21,3 +21,9 @@ pharma_erp.patches.v1_1.setup_purchase_management_foundation
 pharma_erp.patches.v1_1.fix_purchase_printed_retail_price_editable
 
 pharma_erp.patches.v1_1.separate_purchase_discounts_and_sync_batch_price
+pharma_erp.patches.v1_1.setup_purchase_commercial_controls
+pharma_erp.patches.v1_2.setup_purchase_tax_and_risk_controls
+
+pharma_erp.patches.v1_2.setup_purchase_vat_inclusive_controls
+
+pharma_erp.patches.v1_2.setup_direct_net_before_vat_anchor

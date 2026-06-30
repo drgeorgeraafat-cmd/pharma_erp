@@ -6,6 +6,7 @@ stock and accounting document in ERPNext.
 
 from __future__ import annotations
 
+import calendar
 import json
 import re
 from datetime import date, datetime
@@ -13,7 +14,7 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate, nowdate
+from frappe.utils import cint, flt, getdate, now_datetime, nowdate
 
 from pharma_erp.purchase_management import get_purchase_settings
 
@@ -259,6 +260,45 @@ def _supplier_balance(supplier: str, company: str | None) -> float:
         return flt(outstanding[0][0] if outstanding else 0)
 
 
+def _safe_day(year: int, month: int, day: int) -> date:
+    return date(year, month, min(max(1, cint(day)), calendar.monthrange(year, month)[1]))
+
+
+def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
+    absolute = year * 12 + (month - 1) + offset
+    return absolute // 12, absolute % 12 + 1
+
+
+def _claim_period_for_date(supplier: str, bill_date) -> dict:
+    if not supplier or not bill_date:
+        return {}
+    fields = _safe_fields("Supplier", ["custom_claim_cycle_start_day", "custom_claim_cycle_end_day"])
+    values = frappe.db.get_value("Supplier", supplier, fields, as_dict=True) or frappe._dict()
+    start_day = cint(values.get("custom_claim_cycle_start_day"))
+    end_day = cint(values.get("custom_claim_cycle_end_day"))
+    if not start_day or not end_day:
+        return {}
+    basis = getdate(bill_date)
+    if basis.day >= start_day:
+        start_year, start_month = basis.year, basis.month
+    else:
+        start_year, start_month = _shift_month(basis.year, basis.month, -1)
+    end_year, end_month = _shift_month(start_year, start_month, 1)
+    return {
+        "basis_date": basis,
+        "period_from": _safe_day(start_year, start_month, start_day),
+        "period_to": _safe_day(end_year, end_month, end_day),
+    }
+
+
+@frappe.whitelist()
+def get_claim_period(supplier: str, bill_date: str | None = None):
+    _require_read_access()
+    if not supplier or not frappe.db.exists("Supplier", supplier):
+        return {}
+    return _claim_period_for_date(supplier, bill_date or nowdate())
+
+
 @frappe.whitelist()
 def get_supplier_context(supplier: str, company: str | None = None):
     _require_read_access()
@@ -288,8 +328,10 @@ def get_supplier_context(supplier: str, company: str | None = None):
     supplier_type = data.get("custom_purchase_supplier_type")
     if payment_model == "Cash":
         classification = "Cash Invoice"
-    elif payment_model in ("Credit Claim", "Mixed") or supplier_type == "Distribution Company":
+    elif payment_model == "Credit Claim" or (supplier_type == "Distribution Company" and payment_model != "Mixed"):
         classification = "Claim Invoice"
+    elif payment_model == "Mixed":
+        classification = ""
     else:
         classification = ""
 
@@ -513,7 +555,9 @@ def _latest_purchase_rows(item_code: str, supplier: str | None = None) -> list[d
             pii.batch_no,
             {"pii.custom_selling_price" if "custom_selling_price" in _meta_fieldnames("Purchase Invoice Item") else "0"} AS printed_retail_price,
             {"pii.custom_supplier_discount_percentage" if "custom_supplier_discount_percentage" in _meta_fieldnames("Purchase Invoice Item") else "0"} AS supplier_discount,
-            {"pii.custom_additional_discount" if "custom_additional_discount" in _meta_fieldnames("Purchase Invoice Item") else "0"} AS additional_discount
+            {"pii.custom_additional_discount" if "custom_additional_discount" in _meta_fieldnames("Purchase Invoice Item") else "0"} AS additional_discount,
+            {"pii.custom_supplier_base_price" if "custom_supplier_base_price" in _meta_fieldnames("Purchase Invoice Item") else "pii.price_list_rate"} AS supplier_base_price,
+            {"pii.custom_purchase_pricing_method" if "custom_purchase_pricing_method" in _meta_fieldnames("Purchase Invoice Item") else "''"} AS pricing_method
         FROM `tabPurchase Invoice Item` pii
         INNER JOIN `tabPurchase Invoice` pi ON pi.name = pii.parent
         WHERE pi.docstatus = 1
@@ -544,6 +588,149 @@ def _latest_purchase_rows(item_code: str, supplier: str | None = None) -> list[d
 
     return rows
 
+
+
+def _days_since(value) -> int | None:
+    if not value:
+        return None
+    return max(0, (getdate(nowdate()) - getdate(value)).days)
+
+
+
+def _add_months(value, months: int):
+    source = getdate(value)
+    month_index = source.month - 1 + int(months)
+    year = source.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(source.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _expiry_risk(expiry_date, posting_date=None) -> dict:
+    if not expiry_date:
+        return {"level":"None", "flags":[], "messages":[]}
+    settings = get_purchase_settings()
+    expiry = getdate(expiry_date)
+    posting = getdate(posting_date or nowdate())
+    days_remaining = (expiry - posting).days
+    if days_remaining < 0:
+        return {
+            "level":"Critical",
+            "flags":["EXPIRED_ITEM"],
+            "messages":[_("Expired item: expiry date {0} is before the receipt date.").format(expiry.strftime("%d/%m/%Y"))],
+            "days_remaining":days_remaining,
+        }
+    warning_months = max(1, cint(settings.get("near_expiry_warning_months") or 6))
+    if expiry <= _add_months(posting, warning_months):
+        return {
+            "level":"Warning",
+            "flags":["NEAR_EXPIRY"],
+            "messages":[_("Near expiry: {0} — {1} days remaining.").format(expiry.strftime("%d/%m/%Y"), days_remaining)],
+            "days_remaining":days_remaining,
+        }
+    return {"level":"None", "flags":[], "messages":[], "days_remaining":days_remaining}
+
+
+def _merge_risks(*risks) -> dict:
+    rank={"None":0,"Warning":1,"Critical":2}
+    level="None"; flags=[]; messages=[]
+    for risk in risks:
+        if not risk: continue
+        for flag in risk.get("flags") or []:
+            if flag not in flags: flags.append(flag)
+        for message in risk.get("messages") or []:
+            if message not in messages: messages.append(message)
+        if rank.get(risk.get("level") or "None",0) > rank.get(level,0):
+            level=risk.get("level") or "None"
+    if len(flags)>=2 and level=="Warning": level="Critical"
+    return {"level":level,"flags":flags,"messages":messages}
+
+def _purchase_risk_metrics(item_code: str, warehouse: str | None, incoming_stock_qty: float = 0.0) -> dict:
+    settings = get_purchase_settings()
+    if not cint(settings.get("enable_purchase_risk_alerts")):
+        return {"level":"None", "flags":[], "messages":[]}
+
+    analysis_days = max(1, cint(settings.get("slow_movement_analysis_days") or 30))
+    recent_days = max(1, cint(settings.get("recent_purchase_warning_days") or 3))
+    dormant_days = max(1, cint(settings.get("dormant_item_days") or 90))
+    coverage_limit = max(1, cint(settings.get("high_stock_coverage_days") or 90))
+    minimum_qty = max(0.0, flt(settings.get("minimum_stock_qty_for_warning") or 0))
+
+    current_qty = flt(frappe.db.get_value("Bin", {"item_code":item_code, "warehouse":warehouse}, "actual_qty")) if warehouse else flt(frappe.db.sql("SELECT COALESCE(SUM(actual_qty),0) FROM `tabBin` WHERE item_code=%s", item_code)[0][0])
+    wh_sales = "AND sii.warehouse = %(warehouse)s" if warehouse else ""
+    sales = frappe.db.sql(f"""
+        SELECT
+            COALESCE(SUM(CASE WHEN si.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(analysis_days)s DAY)
+                THEN CASE WHEN IFNULL(si.is_return,0)=1 THEN -ABS(sii.stock_qty) ELSE ABS(sii.stock_qty) END ELSE 0 END),0) sales_qty,
+            MAX(CASE WHEN IFNULL(si.is_return,0)=0 THEN si.posting_date END) last_sale_date
+        FROM `tabSales Invoice Item` sii
+        INNER JOIN `tabSales Invoice` si ON si.name=sii.parent
+        WHERE si.docstatus=1 AND sii.item_code=%(item_code)s {wh_sales}
+    """, {"item_code":item_code,"warehouse":warehouse,"analysis_days":analysis_days}, as_dict=True)[0]
+    wh_purchase = "AND pii.warehouse = %(warehouse)s" if warehouse else ""
+    purchases = frappe.db.sql(f"""
+        SELECT
+            MAX(CASE WHEN IFNULL(pi.is_return,0)=0 THEN pi.posting_date END) last_purchase_date,
+            COALESCE(SUM(CASE WHEN pi.posting_date >= DATE_SUB(CURDATE(), INTERVAL %(recent_days)s DAY)
+                THEN CASE WHEN IFNULL(pi.is_return,0)=1 THEN -ABS(pii.stock_qty) ELSE ABS(pii.stock_qty) END ELSE 0 END),0) recent_purchase_qty
+        FROM `tabPurchase Invoice Item` pii
+        INNER JOIN `tabPurchase Invoice` pi ON pi.name=pii.parent
+        WHERE pi.docstatus=1 AND pii.item_code=%(item_code)s {wh_purchase}
+    """, {"item_code":item_code,"warehouse":warehouse,"recent_days":recent_days}, as_dict=True)[0]
+
+    sales_qty = max(0.0, flt(sales.sales_qty))
+    projected = current_qty + flt(incoming_stock_qty)
+    avg_daily = sales_qty / analysis_days if analysis_days else 0.0
+    coverage_days = projected / avg_daily if avg_daily > 0 else None
+    last_sale_days = _days_since(sales.last_sale_date)
+    last_purchase_days = _days_since(purchases.last_purchase_date)
+    flags=[]; messages=[]
+
+    if last_purchase_days is not None and last_purchase_days <= recent_days and (not sales.last_sale_date or getdate(sales.last_sale_date) < getdate(purchases.last_purchase_date)):
+        flags.append("RECENT_PURCHASE_NO_SALE")
+        messages.append(_("Purchased within the last {0} days with no sale after the latest purchase.").format(recent_days))
+    if projected >= minimum_qty and (last_sale_days is None or last_sale_days >= dormant_days):
+        flags.append("DORMANT_ITEM")
+        messages.append(_("Dormant item: no sale for {0} days or no recorded sale.").format(last_sale_days if last_sale_days is not None else dormant_days))
+    if projected >= minimum_qty and (avg_daily <= 0 or (coverage_days is not None and coverage_days >= coverage_limit)):
+        flags.append("HIGH_STOCK_SLOW_MOVEMENT")
+        messages.append(_("High projected stock with slow movement ({0} days coverage).").format(round(coverage_days,1) if coverage_days is not None else _("no sales")))
+
+    level = "Critical" if "DORMANT_ITEM" in flags or len(flags) >= 2 else ("Warning" if flags else "None")
+    return {
+        "level":level, "flags":flags, "messages":messages,
+        "current_qty":current_qty, "incoming_stock_qty":flt(incoming_stock_qty), "projected_qty":projected,
+        "sales_analysis_days":analysis_days, "sales_qty":sales_qty, "avg_daily_sales":avg_daily,
+        "coverage_days":coverage_days, "last_sale_date":sales.last_sale_date, "last_sale_days":last_sale_days,
+        "last_purchase_date":purchases.last_purchase_date, "last_purchase_days":last_purchase_days,
+        "recent_purchase_qty":flt(purchases.recent_purchase_qty),
+    }
+
+
+@frappe.whitelist()
+def search_purchase_item_cards(search_text: str, warehouse: str | None = None, supplier: str | None = None, limit: int = 10):
+    _require_read_access()
+    limit = max(1, min(cint(limit) or 10, 30))
+    raw_rows = search_purchase_items("Item", search_text or "", "name", 0, limit, {"warehouse":warehouse or ""})
+    results=[]
+    for raw in raw_rows:
+        item_code, item_name, item_name_ar, actual_qty, stock_uom, customer_price = raw
+        history = _latest_purchase_rows(item_code, supplier) if supplier else _latest_purchase_rows(item_code)
+        latest = history[0] if history else None
+        risk = _purchase_risk_metrics(item_code, warehouse, 0)
+        results.append({
+            "item_code":item_code,"item_name":item_name,"item_name_ar":item_name_ar,
+            "actual_qty":flt(actual_qty),"stock_uom":stock_uom,"customer_price":flt(customer_price),
+            "last_purchase_rate":flt((latest or {}).get("final_net_rate") or (latest or {}).get("rate")),
+            "last_purchase_date":(latest or {}).get("posting_date"),"risk":risk,
+        })
+    return results
+
+
+@frappe.whitelist()
+def get_purchase_risk(item_code: str, warehouse: str | None = None, qty: float = 0, conversion_factor: float = 1):
+    _require_read_access()
+    return _purchase_risk_metrics(item_code, warehouse, flt(qty) * (flt(conversion_factor) or 1.0))
 
 @frappe.whitelist()
 def get_item_context(
@@ -588,6 +775,7 @@ def get_item_context(
         "latest_purchase": latest_all[0] if latest_all else None,
         "latest_supplier_purchase": latest_supplier[0] if latest_supplier else None,
         "purchase_history": latest_all,
+        "risk": _purchase_risk_metrics(item_code, warehouse, 0),
     }
 
 
@@ -699,6 +887,53 @@ def _copy_tax_template(doc, template_name: str | None, included_in_print_rate: i
         doc.append("taxes", values)
 
 
+
+def _item_tax_accounts(template_name: str | None) -> list[dict]:
+    if not template_name or not frappe.db.exists("Item Tax Template", template_name):
+        return []
+    template=frappe.get_doc("Item Tax Template",template_name)
+    return [{"account":row.tax_type,"rate":flt(row.tax_rate)} for row in (template.get("taxes") or []) if row.tax_type]
+
+
+def _ensure_item_tax_rows(doc, payload: frappe._dict) -> None:
+    existing={row.account_head for row in (doc.get("taxes") or []) if row.account_head}
+    for source in payload.get("items") or []:
+        row=frappe._dict(source)
+        if cint(row.get("is_bonus")):
+            continue
+        if (row.get("tax_entry_mode") or "No VAT") == "No VAT":
+            continue
+        accounts=_item_tax_accounts(row.get("item_tax_template"))
+        if not accounts:
+            frappe.throw(_("Select an Item Tax Template for taxable item {0}.").format(frappe.bold(row.get("item_code") or "")))
+        for tax in accounts:
+            if tax["account"] in existing: continue
+            doc.append("taxes", {"charge_type":"On Net Total","account_head":tax["account"],"description":_("Item VAT"),"rate":0,"included_in_print_rate":1,"category":"Total","add_deduct_tax":"Add"})
+            existing.add(tax["account"])
+    for tax in doc.get("taxes") or []:
+        if tax.charge_type != "Actual": tax.included_in_print_rate=1
+
+
+def _apply_item_tax_overrides(doc, payload: frappe._dict) -> None:
+    tax_accounts = [
+        tax.account_head for tax in (doc.get("taxes") or [])
+        if tax.account_head and tax.charge_type != "Actual"
+    ]
+    for item, source in zip(doc.get("items") or [], payload.get("items") or []):
+        row=frappe._dict(source)
+        calc=_calculate_row(row,1)
+        rates = {account: 0.0 for account in tax_accounts}
+        if cint(row.get("is_bonus")):
+            item.item_tax_rate=json.dumps(rates)
+            continue
+        if (row.get("tax_entry_mode") or "No VAT") != "No VAT" and calc.vat_per_unit > 0:
+            accounts=_item_tax_accounts(row.get("item_tax_template"))
+            if len(accounts) != 1:
+                frappe.throw(_("Manual or item-level VAT requires an Item Tax Template with one tax account for item {0}.").format(frappe.bold(row.get("item_code") or "")))
+            effective_rate=100.0*calc.vat_per_unit/calc.net_before_vat if calc.net_before_vat else 0
+            rates[accounts[0]["account"]] = effective_rate
+        item.item_tax_rate=json.dumps(rates)
+
 def _append_additional_charge(doc, account: str | None, amount: float, description: str | None) -> None:
     amount = flt(amount)
     if not amount:
@@ -737,26 +972,166 @@ def _validate_header(payload: frappe._dict) -> None:
         frappe.throw(_("Add at least one purchase item."))
 
 
-def _calculate_row(row: frappe._dict) -> tuple[float, float, float]:
-    printed_price = flt(row.get("printed_retail_price"))
-    supplier_discount = max(0.0, min(100.0, flt(row.get("supplier_discount"))))
-    additional_discount = max(0.0, min(100.0, flt(row.get("additional_discount"))))
-    if cint(row.get("is_bonus")):
-        return 100.0, 0.0, printed_price
-    if printed_price <= 0:
-        frappe.throw(
-            _("Printed Retail Price is required for item {0}.").format(
-                frappe.bold(row.get("item_code") or "")
-            )
-        )
-    effective = 100.0 * (
-        1.0
-        - (1.0 - supplier_discount / 100.0)
-        * (1.0 - additional_discount / 100.0)
-    )
-    rate = printed_price * (1.0 - effective / 100.0)
-    return effective, rate, printed_price - rate
+def _calculate_row(row: frappe._dict, tax_included: int = 1) -> dict:
+    customer_price = flt(row.get("customer_price") or row.get("printed_retail_price"))
+    qty = flt(row.get("qty")) or 1.0
+    mode = row.get("tax_entry_mode") or "No VAT"
+    vat_inclusive = cint(row.get("vat_inclusive"))
+    template_rate = _item_tax_template_rate(row.get("item_tax_template"))
+    vat_rate = max(0.0, flt(row.get("vat_rate")) or (template_rate if mode != "No VAT" else 0))
 
+    if cint(row.get("is_bonus")):
+        customer_base = customer_price / (1.0 + vat_rate / 100.0) if mode != "No VAT" and vat_rate else customer_price
+        taxable_base = max(0.0, flt(row.get("supplier_base_price")) or customer_base)
+        if mode == "VAT Per Unit":
+            vat_per_unit = max(0.0, flt(row.get("vat_per_unit")))
+        elif mode == "Total VAT for Line":
+            vat_per_unit = max(0.0, flt(row.get("total_vat"))) / qty
+        elif mode == "Auto by VAT %":
+            vat_per_unit = taxable_base * vat_rate / 100.0
+        else:
+            vat_per_unit = 0.0
+        total_vat = max(0.0, flt(row.get("total_vat"))) if mode == "Total VAT for Line" else vat_per_unit * qty
+        final_rate = vat_per_unit
+        effective = 100.0 * (1.0 - final_rate / customer_price) if customer_price else 100.0
+        return frappe._dict(
+            customer_price=customer_price,
+            customer_base_before_vat=customer_base,
+            supplier_base=taxable_base,
+            supplier_discount=100,
+            additional_discount=0,
+            net_before_vat=0,
+            vat_rate=vat_rate,
+            vat_per_unit=vat_per_unit,
+            total_vat=total_vat,
+            final_rate=final_rate,
+            effective_discount=effective,
+            amount=qty * final_rate,
+        )
+
+    if customer_price <= 0:
+        frappe.throw(_("Customer Price is required for item {0}.").format(frappe.bold(row.get("item_code") or "")))
+
+    method = row.get("pricing_method") or "Discount From Customer Price"
+    supplier_invoice_price = (
+        customer_price
+        if method == "Discount From Customer Price"
+        else (flt(row.get("supplier_base_price")) or customer_price)
+    )
+    supplier_invoice_price = max(0.0, supplier_invoice_price)
+    if supplier_invoice_price <= 0:
+        frappe.throw(_("Supplier Invoice Price is required for item {0}.").format(frappe.bold(row.get("item_code") or "")))
+
+    additional = max(0.0, min(100.0, flt(row.get("additional_discount"))))
+    supplier_discount = max(0.0, min(100.0, flt(row.get("supplier_discount"))))
+    entered_net_before_vat = 0.0
+    net_before_vat = 0.0
+    vat_per_unit = 0.0
+    final_rate = 0.0
+
+    if method == "Direct Final Net Rate":
+        final_rate = max(0.0, flt(row.get("net_rate")))
+        if final_rate <= 0:
+            frappe.throw(_("Final Net Rate is required for item {0}.").format(frappe.bold(row.get("item_code") or "")))
+        if mode == "VAT Per Unit":
+            vat_per_unit = max(0.0, flt(row.get("vat_per_unit")))
+        elif mode == "Total VAT for Line":
+            vat_per_unit = max(0.0, flt(row.get("total_vat"))) / qty
+        elif mode == "Auto by VAT %" and vat_rate:
+            vat_per_unit = final_rate - final_rate / (1.0 + vat_rate / 100.0)
+        net_before_vat = max(0.0, final_rate - vat_per_unit)
+
+        discount_comparable = final_rate if vat_inclusive else net_before_vat
+        denominator = supplier_invoice_price * max(0.000001, 1.0 - additional / 100.0)
+        supplier_discount = (
+            max(0.0, min(100.0, 100.0 * (1.0 - discount_comparable / denominator)))
+            if denominator
+            else 0.0
+        )
+
+    elif method == "Direct Net Before VAT":
+        entered_net_before_vat = max(
+            0.0,
+            flt(row.get("entered_net_before_vat") or row.get("net_before_vat")),
+        )
+        if entered_net_before_vat <= 0:
+            frappe.throw(_("Net Before VAT is required for item {0}.").format(frappe.bold(row.get("item_code") or "")))
+
+        # The entered supplier net already includes the base supplier discount.
+        # Apply the Additional Discount afterwards without changing the base discount.
+        net_before_vat = entered_net_before_vat * (1.0 - additional / 100.0)
+        if mode == "VAT Per Unit":
+            vat_per_unit = max(0.0, flt(row.get("vat_per_unit")))
+        elif mode == "Total VAT for Line":
+            vat_per_unit = max(0.0, flt(row.get("total_vat"))) / qty
+        elif mode == "Auto by VAT %":
+            vat_per_unit = net_before_vat * vat_rate / 100.0
+        final_rate = net_before_vat + vat_per_unit
+
+        supplier_discount = (
+            max(0.0, min(100.0, 100.0 * (1.0 - entered_net_before_vat / supplier_invoice_price)))
+            if supplier_invoice_price
+            else 0.0
+        )
+
+    else:
+        discounted_invoice_price = (
+            supplier_invoice_price
+            * (1.0 - supplier_discount / 100.0)
+            * (1.0 - additional / 100.0)
+        )
+
+        if mode == "No VAT":
+            net_before_vat = discounted_invoice_price
+            vat_per_unit = 0.0
+            final_rate = discounted_invoice_price
+
+        elif mode == "Auto by VAT %":
+            if vat_inclusive:
+                final_rate = discounted_invoice_price
+                net_before_vat = final_rate / (1.0 + vat_rate / 100.0) if vat_rate else final_rate
+                vat_per_unit = final_rate - net_before_vat
+            else:
+                net_before_vat = discounted_invoice_price
+                vat_per_unit = net_before_vat * vat_rate / 100.0
+                final_rate = net_before_vat + vat_per_unit
+
+        else:
+            if mode == "VAT Per Unit":
+                vat_per_unit = max(0.0, flt(row.get("vat_per_unit")))
+            elif mode == "Total VAT for Line":
+                vat_per_unit = max(0.0, flt(row.get("total_vat"))) / qty
+
+            if vat_inclusive:
+                final_rate = discounted_invoice_price
+                net_before_vat = max(0.0, final_rate - vat_per_unit)
+            else:
+                net_before_vat = discounted_invoice_price
+                final_rate = net_before_vat + vat_per_unit
+
+    total_vat = max(0.0, flt(row.get("total_vat"))) if mode == "Total VAT for Line" else vat_per_unit * qty
+    effective = 100.0 * (1.0 - final_rate / customer_price) if customer_price else 0.0
+    customer_base = (
+        supplier_invoice_price / (1.0 + vat_rate / 100.0)
+        if mode != "No VAT" and vat_rate and vat_inclusive
+        else supplier_invoice_price
+    )
+
+    return frappe._dict(
+        customer_price=customer_price,
+        customer_base_before_vat=customer_base,
+        supplier_base=supplier_invoice_price,
+        supplier_discount=supplier_discount,
+        additional_discount=additional,
+        entered_net_before_vat=entered_net_before_vat,
+        net_before_vat=net_before_vat,
+        vat_rate=vat_rate,
+        vat_per_unit=vat_per_unit,
+        total_vat=total_vat,
+        final_rate=final_rate,
+        effective_discount=effective,
+        amount=qty * final_rate,
+    )
 
 def _parse_flexible_date(value: Any, label: str = "Date"):
     """Accept ISO or pharmacy-friendly DD/MM/YYYY dates, including two-digit years."""
@@ -784,57 +1159,114 @@ def _parse_flexible_date(value: Any, label: str = "Date"):
     frappe.throw(_("{0} must be entered as DD/MM/YYYY, for example 31/1/29.").format(label))
 
 
-def _build_item_row(doc, row: frappe._dict, default_warehouse: str) -> dict:
+def _build_item_row(doc, row: frappe._dict, default_warehouse: str, tax_included: int = 1) -> dict:
     item_code = row.get("item_code")
     if not item_code or not frappe.db.exists("Item", item_code):
         frappe.throw(_("Invalid item in purchase rows."))
-    item = frappe.db.get_value(
-        "Item",
-        item_code,
-        ["item_name", "description", "stock_uom", "purchase_uom", "disabled", "is_purchase_item"],
-        as_dict=True,
-    )
+    item = frappe.db.get_value("Item", item_code, ["item_name","description","stock_uom","purchase_uom","disabled","is_purchase_item"], as_dict=True)
     if cint(item.disabled) or not cint(item.is_purchase_item):
         frappe.throw(_("Item {0} cannot be purchased.").format(frappe.bold(item_code)))
-
-    qty = flt(row.get("qty"))
-    if qty <= 0:
-        frappe.throw(_("Quantity must be greater than zero for item {0}.").format(item_code))
-    uom = row.get("uom") or item.purchase_uom or item.stock_uom
-    conversion_factor = flt(row.get("conversion_factor")) or _uom_conversion_factor(
-        item_code, uom, item.stock_uom
-    )
-    effective, rate, discount_amount = _calculate_row(row)
-    printed_price = flt(row.get("printed_retail_price"))
-    is_bonus = cint(row.get("is_bonus"))
-
-    values = {
-        "item_code": item_code,
-        "item_name": item.item_name,
-        "description": item.description or item.item_name,
-        "qty": qty,
-        "uom": uom,
-        "stock_uom": item.stock_uom,
-        "conversion_factor": conversion_factor,
-        "warehouse": row.get("warehouse") or default_warehouse,
-        "price_list_rate": printed_price,
-        "rate": rate,
-        "discount_percentage": effective,
-        "discount_amount": discount_amount,
-        "is_free_item": is_bonus,
-        "allow_zero_valuation_rate": is_bonus,
-        "custom_selling_price": printed_price,
-        "custom_supplier_discount_percentage": 0 if is_bonus else flt(row.get("supplier_discount")),
-        "custom_additional_discount": 0 if is_bonus else flt(row.get("additional_discount")),
-        "custom_effective_discount_percentage": effective,
-        "custom_is_bonus_item": is_bonus,
-        "custom_batch_number": (row.get("batch_no") or "").strip(),
-        "custom_expiry_date": _parse_flexible_date(row.get("expiry_date"), _("Expiry Date")),
-        "custom_auto_batch_reason": row.get("auto_batch_reason"),
+    qty=flt(row.get("qty"))
+    if qty<=0: frappe.throw(_("Quantity must be greater than zero for item {0}.").format(item_code))
+    uom=row.get("uom") or item.purchase_uom or item.stock_uom
+    conversion_factor=flt(row.get("conversion_factor")) or _uom_conversion_factor(item_code,uom,item.stock_uom)
+    calc=_calculate_row(row,1)
+    is_bonus=cint(row.get("is_bonus"))
+    taxable_bonus = bool(is_bonus and flt(calc.final_rate) > 0)
+    standard_rate = flt(calc.final_rate)
+    parsed_expiry=_parse_flexible_date(row.get("expiry_date"),_("Expiry Date"))
+    movement_risk=_purchase_risk_metrics(item_code,row.get("warehouse") or default_warehouse,qty*conversion_factor)
+    expiry_risk=_expiry_risk(parsed_expiry, doc.posting_date)
+    if "EXPIRED_ITEM" in (expiry_risk.get("flags") or []):
+        frappe.throw(_("Expired item {0} cannot be received: {1}").format(frappe.bold(item_code), " • ".join(expiry_risk.get("messages") or [])))
+    risk=_merge_risks(movement_risk, expiry_risk)
+    confirmed=cint(row.get("risk_confirmed"))
+    values={
+        "item_code":item_code,"item_name":item.item_name,"description":item.description or item.item_name,
+        "qty":qty,"uom":uom,"stock_uom":item.stock_uom,"conversion_factor":conversion_factor,
+        "warehouse":row.get("warehouse") or default_warehouse,
+        "price_list_rate":standard_rate,"rate":standard_rate,"discount_percentage":0,"discount_amount":0,
+        "is_free_item":bool(is_bonus and not taxable_bonus),"allow_zero_valuation_rate":bool(is_bonus and not taxable_bonus),
+        "custom_selling_price":calc.customer_price,"custom_customer_base_before_vat":calc.customer_base_before_vat,
+        "custom_supplier_base_price":calc.supplier_base,"custom_purchase_pricing_method":row.get("pricing_method") or "Discount From Customer Price",
+        "custom_manual_net_rate":calc.final_rate,"custom_supplier_discount_percentage":100 if is_bonus else calc.supplier_discount,
+        "custom_additional_discount":0 if is_bonus else calc.additional_discount,"custom_effective_discount_percentage":calc.effective_discount,
+        "custom_tax_entry_mode":row.get("tax_entry_mode") or "No VAT","custom_vat_inclusive_in_final_rate":cint(row.get("vat_inclusive")),"custom_vat_rate":calc.vat_rate,
+        "custom_entered_net_before_vat":calc.entered_net_before_vat,"custom_net_before_vat":calc.net_before_vat,"custom_vat_per_unit":calc.vat_per_unit,
+        "custom_total_vat_amount":calc.total_vat,
+        "custom_purchase_risk_level":risk.get("level") or "None","custom_purchase_risk_flags":"\n".join(risk.get("messages") or []),
+        "custom_purchase_risk_confirmed":confirmed,"custom_purchase_risk_confirmation_reason":row.get("risk_confirmation_reason") or "",
+        "custom_purchase_risk_confirmed_by":frappe.session.user if confirmed else "","custom_purchase_risk_confirmed_at":now_datetime() if confirmed else None,
+        "custom_is_bonus_item":is_bonus,"custom_batch_number":(row.get("batch_no") or "").strip(),
+        "custom_expiry_date":parsed_expiry,"custom_auto_batch_reason":row.get("auto_batch_reason"),
     }
-    if row.get("item_tax_template"):
-        values["item_tax_template"] = row.get("item_tax_template")
+    if row.get("item_tax_template") and not is_bonus:
+        values["item_tax_template"]=row.get("item_tax_template")
     return values
+
+def _currency_precision(doc) -> int:
+    return cint(frappe.db.get_default("currency_precision") or 2)
+
+
+def _fraction_account(company: str, settings) -> str | None:
+    account = settings.get("fraction_adjustment_account")
+    if account:
+        return account
+    return frappe.db.get_value("Company", company, "round_off_account")
+
+
+def _apply_exact_supplier_total(doc, payload: frappe._dict, settings) -> float:
+    if hasattr(doc, "calculate_taxes_and_totals"):
+        doc.calculate_taxes_and_totals()
+
+    precision = _currency_precision(doc)
+    current_total = round(flt(doc.grand_total), precision)
+    supplier_total = flt(payload.get("supplier_invoice_total"))
+
+    # Supplier Invoice Total is automatic by default. This server fallback protects
+    # Save Draft from a temporary client rendering race or an old browser draft.
+    if not supplier_total:
+        supplier_total = current_total
+
+    if not supplier_total:
+        if cint(settings.get("require_exact_supplier_invoice_total")):
+            frappe.throw(_("Supplier Invoice Total is required."))
+        return 0.0
+    target_total = round(supplier_total, precision)
+    difference = round(target_total - current_total, precision)
+    max_adjustment = abs(flt(settings.get("max_fraction_adjustment") or 0))
+    if abs(difference) > max_adjustment:
+        frappe.throw(
+            _("Supplier invoice differs from the calculated ERP total by {0}. The maximum permitted fraction adjustment is {1}.").format(
+                frappe.bold(difference), frappe.bold(max_adjustment)
+            )
+        )
+    if difference:
+        account = _fraction_account(doc.company, settings)
+        if not account or not frappe.db.exists("Account", account):
+            frappe.throw(_("Set Purchase Fraction Adjustment Account in Pharmacy Purchase Settings or configure the company Round Off Account."))
+        doc.append("taxes", {
+            "charge_type": "Actual",
+            "account_head": account,
+            "description": _("Supplier Invoice Fraction Adjustment"),
+            "tax_amount": abs(difference),
+            "add_deduct_tax": "Add" if difference > 0 else "Deduct",
+            "category": "Total",
+        })
+        if hasattr(doc, "calculate_taxes_and_totals"):
+            doc.calculate_taxes_and_totals()
+    final_total = round(flt(doc.grand_total), precision)
+    if final_total != target_total:
+        frappe.throw(_("Unable to match the supplier invoice total exactly. ERP total is {0}, supplier total is {1}.").format(final_total, target_total))
+    if doc.meta.has_field("custom_supplier_invoice_total"):
+        doc.custom_supplier_invoice_total = target_total
+    if doc.meta.has_field("custom_fraction_adjustment"):
+        doc.custom_fraction_adjustment = difference
+    if doc.meta.has_field("custom_fraction_adjustment_account"):
+        doc.custom_fraction_adjustment_account = _fraction_account(doc.company, settings) if difference else ""
+    if doc.meta.has_field("custom_claim_match_status"):
+        doc.custom_claim_match_status = "Matched"
+    return difference
 
 
 def _attach_file(file_url: str | None, invoice_name: str) -> None:
@@ -882,8 +1314,56 @@ def _invoice_response(doc) -> dict:
         "outstanding_amount": flt(doc.outstanding_amount),
         "currency": doc.currency,
         "items_count": len(doc.items or []),
+        "items": [
+            {
+                "idx": row.idx,
+                "item_code": row.item_code,
+                "batch_no": row.get("batch_no") or row.get("custom_batch_number") or "",
+                "serial_and_batch_bundle": row.get("serial_and_batch_bundle") or "",
+                "expiry_date": row.get("custom_expiry_date"),
+                "auto_batch_generated": cint(row.get("custom_auto_batch_generated")),
+            }
+            for row in (doc.get("items") or [])
+        ],
+        "supplier_invoice_total": flt(doc.get("custom_supplier_invoice_total")),
+        "fraction_adjustment": flt(doc.get("custom_fraction_adjustment")),
+        "claim_match_status": doc.get("custom_claim_match_status") or "",
+        "expected_claim_period_from": doc.get("custom_expected_claim_period_from"),
+        "expected_claim_period_to": doc.get("custom_expected_claim_period_to"),
         "route": f"/app/purchase-invoice/{doc.name}",
     }
+
+
+def _validate_near_expiry_confirmation_before_save(payload: frappe._dict, settings) -> None:
+    if not cint(settings.get("enable_purchase_risk_alerts")) or not cint(settings.get("require_risk_confirmation")):
+        return
+
+    posting_date = payload.get("posting_date") or nowdate()
+    for index, source in enumerate(payload.get("items") or [], start=1):
+        row = frappe._dict(source)
+        expiry_risk = _expiry_risk(row.get("expiry_date"), posting_date)
+        flags = expiry_risk.get("flags") or []
+
+        if "EXPIRED_ITEM" in flags:
+            frappe.throw(
+                _("Expired item on row {0} cannot be saved: {1}").format(
+                    index,
+                    " • ".join(expiry_risk.get("messages") or []),
+                )
+            )
+
+        if "NEAR_EXPIRY" not in flags:
+            continue
+
+        confirmed = cint(row.get("risk_confirmed"))
+        reason = (row.get("risk_confirmation_reason") or "").strip()
+        if not confirmed or not reason:
+            frappe.throw(
+                _("Confirm the near-expiry item and select a reason on row {0}: {1}").format(
+                    index,
+                    " • ".join(expiry_risk.get("messages") or []),
+                )
+            )
 
 
 @frappe.whitelist()
@@ -891,6 +1371,8 @@ def save_draft(payload):
     _require_create_access()
     payload = _parse_payload(payload)
     _validate_header(payload)
+    settings = get_purchase_settings()
+    _validate_near_expiry_confirmation_before_save(payload, settings)
 
     invoice_name = (payload.get("name") or "").strip()
     bill_no = (payload.get("bill_no") or "").strip()
@@ -925,6 +1407,13 @@ def save_draft(payload):
     doc.set_posting_time = 1
     doc.bill_no = bill_no
     doc.bill_date = payload.get("bill_date") or doc.posting_date
+    claim_period = _claim_period_for_date(doc.supplier, doc.bill_date)
+    if doc.meta.has_field("custom_claim_basis_date"):
+        doc.custom_claim_basis_date = claim_period.get("basis_date") or doc.bill_date
+    if doc.meta.has_field("custom_expected_claim_period_from"):
+        doc.custom_expected_claim_period_from = claim_period.get("period_from")
+    if doc.meta.has_field("custom_expected_claim_period_to"):
+        doc.custom_expected_claim_period_to = claim_period.get("period_to")
     doc.due_date = payload.get("due_date") or doc.posting_date
     doc.update_stock = 1
     doc.set_warehouse = payload.get("warehouse")
@@ -943,16 +1432,14 @@ def save_draft(payload):
     doc.set("items", [])
     for source in payload.get("items") or []:
         row = frappe._dict(source)
-        doc.append("items", _build_item_row(doc, row, payload.get("warehouse")))
+        doc.append("items", _build_item_row(doc, row, payload.get("warehouse"), 1))
 
     if hasattr(doc, "set_missing_values"):
         doc.set_missing_values()
 
-    _copy_tax_template(
-        doc,
-        payload.get("taxes_and_charges"),
-        cint(payload.get("tax_included_in_print_rate")),
-    )
+    _copy_tax_template(doc, payload.get("taxes_and_charges"), 1)
+    _ensure_item_tax_rows(doc, payload)
+    _apply_item_tax_overrides(doc, payload)
     _append_additional_charge(
         doc,
         payload.get("additional_charge_account"),
@@ -963,6 +1450,7 @@ def save_draft(payload):
     invoice_discount = max(0.0, min(100.0, flt(payload.get("invoice_discount_percentage"))))
     doc.apply_discount_on = "Net Total"
     doc.additional_discount_percentage = invoice_discount
+    _apply_exact_supplier_total(doc, payload, settings)
 
     if invoice_name:
         doc.save()
@@ -975,3 +1463,54 @@ def save_draft(payload):
         "invoice": _invoice_response(doc),
         "recent_invoices": _recent_invoices(doc.company),
     }
+
+
+
+def _validate_purchase_risk_before_submit(doc) -> None:
+    settings=get_purchase_settings()
+    if not cint(settings.get("enable_purchase_risk_alerts")) or not cint(settings.get("require_risk_confirmation")):
+        return
+    role=(settings.get("critical_risk_approval_role") or "").strip()
+    for row in doc.get("items") or []:
+        expiry_risk=_expiry_risk(row.get("custom_expiry_date"), doc.posting_date)
+        if "EXPIRED_ITEM" in (expiry_risk.get("flags") or []):
+            frappe.throw(_("Expired item {0} cannot be submitted: {1}").format(frappe.bold(row.item_code), " • ".join(expiry_risk.get("messages") or [])))
+        stored={"level":row.get("custom_purchase_risk_level") or "None","flags":[],"messages":(row.get("custom_purchase_risk_flags") or "").splitlines()}
+        merged=_merge_risks(stored, expiry_risk)
+        level=merged.get("level") or "None"
+        if level not in ("Warning","Critical"): continue
+        if not cint(row.get("custom_purchase_risk_confirmed")) or not (row.get("custom_purchase_risk_confirmation_reason") or "").strip():
+            frappe.throw(_("Confirm the purchase risk and reason for item {0} before submitting.").format(frappe.bold(row.item_code)))
+        if level=="Critical" and role:
+            confirmer=row.get("custom_purchase_risk_confirmed_by") or frappe.session.user
+            if role not in frappe.get_roles(confirmer):
+                frappe.throw(_("Critical-risk item {0} must be confirmed by a user with role {1}.").format(frappe.bold(row.item_code),frappe.bold(role)))
+
+def validate_purchase_invoice_risk_before_submit(doc, method=None):
+    """Enforce purchase-risk confirmation even from the standard ERPNext form."""
+    _validate_purchase_risk_before_submit(doc)
+
+
+@frappe.whitelist()
+def submit_invoice(name: str):
+    _require_create_access()
+    doc = frappe.get_doc("Purchase Invoice", name)
+    doc.check_permission("submit")
+    if doc.docstatus != 0:
+        frappe.throw(_("Only a Draft Purchase Invoice can be submitted."))
+    _validate_purchase_risk_before_submit(doc)
+    doc.submit()
+    doc.reload()
+    return {"invoice": _invoice_response(doc), "recent_invoices": _recent_invoices(doc.company)}
+
+
+@frappe.whitelist()
+def cancel_invoice(name: str):
+    _require_create_access()
+    doc = frappe.get_doc("Purchase Invoice", name)
+    doc.check_permission("cancel")
+    if doc.docstatus != 1:
+        frappe.throw(_("Only a Submitted Purchase Invoice can be cancelled."))
+    doc.cancel()
+    doc.reload()
+    return {"invoice": _invoice_response(doc), "recent_invoices": _recent_invoices(doc.company)}

@@ -22,6 +22,30 @@
   "selling_price_list",
   "retail_price_difference_tolerance",
   "block_batch_price_conflict",
+  "commercial_control_section",
+  "default_pricing_method",
+  "require_exact_supplier_invoice_total",
+  "fraction_adjustment_account",
+  "max_fraction_adjustment",
+  "near_expiry_warning_months",
+  "auto_merge_same_item_batch",
+  "enable_local_draft_recovery",
+  "claim_control_section",
+  "claim_cycle_basis",
+  "claim_settlement_discount_account",
+  "tax_input_section",
+  "default_tax_entry_mode",
+  "manual_vat_difference_tolerance",
+  "purchase_risk_section",
+  "enable_purchase_risk_alerts",
+  "item_search_result_limit",
+  "recent_purchase_warning_days",
+  "slow_movement_analysis_days",
+  "dormant_item_days",
+  "high_stock_coverage_days",
+  "minimum_stock_qty_for_warning",
+  "require_risk_confirmation",
+  "critical_risk_approval_role",
   "shortcuts_section",
   "enable_purchase_shortcuts",
   "enter_moves_to_next_row",
@@ -139,6 +163,74 @@
    "label": "Block Different Retail Price for Existing Batch"
   },
   {
+   "fieldname": "commercial_control_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Commercial Controls"
+  },
+  {
+   "default": "Discount From Customer Price",
+   "fieldname": "default_pricing_method",
+   "fieldtype": "Select",
+   "label": "Default Purchase Pricing Method",
+   "options": "Discount From Customer Price\nDiscount From Supplier Base Price\nDirect Net Before VAT\nDirect Final Net Rate"
+  },
+  {
+   "default": "1",
+   "fieldname": "require_exact_supplier_invoice_total",
+   "fieldtype": "Check",
+   "label": "Require Exact Supplier Invoice Total"
+  },
+  {
+   "fieldname": "fraction_adjustment_account",
+   "fieldtype": "Link",
+   "label": "Purchase Fraction Adjustment Account",
+   "options": "Account",
+   "description": "Used only for small documented fractions required to match the supplier invoice exactly. If empty, the company Round Off Account is used."
+  },
+  {
+   "default": "1.00",
+   "fieldname": "max_fraction_adjustment",
+   "fieldtype": "Currency",
+   "label": "Maximum Fraction Adjustment Amount"
+  },
+  {
+   "default": "6",
+   "fieldname": "near_expiry_warning_months",
+   "fieldtype": "Int",
+   "label": "Near Expiry Warning (Months)"
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_merge_same_item_batch",
+   "fieldtype": "Check",
+   "label": "Auto Merge Same Item and Batch"
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_local_draft_recovery",
+   "fieldtype": "Check",
+   "label": "Recover Unsaved Purchase Page Drafts"
+  },
+  {
+   "fieldname": "claim_control_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Claim Controls"
+  },
+  {
+   "default": "Supplier Invoice Date",
+   "fieldname": "claim_cycle_basis",
+   "fieldtype": "Select",
+   "label": "Claim Cycle Basis",
+   "options": "Supplier Invoice Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "claim_settlement_discount_account",
+   "fieldtype": "Link",
+   "label": "Claim Settlement Discount Account",
+   "options": "Account"
+  },
+  {
    "fieldname": "shortcuts_section",
    "fieldtype": "Section Break",
    "label": "Purchase Page Keyboard Shortcuts"
@@ -205,13 +297,100 @@
    "depends_on": "eval:doc.enable_purchase_shortcuts",
    "fieldname": "shortcuts_column_break",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "tax_input_section",
+   "fieldtype": "Section Break",
+   "label": "Item VAT Entry Controls"
+  },
+  {
+   "default": "Auto by VAT %",
+   "fieldname": "default_tax_entry_mode",
+   "fieldtype": "Select",
+   "label": "Default VAT Entry Mode",
+   "options": "No VAT\nAuto by VAT %\nVAT Per Unit\nTotal VAT for Line"
+  },
+  {
+   "default": "0.10",
+   "fieldname": "manual_vat_difference_tolerance",
+   "fieldtype": "Currency",
+   "label": "Manual VAT Warning Tolerance",
+   "description": "Warn when manually entered VAT differs from the selected Item Tax Template by more than this amount per line."
+  },
+  {
+   "fieldname": "purchase_risk_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Risk Alerts"
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_purchase_risk_alerts",
+   "fieldtype": "Check",
+   "label": "Enable Purchase Risk Alerts"
+  },
+  {
+   "default": "10",
+   "depends_on": "eval:doc.enable_purchase_risk_alerts",
+   "fieldname": "item_search_result_limit",
+   "fieldtype": "Int",
+   "label": "Item Search Result Limit"
+  },
+  {
+   "default": "3",
+   "depends_on": "eval:doc.enable_purchase_risk_alerts",
+   "fieldname": "recent_purchase_warning_days",
+   "fieldtype": "Int",
+   "label": "Recent Purchase Warning Days"
+  },
+  {
+   "default": "30",
+   "depends_on": "eval:doc.enable_purchase_risk_alerts",
+   "fieldname": "slow_movement_analysis_days",
+   "fieldtype": "Int",
+   "label": "Slow Movement Analysis Days"
+  },
+  {
+   "default": "90",
+   "depends_on": "eval:doc.enable_purchase_risk_alerts",
+   "fieldname": "dormant_item_days",
+   "fieldtype": "Int",
+   "label": "Dormant Item Days"
+  },
+  {
+   "default": "90",
+   "depends_on": "eval:doc.enable_purchase_risk_alerts",
+   "fieldname": "high_stock_coverage_days",
+   "fieldtype": "Int",
+   "label": "High Stock Coverage Days"
+  },
+  {
+   "default": "5",
+   "depends_on": "eval:doc.enable_purchase_risk_alerts",
+   "fieldname": "minimum_stock_qty_for_warning",
+   "fieldtype": "Float",
+   "label": "Minimum Stock Quantity for Warning"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.enable_purchase_risk_alerts",
+   "fieldname": "require_risk_confirmation",
+   "fieldtype": "Check",
+   "label": "Require Confirmation for Risk Items"
+  },
+  {
+   "depends_on": "eval:doc.enable_purchase_risk_alerts && doc.require_risk_confirmation",
+   "fieldname": "critical_risk_approval_role",
+   "fieldtype": "Link",
+   "options": "Role",
+   "label": "Critical Risk Approval Role",
+   "description": "Optional. When set, critical-risk items must be confirmed by a user who has this role."
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-06-26 03:00:00.000000",
+ "modified": "2026-06-28 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Pharmacy Purchase Settings",

@@ -293,3 +293,26 @@ doc_events = {
         "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
     },
 }
+
+# BEGIN PHARMA PURCHASE RISK SUBMIT GUARD V1.2.10
+_purchase_invoice_risk_submit_hook = (
+    "pharma_erp.pharma_erp.page.purchase_invoice_management."
+    "purchase_invoice_management.validate_purchase_invoice_risk_before_submit"
+)
+_purchase_invoice_events = doc_events.setdefault("Purchase Invoice", {})
+_current_purchase_before_submit = _purchase_invoice_events.get("before_submit")
+
+if not _current_purchase_before_submit:
+    _purchase_invoice_events["before_submit"] = _purchase_invoice_risk_submit_hook
+elif isinstance(_current_purchase_before_submit, str):
+    if _current_purchase_before_submit != _purchase_invoice_risk_submit_hook:
+        _purchase_invoice_events["before_submit"] = [
+            _current_purchase_before_submit,
+            _purchase_invoice_risk_submit_hook,
+        ]
+else:
+    _purchase_before_submit_list = list(_current_purchase_before_submit)
+    if _purchase_invoice_risk_submit_hook not in _purchase_before_submit_list:
+        _purchase_before_submit_list.append(_purchase_invoice_risk_submit_hook)
+    _purchase_invoice_events["before_submit"] = _purchase_before_submit_list
+# END PHARMA PURCHASE RISK SUBMIT GUARD V1.2.10

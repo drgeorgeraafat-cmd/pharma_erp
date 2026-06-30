@@ -24,6 +24,11 @@ function normalize_purchase_shortcut(value) {
 }
 
 frappe.ui.form.on("Pharmacy Purchase Settings", {
+    setup(frm) {
+        ["fraction_adjustment_account", "claim_settlement_discount_account"].forEach((fieldname) => {
+            frm.set_query(fieldname, () => ({ filters: { is_group: 0, disabled: 0 } }));
+        });
+    },
     refresh(frm) {
         frm.set_intro(
             __("Controls pharmacy purchase invoices, supplier bills, batches, retail-price updates, and purchase-page keyboard shortcuts."),

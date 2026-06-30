@@ -25,6 +25,26 @@ DEFAULT_SETTINGS = frappe._dict(
         "selling_price_list": "Standard Selling",
         "retail_price_difference_tolerance": 0.01,
         "block_batch_price_conflict": 1,
+        "default_pricing_method": "Discount From Customer Price",
+        "require_exact_supplier_invoice_total": 1,
+        "fraction_adjustment_account": "",
+        "max_fraction_adjustment": 1.0,
+        "near_expiry_warning_months": 6,
+        "auto_merge_same_item_batch": 1,
+        "enable_local_draft_recovery": 1,
+        "claim_cycle_basis": "Supplier Invoice Date",
+        "claim_settlement_discount_account": "",
+        "default_tax_entry_mode": "Auto by VAT %",
+        "manual_vat_difference_tolerance": 0.10,
+        "enable_purchase_risk_alerts": 1,
+        "item_search_result_limit": 10,
+        "recent_purchase_warning_days": 3,
+        "slow_movement_analysis_days": 30,
+        "dormant_item_days": 90,
+        "high_stock_coverage_days": 90,
+        "minimum_stock_qty_for_warning": 5,
+        "require_risk_confirmation": 1,
+        "critical_risk_approval_role": "",
     }
 )
 
@@ -81,7 +101,7 @@ def validate_purchase_invoice(doc, method=None):
             bonus_count += 1
 
         needs_recalculation = (
-            _calculate_pharmacy_purchase_rate(row) or needs_recalculation
+            _calculate_pharmacy_purchase_rate(row, doc) or needs_recalculation
         )
 
         if _detect_retail_price_change(row, settings):
@@ -227,57 +247,119 @@ def _normalize_bonus_row(row) -> bool:
     return changed
 
 
-def _calculate_pharmacy_purchase_rate(row) -> bool:
-    """Calculate rate while preserving basic, additional and effective discounts.
+def _purchase_item_tax_rate(row) -> float:
+    template_name = row.get("item_tax_template")
+    if not template_name or not frappe.db.exists("Item Tax Template", template_name):
+        return 0.0
+    template = frappe.get_doc("Item Tax Template", template_name)
+    return sum(flt(tax.tax_rate) for tax in (template.get("taxes") or []))
 
-    ``custom_supplier_discount_percentage`` is the supplier/company discount entered
-    by the user. ``custom_additional_discount`` is applied sequentially. ERPNext's
-    standard ``discount_percentage`` stores only the resulting effective discount so
-    its native totals and accounting remain consistent.
-    """
+
+def _tax_is_included(doc) -> bool:
+    return any(
+        cint(tax.get("included_in_print_rate"))
+        for tax in (doc.get("taxes") or [])
+        if tax.get("charge_type") != "Actual"
+    )
+
+
+def _calculate_pharmacy_purchase_rate(row, doc=None) -> bool:
+    """Recalculate a pharmacy purchase line without confusing retail and tax bases."""
     if cint(row.get("custom_is_bonus_item")):
         return _normalize_bonus_row(row)
 
-    printed_price = flt(row.get("custom_selling_price"))
-    if not printed_price and row.item_code and _has_field("Item", "custom_customer_price"):
-        printed_price = flt(
-            frappe.db.get_value("Item", row.item_code, "custom_customer_price")
-        )
-        if printed_price:
-            _set_row_if_field(row, "custom_selling_price", printed_price)
-
-    if not printed_price:
+    customer_price = flt(row.get("custom_selling_price"))
+    if not customer_price and row.item_code and _has_field("Item", "custom_customer_price"):
+        customer_price = flt(frappe.db.get_value("Item", row.item_code, "custom_customer_price"))
+        if customer_price:
+            _set_row_if_field(row, "custom_selling_price", customer_price)
+    if not customer_price:
         return False
 
-    base_discount = max(
-        0.0,
-        min(100.0, flt(row.get("custom_supplier_discount_percentage"))),
-    )
-    additional_discount = max(
-        0.0, min(100.0, flt(row.get("custom_additional_discount")))
-    )
-    effective_discount = 100.0 * (
-        1.0
-        - (1.0 - base_discount / 100.0)
-        * (1.0 - additional_discount / 100.0)
-    )
-    final_rate = printed_price * (1.0 - effective_discount / 100.0)
-    total_discount_amount = printed_price - final_rate
+    mode = row.get("custom_tax_entry_mode") or "No VAT"
+    vat_rate = max(0.0, flt(row.get("custom_vat_rate")))
+    qty = abs(flt(row.get("qty"))) or 1.0
+    method = row.get("custom_purchase_pricing_method") or "Discount From Customer Price"
+    additional = max(0.0, min(100.0, flt(row.get("custom_additional_discount"))))
 
-    changed = False
+    customer_base = customer_price / (1.0 + vat_rate / 100.0) if mode != "No VAT" and vat_rate else customer_price
+    supplier_base = flt(row.get("custom_supplier_base_price")) or customer_base
+    base = customer_base if method == "Discount From Customer Price" else supplier_base
+    base = base or customer_base
+
+    if method == "Direct Final Net Rate":
+        final_rate = flt(row.get("custom_manual_net_rate") or row.get("rate"))
+        if mode == "VAT Per Unit":
+            vat_per_unit = max(0.0, flt(row.get("custom_vat_per_unit")))
+        elif mode == "Total VAT for Line":
+            vat_per_unit = max(0.0, flt(row.get("custom_total_vat_amount"))) / qty
+        elif mode == "Auto by VAT %" and vat_rate:
+            net_before = final_rate / (1.0 + vat_rate / 100.0)
+            vat_per_unit = final_rate - net_before
+        else:
+            vat_per_unit = 0.0
+        net_before = max(0.0, final_rate - vat_per_unit)
+    elif method == "Direct Net Before VAT":
+        entered_net_before = max(
+            0.0,
+            flt(row.get("custom_entered_net_before_vat") or row.get("custom_net_before_vat")),
+        )
+        net_before = entered_net_before * (1.0 - additional / 100.0)
+        if mode == "VAT Per Unit":
+            vat_per_unit = max(0.0, flt(row.get("custom_vat_per_unit")))
+        elif mode == "Total VAT for Line":
+            vat_per_unit = max(0.0, flt(row.get("custom_total_vat_amount"))) / qty
+        elif mode == "Auto by VAT %":
+            vat_per_unit = net_before * vat_rate / 100.0
+        else:
+            vat_per_unit = 0.0
+        final_rate = net_before + vat_per_unit
+    else:
+        base_discount = max(0.0, min(100.0, flt(row.get("custom_supplier_discount_percentage"))))
+        net_before = base * (1.0 - base_discount / 100.0) * (1.0 - additional / 100.0)
+        if mode == "VAT Per Unit":
+            vat_per_unit = max(0.0, flt(row.get("custom_vat_per_unit")))
+        elif mode == "Total VAT for Line":
+            vat_per_unit = max(0.0, flt(row.get("custom_total_vat_amount"))) / qty
+        elif mode == "Auto by VAT %":
+            vat_per_unit = net_before * vat_rate / 100.0
+        else:
+            vat_per_unit = 0.0
+        final_rate = net_before + vat_per_unit
+
+    if method == "Direct Net Before VAT":
+        base_discount = (
+            max(0.0, min(100.0, 100.0 * (1.0 - entered_net_before / base)))
+            if base
+            else 0.0
+        )
+    else:
+        denominator = base * max(0.000001, 1.0 - additional / 100.0)
+        base_discount = max(0.0, min(100.0, 100.0 * (1.0 - net_before / denominator))) if denominator else 0.0
+    net_discount = 100.0 * (1.0 - final_rate / customer_price) if customer_price else 0.0
+    total_vat = vat_per_unit * qty
+
     values = {
-        "price_list_rate": printed_price,
-        "custom_effective_discount_percentage": effective_discount,
-        "discount_percentage": effective_discount,
-        "discount_amount": total_discount_amount,
+        "price_list_rate": final_rate,
         "rate": final_rate,
+        "discount_percentage": 0,
+        "discount_amount": 0,
+        "custom_customer_base_before_vat": customer_base,
+        "custom_supplier_base_price": supplier_base,
+        "custom_supplier_discount_percentage": base_discount,
+        "custom_effective_discount_percentage": net_discount,
+        "custom_manual_net_rate": final_rate,
+        "custom_entered_net_before_vat": entered_net_before if method == "Direct Net Before VAT" else 0,
+        "custom_net_before_vat": net_before,
+        "custom_vat_per_unit": vat_per_unit,
+        "custom_total_vat_amount": total_vat,
     }
+    changed = False
     for fieldname, value in values.items():
         if row.meta.has_field(fieldname) and abs(flt(row.get(fieldname)) - flt(value)) > 0.000001:
             row.set(fieldname, value)
             changed = True
     return changed
-
 
 def _detect_retail_price_change(row, settings) -> bool:
     printed_price = flt(row.get("custom_selling_price"))
