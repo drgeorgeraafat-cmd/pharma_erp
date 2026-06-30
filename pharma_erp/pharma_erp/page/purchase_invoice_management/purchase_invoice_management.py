@@ -1334,6 +1334,145 @@ def _invoice_response(doc) -> dict:
     }
 
 
+
+def _purchase_page_additional_charge(doc) -> dict:
+    for tax in doc.get("taxes") or []:
+        if tax.charge_type != "Actual":
+            continue
+        if (tax.description or "") == _("Supplier Invoice Fraction Adjustment"):
+            continue
+        if (tax.description or "") == "Supplier Invoice Fraction Adjustment":
+            continue
+        return {
+            "account": tax.account_head or "",
+            "amount": flt(tax.tax_amount),
+            "description": tax.description or "",
+        }
+    return {"account": "", "amount": 0.0, "description": ""}
+
+
+def _purchase_page_item_row(doc, row) -> dict:
+    item = frappe.db.get_value(
+        "Item",
+        row.item_code,
+        _safe_fields(
+            "Item",
+            [
+                "item_name", "stock_uom", "has_batch_no", "has_expiry_date",
+                "custom_customer_price",
+            ],
+        ),
+        as_dict=True,
+    ) or frappe._dict()
+    conversion_factor = flt(row.conversion_factor) or 1.0
+    warehouse = row.warehouse or doc.set_warehouse
+    movement_risk = _purchase_risk_metrics(
+        row.item_code,
+        warehouse,
+        flt(row.qty) * conversion_factor,
+    )
+    expiry_risk = _expiry_risk(row.get("custom_expiry_date"), doc.posting_date)
+    merged_risk = _merge_risks(movement_risk, expiry_risk)
+    customer_price = flt(row.get("custom_selling_price"))
+    supplier_price = flt(row.get("custom_supplier_base_price")) or flt(row.price_list_rate) or customer_price
+    net_rate = flt(row.get("custom_manual_net_rate")) or flt(row.rate)
+    net_before_vat = flt(row.get("custom_net_before_vat"))
+    entered_net_before_vat = flt(row.get("custom_entered_net_before_vat"))
+    vat_per_unit = flt(row.get("custom_vat_per_unit"))
+    total_vat = flt(row.get("custom_total_vat_amount"))
+
+    return {
+        "row_id": row.name or f"loaded-{row.idx}",
+        "item_code": row.item_code,
+        "item_name": row.item_name or item.get("item_name") or row.item_code,
+        "qty": flt(row.qty),
+        "uom": row.uom or item.get("stock_uom"),
+        "conversion_factor": conversion_factor,
+        "customer_price": customer_price,
+        "printed_retail_price": customer_price,
+        "customer_base_before_vat": flt(row.get("custom_customer_base_before_vat")),
+        "supplier_base_price": supplier_price,
+        "pricing_method": row.get("custom_purchase_pricing_method") or "Discount From Customer Price",
+        "entered_net_before_vat": entered_net_before_vat,
+        "supplier_discount": flt(row.get("custom_supplier_discount_percentage")),
+        "additional_discount": flt(row.get("custom_additional_discount")),
+        "effective_discount": flt(row.get("custom_effective_discount_percentage")),
+        "tax_entry_mode": row.get("custom_tax_entry_mode") or "No VAT",
+        "vat_inclusive": cint(row.get("custom_vat_inclusive_in_final_rate")),
+        "vat_rate": flt(row.get("custom_vat_rate")),
+        "net_before_vat": net_before_vat,
+        "vat_per_unit": vat_per_unit,
+        "total_vat": total_vat,
+        "net_rate": net_rate,
+        "amount": flt(row.amount),
+        "batch_no": row.get("custom_batch_number") or row.get("batch_no") or "",
+        "expiry_date": row.get("custom_expiry_date"),
+        "item_tax_template": row.item_tax_template or "",
+        "item_tax_rate": flt(row.get("custom_vat_rate")),
+        "is_bonus": cint(row.get("custom_is_bonus_item")),
+        "auto_batch_reason": row.get("custom_auto_batch_reason") or "",
+        "has_batch_no": cint(item.get("has_batch_no")),
+        "has_expiry_date": cint(item.get("has_expiry_date")),
+        "current_customer_price": flt(item.get("custom_customer_price")),
+        "risk_level": merged_risk.get("level") or "None",
+        "risk_flags": merged_risk.get("flags") or [],
+        "risk_messages": merged_risk.get("messages") or [],
+        "risk_confirmed": cint(row.get("custom_purchase_risk_confirmed")),
+        "risk_confirmation_reason": row.get("custom_purchase_risk_confirmation_reason") or "",
+        "risk_metrics": movement_risk,
+    }
+
+
+def _purchase_invoice_page_payload(doc) -> dict:
+    charge = _purchase_page_additional_charge(doc)
+    supplier_total = flt(doc.get("custom_supplier_invoice_total")) or flt(doc.grand_total)
+    fraction_adjustment = flt(doc.get("custom_fraction_adjustment"))
+    tax_included = 1
+    non_actual_taxes = [tax for tax in (doc.get("taxes") or []) if tax.charge_type != "Actual"]
+    if non_actual_taxes:
+        tax_included = 1 if any(cint(tax.included_in_print_rate) for tax in non_actual_taxes) else 0
+
+    return {
+        "name": doc.name,
+        "company": doc.company,
+        "supplier": doc.supplier,
+        "warehouse": doc.set_warehouse or next((row.warehouse for row in (doc.items or []) if row.warehouse), ""),
+        "payment_classification": doc.get("custom_payment_classification") or "",
+        "posting_date": doc.posting_date,
+        "bill_no": doc.bill_no or "",
+        "bill_date": doc.bill_date or doc.posting_date,
+        "due_date": doc.due_date or doc.posting_date,
+        "taxes_and_charges": doc.taxes_and_charges or "",
+        "tax_included_in_print_rate": tax_included,
+        "invoice_discount_percentage": flt(doc.additional_discount_percentage),
+        "additional_charge_account": charge.get("account") or "",
+        "additional_charge_amount": flt(charge.get("amount")),
+        "additional_charge_description": charge.get("description") or "",
+        "supplier_invoice_total": supplier_total,
+        "supplier_invoice_total_manual": 1 if abs(fraction_adjustment) > 0.000001 else 0,
+        "fraction_adjustment": fraction_adjustment,
+        "attachment": doc.get("custom_supplier_invoice_attachment") or "",
+        "remarks": doc.remarks or "",
+        "buying_price_list": doc.buying_price_list or _default_buying_price_list(),
+        "items": [_purchase_page_item_row(doc, row) for row in (doc.items or [])],
+    }
+
+
+@frappe.whitelist()
+def load_invoice(name: str):
+    _require_read_access()
+    if not name or not frappe.db.exists("Purchase Invoice", name):
+        frappe.throw(_("Purchase Invoice was not found."))
+    doc = frappe.get_doc("Purchase Invoice", name)
+    doc.check_permission("read")
+    if doc.docstatus != 0:
+        frappe.throw(_("Only Draft Purchase Invoices can be opened for editing on this page."))
+    return {
+        "invoice": _invoice_response(doc),
+        "payload": _purchase_invoice_page_payload(doc),
+    }
+
+
 def _validate_near_expiry_confirmation_before_save(payload: frappe._dict, settings) -> None:
     if not cint(settings.get("enable_purchase_risk_alerts")) or not cint(settings.get("require_risk_confirmation")):
         return

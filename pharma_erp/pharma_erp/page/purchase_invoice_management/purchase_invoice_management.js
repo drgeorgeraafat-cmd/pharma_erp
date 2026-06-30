@@ -30,6 +30,13 @@ class PurchaseInvoiceManagementPageV1 {
         this.supplierInvoiceTotalManual = false;
         this.supplierInvoiceTotalAutoUpdating = false;
         this.lastAutoSupplierInvoiceTotal = 0;
+        this.cameraScanner = null;
+        this.cameraScannerDialog = null;
+        this.cameraScannerStarting = false;
+        this.cameraScanLocked = false;
+        this.lastCameraBarcode = "";
+        this.lastCameraBarcodeAt = 0;
+        this.loadingInvoice = false;
 
         this.addStyles();
         this.setupLayoutControls();
@@ -42,7 +49,8 @@ class PurchaseInvoiceManagementPageV1 {
         );
         this.$openButton.prop("disabled", true);
         this.$validateButton = this.page.add_inner_button(__("Validate Invoice"), () => this.validateAndReport(), __("Actions"));
-        this.$submitButton = this.page.add_inner_button(__("Submit"), () => this.submitInvoice(), __("Invoice"));
+        this.$saveSubmitButton = this.page.add_inner_button(__("Save & Submit"), () => this.saveAndSubmit(), __("Invoice"));
+        this.$submitButton = this.page.add_inner_button(__("Submit Saved Draft"), () => this.submitInvoice(), __("Invoice"));
         this.$cancelButton = this.page.add_inner_button(__("Cancel"), () => this.cancelInvoice(), __("Invoice"));
         this.$submitButton.prop("disabled", true);
         this.$cancelButton.prop("disabled", true);
@@ -73,6 +81,9 @@ class PurchaseInvoiceManagementPageV1 {
                 }
                 .pimv1-hero h2 { margin: 0 0 6px; font-weight: 800; }
                 .pimv1-hero p { margin: 0; color: var(--text-muted); }
+                .pimv1-hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+                .pimv1-lifecycle-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+                .pimv1-lifecycle-actions .btn { min-width: 112px; font-weight: 700; }
                 .pimv1-doc-badge { border-radius: 999px; padding: 7px 12px; background: var(--blue-100); color: var(--blue-700); font-weight: 700; white-space: nowrap; }
                 .pimv1-grid { display: grid; gap: 12px; }
                 .pimv1-grid-4 { grid-template-columns: repeat(4, minmax(170px, 1fr)); }
@@ -164,6 +175,19 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-item-row.status-critical { background:var(--red-50); box-shadow:inset -3px 0 0 var(--red-500); }
                 .pimv1-item-row.status-warning { background:var(--orange-50); box-shadow:inset -3px 0 0 var(--orange-500); }
                 .pimv1-item-risk-dot { margin-inline-start:4px; }
+                .pimv1-camera-button { display:inline-flex; align-items:center; gap:6px; }
+                .pimv1-camera-reader {
+                    width:100%; min-height:260px; border:1px solid var(--border-color);
+                    border-radius:12px; overflow:hidden; background:#111; position:relative;
+                }
+                .pimv1-camera-reader video { width:100% !important; max-height:62vh; object-fit:cover; }
+                .pimv1-camera-status {
+                    margin-top:10px; padding:10px 12px; border-radius:9px;
+                    background:var(--subtle-fg); color:var(--text-muted); font-size:12px;
+                }
+                .pimv1-camera-status.is-success { background:var(--green-50); color:var(--green-700); }
+                .pimv1-camera-status.is-error { background:var(--red-50); color:var(--red-700); }
+                .pimv1-camera-help { margin-top:8px; color:var(--text-muted); font-size:11px; line-height:1.7; }
 
                 .pimv1-summary { display: grid; grid-template-columns: 1.4fr .9fr; gap: 12px; margin-top: 14px; }
                 .pimv1-summary-box { border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
@@ -175,6 +199,7 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-recent { width: 100%; border-collapse: collapse; }
                 .pimv1-recent th, .pimv1-recent td { padding: 9px; border-bottom: 1px solid var(--border-color); text-align: right; }
                 .pimv1-recent th { color: var(--text-muted); font-size: 11px; }
+                .pimv1-recent-actions { display:flex; gap:6px; flex-wrap:wrap; min-width:170px; }
                 .pimv1-link { color: var(--primary); font-weight: 700; cursor: pointer; }
                 .pimv1-loading, .pimv1-error { padding: 36px; text-align: center; }
                 .pimv1-attachment { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -314,7 +339,17 @@ class PurchaseInvoiceManagementPageV1 {
                         <h2>${__("Purchase & Invoice Management")}</h2>
                         <p>${__("Operational purchase entry with Purchase Invoice, stock and accounting in the background.")}</p>
                     </div>
-                    <div class="pimv1-doc-badge" data-role="draft-badge">${__("New Draft")}</div>
+                    <div class="pimv1-hero-actions">
+                        <div class="pimv1-doc-badge" data-role="draft-badge">${__("New Draft")}</div>
+                        <div class="pimv1-lifecycle-actions">
+                            <button type="button" class="btn btn-default btn-sm" data-action="page-save-draft">
+                                ${__("Save Draft")}
+                            </button>
+                            <button type="button" class="btn btn-primary btn-sm" data-action="page-save-submit">
+                                ${__("Save & Submit")}
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="pimv1-grid pimv1-grid-4">
@@ -365,6 +400,9 @@ class PurchaseInvoiceManagementPageV1 {
                         <div class="pimv1-actions">
                             <input type="text" class="form-control pimv1-barcode" data-role="barcode" placeholder="${__("Scan barcode or enter item code")}">
                             <button class="btn btn-default btn-sm" data-action="barcode-add">${__("Add Barcode")}</button>
+                            <button class="btn btn-default btn-sm pimv1-camera-button" data-action="camera-scan" title="${__("Scan barcode with the mobile camera")}">
+                                <span aria-hidden="true">📷</span><span>${__("Camera Scan")}</span>
+                            </button>
                             <button class="btn btn-primary btn-sm" data-action="add-item">${__("Add Item")}</button>
                         </div>
                     </div>
@@ -498,10 +536,13 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.off(".pimv1");
         this.$main.on("click.pimv1", "[data-action='add-item']", () => this.openItemDialog());
         this.$main.on("click.pimv1", "[data-action='barcode-add']", () => this.addByBarcode());
+        this.$main.on("click.pimv1", "[data-action='camera-scan']", () => this.openCameraScanner());
         this.$main.on("keypress.pimv1", "[data-role='barcode']", (event) => {
             if (event.which === 13) { event.preventDefault(); this.addByBarcode(); }
         });
         this.$main.on("click.pimv1", "[data-action='attach']", () => this.openUploader());
+        this.$main.on("click.pimv1", "[data-action='page-save-draft']", () => this.saveDraft());
+        this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
         this.$main.on("click.pimv1", "[data-action='edit-row']", (event) => this.openItemDialog(Number($(event.currentTarget).data("index"))));
         this.$main.on("click.pimv1", "[data-action='delete-row']", (event) => this.deleteRow(Number($(event.currentTarget).data("index"))));
         this.$main.on("change.pimv1", "[data-inline-field]", (event) => this.onInlineChange(event));
@@ -531,6 +572,7 @@ class PurchaseInvoiceManagementPageV1 {
             window.setTimeout(() => this.focusSameFieldInAdjacentRow(index, fieldname, direction), 0);
         });
         this.$main.on("click.pimv1", "[data-action='open-invoice']", (event) => frappe.set_route("Form", "Purchase Invoice", $(event.currentTarget).data("name")));
+        this.$main.on("click.pimv1", "[data-action='load-draft']", (event) => this.loadDraftInvoice($(event.currentTarget).data("name")));
         this.$main.on("click.pimv1", "[data-action='toggle-recent']", () => this.toggleRecentPanel());
         this.$main.on("click.pimv1", "[data-action='search-recent']", () => this.searchRecentInvoices());
         this.$main.on("click.pimv1", "[data-action='clear-recent']", () => this.clearRecentFilters());
@@ -648,11 +690,12 @@ class PurchaseInvoiceManagementPageV1 {
         return this.controls[fieldname] ? this.controls[fieldname].get_value() : null;
     }
 
-    async onSupplierChange() {
+    async onSupplierChange(options = {}) {
+        if (this.loadingInvoice && !options.force) return;
         const supplier = this.value("supplier");
         if (!supplier) {
             this.supplierContext = {};
-            this.controls.payment_classification.set_value("");
+            if (!options.preserveClassification) this.controls.payment_classification.set_value("");
             this.refreshCards();
             return;
         }
@@ -661,10 +704,12 @@ class PurchaseInvoiceManagementPageV1 {
             args: { supplier, company: this.value("company") },
         });
         this.supplierContext = response.message || {};
-        if (this.supplierContext.default_payment_classification) {
-            await this.controls.payment_classification.set_value(this.supplierContext.default_payment_classification);
-        } else if (this.supplierContext.custom_purchase_payment_model === "Mixed") {
-            await this.controls.payment_classification.set_value("");
+        if (!options.preserveClassification) {
+            if (this.supplierContext.default_payment_classification) {
+                await this.controls.payment_classification.set_value(this.supplierContext.default_payment_classification);
+            } else if (this.supplierContext.custom_purchase_payment_model === "Mixed") {
+                await this.controls.payment_classification.set_value("");
+            }
         }
         await this.refreshClaimPeriod();
         this.refreshCards();
@@ -697,10 +742,204 @@ class PurchaseInvoiceManagementPageV1 {
         }
     }
 
-    async addByBarcode() {
+    async ensureCameraScannerLibrary() {
+        if (window.Html5Qrcode) return;
+        await new Promise((resolve, reject) => {
+            frappe.require(
+                "/assets/pharma_erp/js/vendor/html5-qrcode/html5-qrcode.min.js",
+                () => window.Html5Qrcode ? resolve() : reject(new Error(__("Camera scanner library could not be loaded.")))
+            );
+        });
+    }
+
+    cameraErrorMessage(error) {
+        const name = String((error && error.name) || "");
+        if (!window.isSecureContext || !navigator.mediaDevices) {
+            return __("Camera access requires HTTPS. Open the ERP site through a secure HTTPS address on the mobile phone.");
+        }
+        if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+            return __("Camera permission was denied. Allow camera access for this site from the browser settings, then try again.");
+        }
+        if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+            return __("No camera was found on this device.");
+        }
+        if (name === "NotReadableError" || name === "TrackStartError") {
+            return __("The camera is being used by another application or could not be started.");
+        }
+        return (error && error.message) ? error.message : __("The camera could not be started.");
+    }
+
+    setCameraStatus(message, state = "") {
+        const dialog = this.cameraScannerDialog;
+        if (!dialog) return;
+        const $status = dialog.$wrapper.find("[data-role='camera-status']");
+        $status.removeClass("is-success is-error");
+        if (state === "success") $status.addClass("is-success");
+        if (state === "error") $status.addClass("is-error");
+        $status.text(message || "");
+    }
+
+    async openCameraScanner() {
+        if (this.cameraScannerStarting) return;
+        this.cameraScannerStarting = true;
+
+        try {
+            if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                frappe.msgprint({
+                    title: __("Secure Connection Required"),
+                    message: __("Mobile camera scanning requires HTTPS. The normal barcode input and USB scanner will continue to work."),
+                    indicator: "orange",
+                });
+                return;
+            }
+
+            await this.ensureCameraScannerLibrary();
+            await this.stopCameraScanner();
+
+            const readerId = `pimv1-camera-reader-${Date.now()}`;
+            const dialog = new frappe.ui.Dialog({
+                title: __("Scan Barcode with Camera"),
+                size: "large",
+                fields: [{ fieldname: "camera_html", fieldtype: "HTML" }],
+                primary_action_label: __("Close Camera"),
+                primary_action: async () => {
+                    await this.stopCameraScanner();
+                    dialog.hide();
+                },
+            });
+
+            this.cameraScannerDialog = dialog;
+            dialog.fields_dict.camera_html.$wrapper.html(`
+                <div class="pimv1-camera-reader" id="${readerId}"></div>
+                <div class="pimv1-camera-status" data-role="camera-status">${__("Starting the rear camera…")}</div>
+                <div class="pimv1-camera-help">
+                    ${__("Place the product barcode horizontally inside the camera frame. The item will be added automatically after a successful read.")}
+                </div>
+            `);
+            dialog.$wrapper.on("hide.bs.modal.pimv1camera", () => this.stopCameraScanner());
+            dialog.show();
+
+            this.cameraScanLocked = false;
+            this.lastCameraBarcode = "";
+            this.lastCameraBarcodeAt = 0;
+
+            const formats = window.Html5QrcodeSupportedFormats ? [
+                Html5QrcodeSupportedFormats.EAN_13,
+                Html5QrcodeSupportedFormats.EAN_8,
+                Html5QrcodeSupportedFormats.UPC_A,
+                Html5QrcodeSupportedFormats.UPC_E,
+                Html5QrcodeSupportedFormats.CODE_128,
+                Html5QrcodeSupportedFormats.CODE_39,
+                Html5QrcodeSupportedFormats.ITF,
+                Html5QrcodeSupportedFormats.QR_CODE,
+            ].filter((value) => value !== undefined) : undefined;
+
+            this.cameraScanner = new Html5Qrcode(readerId, {
+                formatsToSupport: formats,
+                verbose: false,
+                useBarCodeDetectorIfSupported: true,
+            });
+
+            await this.cameraScanner.start(
+                { facingMode: "environment" },
+                {
+                    fps: 12,
+                    qrbox: (viewfinderWidth, viewfinderHeight) => ({
+                        width: Math.max(220, Math.min(viewfinderWidth - 32, 420)),
+                        height: Math.max(90, Math.min(Math.round(viewfinderHeight * 0.28), 160)),
+                    }),
+                    aspectRatio: 1.777778,
+                    disableFlip: true,
+                },
+                async (decodedText) => this.onCameraBarcodeDetected(decodedText),
+                () => {}
+            );
+
+            this.setCameraStatus(__("Camera is ready. Point it at the product barcode."));
+        } catch (error) {
+            console.error("Purchase camera scanner error", error);
+            this.setCameraStatus(this.cameraErrorMessage(error), "error");
+            frappe.msgprint({
+                title: __("Camera Scanner"),
+                message: this.escape(this.cameraErrorMessage(error)),
+                indicator: "red",
+            });
+        } finally {
+            this.cameraScannerStarting = false;
+        }
+    }
+
+    async onCameraBarcodeDetected(decodedText) {
+        const barcode = String(decodedText || "").trim();
+        if (!barcode || this.cameraScanLocked) return;
+
+        const now = Date.now();
+        if (barcode === this.lastCameraBarcode && now - this.lastCameraBarcodeAt < 1800) return;
+        this.lastCameraBarcode = barcode;
+        this.lastCameraBarcodeAt = now;
+        this.cameraScanLocked = true;
+        this.setCameraStatus(__("Barcode detected: {0}", [barcode]), "success");
+
+        try {
+            const added = await this.addByBarcode(barcode, { fromCamera: true });
+            if (added) {
+                if (navigator.vibrate) navigator.vibrate(120);
+                this.playCameraScanBeep();
+                await this.stopCameraScanner();
+                if (this.cameraScannerDialog) this.cameraScannerDialog.hide();
+            } else {
+                this.setCameraStatus(__("Barcode {0} is not linked to an item. Try another barcode or use item search.", [barcode]), "error");
+                window.setTimeout(() => { this.cameraScanLocked = false; }, 1600);
+            }
+        } catch (error) {
+            this.setCameraStatus(this.cameraErrorMessage(error), "error");
+            window.setTimeout(() => { this.cameraScanLocked = false; }, 1600);
+        }
+    }
+
+    playCameraScanBeep() {
+        try {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) return;
+            const context = new AudioContextClass();
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            oscillator.type = "sine";
+            oscillator.frequency.value = 920;
+            gain.gain.setValueAtTime(0.06, context.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.12);
+            oscillator.connect(gain);
+            gain.connect(context.destination);
+            oscillator.start();
+            oscillator.stop(context.currentTime + 0.12);
+            oscillator.onended = () => context.close();
+        } catch (error) {
+            // Audio feedback is optional.
+        }
+    }
+
+    async stopCameraScanner() {
+        const scanner = this.cameraScanner;
+        this.cameraScanner = null;
+        this.cameraScanLocked = false;
+        if (!scanner) return;
+        try {
+            if (scanner.isScanning) await scanner.stop();
+        } catch (error) {
+            console.warn("Could not stop camera scanner", error);
+        }
+        try {
+            await scanner.clear();
+        } catch (error) {
+            // The reader element may already be removed when the dialog closes.
+        }
+    }
+
+    async addByBarcode(barcodeValue = null, options = {}) {
         const input = this.$main.find("[data-role='barcode']");
-        const searchValue = (input.val() || "").trim();
-        if (!searchValue) return;
+        const suppliedValue = typeof barcodeValue === "string" ? barcodeValue : "";
+        const searchValue = (suppliedValue || input.val() || "").trim();
+        if (!searchValue) return false;
         try {
             const context = await this.fetchItemContext(null, searchValue);
             const row = this.rowFromItemContext(context);
@@ -718,8 +957,12 @@ class PurchaseInvoiceManagementPageV1 {
                 message: __("{0} added directly. Complete batch and expiry on the row.", [context.item_name || context.item_code]),
                 indicator: "green",
             }, 4);
+            return true;
         } catch (error) {
-            frappe.msgprint({ title: __("Item Not Found"), message: this.escape(error.message || error), indicator: "red" });
+            if (!options.fromCamera) {
+                frappe.msgprint({ title: __("Item Not Found"), message: this.escape(error.message || error), indicator: "red" });
+            }
+            return false;
         }
     }
 
@@ -1876,15 +2119,15 @@ class PurchaseInvoiceManagementPageV1 {
         };
     }
 
-    async saveDraft() {
-        if (this.isSaving || !this.validatePage()) return;
+    async saveDraft(options = {}) {
+        if (this.isSaving || !this.validatePage()) return null;
         this.isSaving = true;
         try {
             const response = await frappe.call({
                 method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.save_draft",
                 args: { payload: JSON.stringify(this.payload()) },
                 freeze: true,
-                freeze_message: __("Saving Purchase Invoice Draft..."),
+                freeze_message: options.freezeMessage || __("Saving Purchase Invoice Draft..."),
             });
             const message = response.message || {};
             const invoice = message.invoice || {};
@@ -1899,9 +2142,14 @@ class PurchaseInvoiceManagementPageV1 {
             this.$openButton.prop("disabled", false);
             this.$submitButton.prop("disabled", invoice.docstatus !== 0);
             this.$cancelButton.prop("disabled", invoice.docstatus !== 1);
+            this.$main.find("[data-action='page-save-draft']").prop("disabled", invoice.docstatus !== 0);
+            this.$main.find("[data-action='page-save-submit']").prop("disabled", invoice.docstatus !== 0);
             this.clearLocalDraft();
             this.renderRecentInvoices(this.bootstrap.recent_invoices);
-            frappe.show_alert({ message: __("Purchase Invoice {0} saved as Draft.", [invoice.name]), indicator: "green" }, 7);
+            if (!options.silent) {
+                frappe.show_alert({ message: __("Purchase Invoice {0} saved as Draft.", [invoice.name]), indicator: "green" }, 7);
+            }
+            return invoice;
         } finally {
             this.isSaving = false;
         }
@@ -1943,6 +2191,10 @@ class PurchaseInvoiceManagementPageV1 {
             this.$main.find("[data-role='saved-grand']").text("—");
             this.$main.find("[data-role='saved-status']").text(__("Not saved yet"));
             this.$openButton.prop("disabled", true);
+            this.$submitButton.prop("disabled", true);
+            this.$cancelButton.prop("disabled", true);
+            this.$main.find("[data-action='page-save-draft']").prop("disabled", false);
+            this.$main.find("[data-action='page-save-submit']").prop("disabled", false);
             this.renderRows();
             this.refreshCards();
         };
@@ -1950,16 +2202,54 @@ class PurchaseInvoiceManagementPageV1 {
         else reset();
     }
 
+    async saveAndSubmit() {
+        if (this.isSaving || !this.validatePage()) return;
+        const totals = this.totals();
+        const supplierLabel = this.supplierContext.supplier_name || this.value("supplier") || "—";
+        const message = `
+            <div style="line-height:1.8">
+                <div><strong>${__("Supplier")}:</strong> ${this.escape(supplierLabel)}</div>
+                <div><strong>${__("Items")}:</strong> ${this.rows.length}</div>
+                <div><strong>${__("Supplier Invoice Total")}:</strong> ${this.money(totals.supplierInvoiceTotal)}</div>
+                <div class="text-danger" style="margin-top:8px">${__("Submitting creates stock and accounting entries and prevents normal editing.")}</div>
+            </div>`;
+        frappe.confirm(message, async () => {
+            const saved = await this.saveDraft({
+                silent: true,
+                freezeMessage: __("Saving and validating Purchase Invoice..."),
+            });
+            if (!saved || !saved.name) return;
+            await this.performSubmit();
+        });
+    }
+
+    async performSubmit() {
+        if (!this.draftName) return null;
+        const response = await frappe.call({
+            method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.submit_invoice",
+            args: { name: this.draftName },
+            freeze: true,
+            freeze_message: __("Submitting Purchase Invoice..."),
+        });
+        const message = response.message || {};
+        const invoice = message.invoice || {};
+        this.lastSavedTotals = invoice;
+        this.bootstrap.recent_invoices = message.recent_invoices || this.bootstrap.recent_invoices || [];
+        this.$submitButton.prop("disabled", true);
+        this.$cancelButton.prop("disabled", false);
+        this.$main.find("[data-action='page-save-draft']").prop("disabled", true);
+        this.$main.find("[data-action='page-save-submit']").prop("disabled", true);
+        this.$main.find("[data-role='draft-badge']").text(`${invoice.name || this.draftName} • ${invoice.status || __("Submitted")}`);
+        this.$main.find("[data-role='saved-status']").text(invoice.status || __("Submitted"));
+        this.renderRecentInvoices(this.bootstrap.recent_invoices);
+        frappe.show_alert({ message: __("Purchase Invoice {0} submitted successfully.", [invoice.name || this.draftName]), indicator: "green" }, 7);
+        return invoice;
+    }
+
     async submitInvoice() {
         if (!this.draftName || !this.validateAndReport()) return;
-        frappe.confirm(__("Submit this Purchase Invoice? Stock and accounting entries will be created."), async () => {
-            const response = await frappe.call({ method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.submit_invoice", args: { name: this.draftName }, freeze: true, freeze_message: __("Submitting Purchase Invoice...") });
-            const invoice = (response.message || {}).invoice || {};
-            this.lastSavedTotals = invoice;
-            this.$submitButton.prop("disabled", true);
-            this.$cancelButton.prop("disabled", false);
-            this.$main.find("[data-role='saved-status']").text(invoice.status || __("Submitted"));
-            frappe.show_alert({ message: __("Purchase Invoice submitted successfully."), indicator: "green" }, 6);
+        frappe.confirm(__("Submit this saved Purchase Invoice? Stock and accounting entries will be created."), async () => {
+            await this.performSubmit();
         });
     }
 
@@ -1967,12 +2257,99 @@ class PurchaseInvoiceManagementPageV1 {
         if (!this.draftName) return;
         frappe.confirm(__("Cancel this Purchase Invoice and reverse stock/accounting entries?"), async () => {
             const response = await frappe.call({ method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.cancel_invoice", args: { name: this.draftName }, freeze: true, freeze_message: __("Cancelling Purchase Invoice...") });
-            const invoice = (response.message || {}).invoice || {};
+            const message = response.message || {};
+            const invoice = message.invoice || {};
             this.lastSavedTotals = invoice;
+            this.bootstrap.recent_invoices = message.recent_invoices || this.bootstrap.recent_invoices || [];
             this.$cancelButton.prop("disabled", true);
+            this.$main.find("[data-action='page-save-draft']").prop("disabled", true);
+            this.$main.find("[data-action='page-save-submit']").prop("disabled", true);
             this.$main.find("[data-role='saved-status']").text(invoice.status || __("Cancelled"));
+            this.$main.find("[data-role='draft-badge']").text(`${invoice.name || this.draftName} • ${invoice.status || __("Cancelled")}`);
+            this.renderRecentInvoices(this.bootstrap.recent_invoices);
             frappe.show_alert({ message: __("Purchase Invoice cancelled."), indicator: "orange" }, 6);
         });
+    }
+
+    async loadDraftInvoice(name) {
+        const invoiceName = String(name || "").trim();
+        if (!invoiceName) return;
+
+        const load = async () => {
+            try {
+                const response = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.load_invoice",
+                    args: { name: invoiceName },
+                    freeze: true,
+                    freeze_message: __("Loading Purchase Invoice Draft..."),
+                });
+                const message = response.message || {};
+                await this.applyLoadedInvoice(message.payload || {}, message.invoice || {});
+                this.toggleRecentPanel(false);
+                frappe.show_alert({ message: __("Draft {0} loaded into the purchase page.", [invoiceName]), indicator: "green" }, 6);
+            } catch (error) {
+                frappe.msgprint({
+                    title: __("Unable to Load Draft"),
+                    message: this.escape(error.message || error),
+                    indicator: "red",
+                });
+            }
+        };
+
+        if ((this.rows.length || this.draftName) && this.draftName !== invoiceName) {
+            frappe.confirm(__("Open draft {0} and replace the current page data?", [invoiceName]), load);
+        } else {
+            await load();
+        }
+    }
+
+    async applyLoadedInvoice(payload, invoice) {
+        this.loadingInvoice = true;
+        try {
+            const headerFields = [
+                "company", "warehouse", "supplier", "posting_date", "bill_no", "bill_date", "due_date",
+                "taxes_and_charges", "tax_included_in_print_rate", "invoice_discount_percentage",
+                "additional_charge_account", "additional_charge_amount", "supplier_invoice_total", "remarks"
+            ];
+            for (const fieldname of headerFields) {
+                if (this.controls[fieldname] && payload[fieldname] !== undefined) {
+                    await this.controls[fieldname].set_value(payload[fieldname]);
+                }
+            }
+            if (this.controls.payment_classification) {
+                await this.controls.payment_classification.set_value(payload.payment_classification || "");
+            }
+
+            this.rows = (payload.items || []).map((row) => ({ ...row, row_id: row.row_id || this.makeRowId() }));
+            this.activeRowIndex = this.rows.length ? 0 : null;
+            this.draftName = payload.name || invoice.name || null;
+            this.attachmentUrl = payload.attachment || "";
+            this.lastSavedTotals = invoice || null;
+            this.supplierInvoiceTotalManual = cint(payload.supplier_invoice_total_manual);
+            this.lastAutoSupplierInvoiceTotal = flt(payload.supplier_invoice_total || invoice.grand_total || 0);
+        } finally {
+            this.loadingInvoice = false;
+        }
+
+        await this.onSupplierChange({ preserveClassification: true, force: true });
+        if (this.controls.payment_classification) {
+            await this.controls.payment_classification.set_value(payload.payment_classification || "");
+        }
+        await this.refreshClaimPeriod();
+
+        this.$main.find("[data-role='attachment-name']").text(this.attachmentUrl || __("No file attached"));
+        this.$main.find("[data-role='draft-badge']").text(`${this.draftName} • ${invoice.status || __("Draft")}`);
+        this.$main.find("[data-role='saved-grand']").text(`${this.money(invoice.total_taxes_and_charges)} / ${this.money(invoice.grand_total)}`);
+        this.$main.find("[data-role='saved-status']").text(invoice.status || __("Draft"));
+        this.$openButton.prop("disabled", !this.draftName);
+        this.$submitButton.prop("disabled", cint(invoice.docstatus) !== 0);
+        this.$cancelButton.prop("disabled", cint(invoice.docstatus) !== 1);
+        this.$main.find("[data-action='page-save-draft']").prop("disabled", cint(invoice.docstatus) !== 0);
+        this.$main.find("[data-action='page-save-submit']").prop("disabled", cint(invoice.docstatus) !== 0);
+        this.clearLocalDraft();
+        this.renderRows();
+        this.refreshCards();
+        this.renderSummary();
     }
 
     localDraftKey() {
@@ -2085,7 +2462,7 @@ class PurchaseInvoiceManagementPageV1 {
             return;
         }
         $container.html(`
-            <table class="pimv1-recent"><thead><tr><th>${__("Invoice")}</th><th>${__("Supplier")}</th><th>${__("Supplier Bill")}</th><th>${__("Date")}</th><th>${__("Status")}</th><th>${__("Grand Total")}</th><th>${__("Outstanding")}</th></tr></thead><tbody>
+            <table class="pimv1-recent"><thead><tr><th>${__("Invoice")}</th><th>${__("Supplier")}</th><th>${__("Supplier Bill")}</th><th>${__("Date")}</th><th>${__("Status")}</th><th>${__("Grand Total")}</th><th>${__("Outstanding")}</th><th>${__("Actions")}</th></tr></thead><tbody>
             ${invoices.map((row) => `<tr>
                 <td><span class="pimv1-link" data-action="open-invoice" data-name="${this.escape(row.name)}">${this.escape(row.name)}</span></td>
                 <td>${this.escape(row.supplier_name || row.supplier || "")}</td>
@@ -2094,6 +2471,10 @@ class PurchaseInvoiceManagementPageV1 {
                 <td>${this.escape(row.status || (row.docstatus === 0 ? __("Draft") : ""))}</td>
                 <td>${this.money(row.grand_total)}</td>
                 <td>${this.money(row.outstanding_amount)}</td>
+                <td><div class="pimv1-recent-actions">
+                    ${cint(row.docstatus) === 0 ? `<button type="button" class="btn btn-xs btn-primary" data-action="load-draft" data-name="${this.escape(row.name)}">${__("Open in Page")}</button>` : ""}
+                    <button type="button" class="btn btn-xs btn-default" data-action="open-invoice" data-name="${this.escape(row.name)}">${__("Official Document")}</button>
+                </div></td>
             </tr>`).join("")}
             </tbody></table>
         `);
