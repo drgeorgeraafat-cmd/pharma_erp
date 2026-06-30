@@ -33,7 +33,8 @@
   "approved_rate",
   "accepted_qty",
   "accepted_amount",
-  "rejection_reason"
+  "rejection_reason",
+  "rejected_returned_qty"
  ],
  "fields": [
   {
@@ -199,7 +200,8 @@
   {
    "fieldname": "accepted_amount",
    "fieldtype": "Currency",
-   "label": "Accepted Amount"
+   "label": "Accepted Amount",
+   "read_only": 1
   },
   {
    "fieldname": "rejection_reason",
@@ -223,6 +225,12 @@
    "fieldtype": "Currency",
    "label": "Approved Settlement Rate",
    "options": "Company:company:default_currency"
+  },
+  {
+   "fieldname": "rejected_returned_qty",
+   "fieldtype": "Float",
+   "label": "Rejected Quantity Returned",
+   "read_only": 1
   }
  ],
  "istable": 1,

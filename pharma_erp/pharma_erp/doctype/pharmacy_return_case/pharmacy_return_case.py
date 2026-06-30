@@ -12,6 +12,7 @@ class PharmacyReturnCase(Document):
         self._validate_invoice_link()
         self._validate_regulatory_recall()
         self._validate_supplier_handover()
+        self._validate_supplier_response()
         self._calculate_totals()
         self._validate_settlement()
 
@@ -94,10 +95,62 @@ class PharmacyReturnCase(Document):
                     )
                 )
 
+    def _validate_supplier_response(self):
+        if self.return_type != "Regulatory Batch Recall":
+            return
+
+        response_rows = [
+            row for row in self.items
+            if flt(row.accepted_qty) > 0
+            or flt(row.rejected_qty) > 0
+            or flt(row.approved_rate) > 0
+            or (row.rejection_reason or "").strip()
+        ]
+        if not response_rows:
+            return
+
+        if not self.get("handover_stock_entry"):
+            frappe.throw(_("Supplier response cannot be recorded before supplier handover."))
+
+        handover_status = frappe.db.get_value(
+            "Stock Entry",
+            self.get("handover_stock_entry"),
+            "docstatus",
+        )
+        if handover_status != 1:
+            frappe.throw(_("Submit the Supplier Handover Stock Entry before recording the supplier response."))
+
+        if not self.get("supplier_response_date"):
+            frappe.throw(_("Supplier Response Date is required."))
+        if not self.get("supplier_response_reference"):
+            frappe.throw(_("Supplier Response Reference is required."))
+
+        for row in self.items:
+            delivered = flt(row.delivered_qty)
+            accepted = flt(row.accepted_qty)
+            rejected = flt(row.rejected_qty)
+            approved_rate = flt(row.approved_rate)
+
+            if accepted < 0 or rejected < 0 or approved_rate < 0:
+                frappe.throw(_("Row {0}: Supplier response quantities and rate cannot be negative.").format(row.idx))
+            if accepted + rejected > delivered + 0.000001:
+                frappe.throw(
+                    _("Row {0}: Accepted plus rejected quantity cannot exceed handed-over quantity {1}.").format(
+                        row.idx, delivered
+                    )
+                )
+            if accepted > 0 and approved_rate <= 0:
+                frappe.throw(_("Row {0}: Approved Settlement Rate is required for accepted quantity.").format(row.idx))
+            if rejected > 0 and not (row.rejection_reason or "").strip():
+                frappe.throw(_("Row {0}: Supplier Rejection Reason is required.").format(row.idx))
+
     def _calculate_totals(self):
         requested = 0.0
         quarantined = 0.0
         handed_over = 0.0
+        accepted = 0.0
+        rejected = 0.0
+        rejected_returned = 0.0
         approved = 0.0
         for row in self.items:
             if flt(row.return_qty) < 0:
@@ -108,14 +161,20 @@ class PharmacyReturnCase(Document):
             requested += flt(row.return_amount)
             quarantined += flt(row.quarantined_qty)
             handed_over += flt(row.delivered_qty)
+            accepted += flt(row.accepted_qty)
+            rejected += flt(row.rejected_qty)
+            rejected_returned += flt(row.rejected_returned_qty)
             row.accepted_amount = flt(row.accepted_qty) * flt(row.approved_rate)
             approved += flt(row.accepted_amount)
         self.requested_return_value = requested
         self.quarantined_quantity = quarantined
         self.handed_over_quantity = handed_over
-        if approved:
-            self.approved_return_value = approved
-        self.rejected_return_value = max(0.0, requested - flt(self.approved_return_value))
+        self.accepted_quantity = accepted
+        self.rejected_quantity = rejected
+        self.pending_response_quantity = max(0.0, handed_over - accepted - rejected)
+        self.rejected_return_quantity = rejected_returned
+        self.approved_return_value = approved
+        self.rejected_return_value = max(0.0, requested - approved)
         self.remaining_settlement_amount = max(
             0.0,
             flt(self.approved_return_value) - flt(self.claim_deduction_amount) - flt(self.refund_amount),

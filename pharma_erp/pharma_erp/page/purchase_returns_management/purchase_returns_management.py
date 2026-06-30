@@ -93,6 +93,10 @@ def _sync_case_operational_status(doc) -> None:
     if doc.return_type != "Regulatory Batch Recall":
         return
 
+    protected_statuses = {"Financially Settled", "Closed", "Cancelled"}
+    if doc.operational_status in protected_statuses:
+        return
+
     quarantine_status = (
         frappe.db.get_value("Stock Entry", doc.quarantine_stock_entry, "docstatus")
         if doc.quarantine_stock_entry else None
@@ -100,6 +104,10 @@ def _sync_case_operational_status(doc) -> None:
     handover_status = (
         frappe.db.get_value("Stock Entry", doc.get("handover_stock_entry"), "docstatus")
         if doc.get("handover_stock_entry") else None
+    )
+    rejection_status = (
+        frappe.db.get_value("Stock Entry", doc.get("rejection_return_stock_entry"), "docstatus")
+        if doc.get("rejection_return_stock_entry") else None
     )
 
     if quarantine_status == 1:
@@ -114,14 +122,56 @@ def _sync_case_operational_status(doc) -> None:
             doc.db_set("quarantined_quantity", quarantined_total, update_modified=False)
             doc.quarantined_quantity = quarantined_total
 
-    desired = None
+    handed_over = sum(flt(row.delivered_qty) for row in doc.items)
+    accepted = sum(flt(row.accepted_qty) for row in doc.items)
+    rejected = sum(flt(row.rejected_qty) for row in doc.items)
+    pending = max(0.0, handed_over - accepted - rejected)
+
     if handover_status == 1:
-        handed_over = sum(flt(row.delivered_qty) for row in doc.items)
-        quarantined = sum(flt(row.quarantined_qty) or flt(row.return_qty) for row in doc.items)
         if flt(doc.get("handed_over_quantity")) != handed_over:
             doc.db_set("handed_over_quantity", handed_over, update_modified=False)
             doc.handed_over_quantity = handed_over
-        desired = "Handed Over" if handed_over + 0.000001 >= quarantined else "Partially Handed Over"
+
+        if rejection_status == 1:
+            returned = 0.0
+            for row in doc.items:
+                target = flt(row.rejected_qty)
+                returned += target
+                if flt(row.rejected_returned_qty) != target:
+                    row.db_set("rejected_returned_qty", target, update_modified=False)
+                    row.rejected_returned_qty = target
+            if flt(doc.get("rejected_return_quantity")) != returned:
+                doc.db_set("rejected_return_quantity", returned, update_modified=False)
+                doc.rejected_return_quantity = returned
+
+    totals = {
+        "accepted_quantity": accepted,
+        "rejected_quantity": rejected,
+        "pending_response_quantity": pending,
+    }
+    for fieldname, value in totals.items():
+        if abs(flt(doc.get(fieldname)) - value) > 0.000001:
+            doc.db_set(fieldname, value, update_modified=False)
+            setattr(doc, fieldname, value)
+
+    desired = None
+    if rejection_status == 0:
+        desired = "Rejection Return Draft Created"
+    elif handover_status == 1:
+        if handed_over <= 0:
+            desired = "Handed Over"
+        elif accepted <= 0 and rejected <= 0:
+            desired = "Awaiting Supplier Approval"
+        elif pending > 0.000001:
+            desired = "Partially Accepted"
+        elif accepted > 0 and rejected > 0:
+            desired = "Partially Accepted"
+        elif accepted + 0.000001 >= handed_over:
+            desired = "Accepted"
+        elif rejected + 0.000001 >= handed_over:
+            desired = "Rejected"
+        else:
+            desired = "Partially Accepted"
     elif handover_status == 0:
         desired = "Handover Transfer Draft Created"
     elif quarantine_status == 1:
@@ -143,14 +193,20 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
         fields=[
             "name", "posting_date", "return_type", "supplier", "original_purchase_invoice",
             "purchase_return", "quarantine_stock_entry", "handover_stock_entry",
-            "operational_status", "requested_return_value", "approved_return_value",
-            "settlement_method", "handed_over_quantity", "modified",
+            "rejection_return_stock_entry", "operational_status",
+            "requested_return_value", "approved_return_value", "settlement_method",
+            "handed_over_quantity", "accepted_quantity", "rejected_quantity",
+            "pending_response_quantity", "modified",
         ],
         order_by="modified desc",
         limit_page_length=max(1, min(cint(limit) or 20, 100)),
     )
     for row in rows:
         if row.return_type == "Regulatory Batch Recall":
+            rejection_status = (
+                frappe.db.get_value("Stock Entry", row.get("rejection_return_stock_entry"), "docstatus")
+                if row.get("rejection_return_stock_entry") else None
+            )
             handover_status = (
                 frappe.db.get_value("Stock Entry", row.get("handover_stock_entry"), "docstatus")
                 if row.get("handover_stock_entry") else None
@@ -159,8 +215,21 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
                 frappe.db.get_value("Stock Entry", row.quarantine_stock_entry, "docstatus")
                 if row.quarantine_stock_entry else None
             )
-            if handover_status == 1:
-                row.operational_status = "Handed Over"
+            if rejection_status == 0:
+                row.operational_status = "Rejection Return Draft Created"
+            elif handover_status == 1:
+                handed = flt(row.handed_over_quantity)
+                accepted = flt(row.accepted_quantity)
+                rejected = flt(row.rejected_quantity)
+                pending = max(0.0, handed - accepted - rejected)
+                if accepted <= 0 and rejected <= 0:
+                    row.operational_status = "Awaiting Supplier Approval"
+                elif pending > 0.000001 or (accepted > 0 and rejected > 0):
+                    row.operational_status = "Partially Accepted"
+                elif accepted + 0.000001 >= handed:
+                    row.operational_status = "Accepted"
+                elif rejected + 0.000001 >= handed:
+                    row.operational_status = "Rejected"
             elif handover_status == 0:
                 row.operational_status = "Handover Transfer Draft Created"
             elif quarantine_status == 1:
@@ -668,6 +737,30 @@ def _validate_regulatory_case_payload(payload: dict, validate_source_stock: bool
                 )
             )
 
+        accepted = flt(row.get("accepted_qty"))
+        rejected = flt(row.get("rejected_qty"))
+        approved_rate = flt(row.get("approved_rate"))
+        if accepted < 0 or rejected < 0 or approved_rate < 0:
+            frappe.throw(_("Supplier response quantities and rate cannot be negative."))
+        if accepted + rejected > delivered + 0.000001:
+            frappe.throw(
+                _("Accepted plus rejected quantity for batch {0} cannot exceed handed-over quantity {1}.").format(
+                    frappe.bold(row.batch_no), delivered
+                )
+            )
+        if accepted > 0 and approved_rate <= 0:
+            frappe.throw(
+                _("Approved Settlement Rate is required for accepted quantity in batch {0}.").format(
+                    frappe.bold(row.batch_no)
+                )
+            )
+        if rejected > 0 and not (row.get("rejection_reason") or "").strip():
+            frappe.throw(
+                _("Supplier Rejection Reason is required for batch {0}.").format(
+                    frappe.bold(row.batch_no)
+                )
+            )
+
 
 def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
     if doc.return_type != "Regulatory Batch Recall":
@@ -706,6 +799,37 @@ def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
             if abs(flt(incoming[key].get("delivered_qty")) - flt(old_row.delivered_qty)) > 0.000001:
                 frappe.throw(_("Handover quantities cannot be changed after supplier handover is submitted."))
 
+    rejection_status = (
+        frappe.db.get_value(
+            "Stock Entry",
+            doc.get("rejection_return_stock_entry"),
+            "docstatus",
+        )
+        if doc.get("rejection_return_stock_entry") else None
+    )
+    if rejection_status == 1:
+        for key, old_row in existing.items():
+            new_row = incoming.get(key)
+            if not new_row:
+                frappe.throw(_("Supplier response lines cannot be removed after rejected stock is returned."))
+            locked_fields = (
+                "accepted_qty",
+                "rejected_qty",
+                "approved_rate",
+                "rejection_reason",
+            )
+            for fieldname in locked_fields:
+                old_value = old_row.get(fieldname) or ""
+                new_value = new_row.get(fieldname) or ""
+                if fieldname != "rejection_reason":
+                    changed = abs(flt(new_value) - flt(old_value)) > 0.000001
+                else:
+                    changed = str(new_value).strip() != str(old_value).strip()
+                if changed:
+                    frappe.throw(
+                        _("Supplier response cannot be changed after rejected stock is returned to quarantine.")
+                    )
+
 
 def _set_case_values(doc, payload: dict) -> None:
     return_type = payload.get("return_type") or "Return Against Invoice"
@@ -732,6 +856,10 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.handover_date = payload.get("handover_date") or None
     doc.handover_reference = payload.get("handover_reference") or None
     doc.handover_attachment = payload.get("handover_attachment") or None
+    doc.supplier_response_date = payload.get("supplier_response_date") or None
+    doc.supplier_response_reference = payload.get("supplier_response_reference") or None
+    doc.supplier_response_attachment = payload.get("supplier_response_attachment") or None
+    doc.supplier_response_notes = payload.get("supplier_response_notes") or None
     doc.set("items", [])
     for source in payload.get("items") or []:
         row = frappe._dict(source)
@@ -762,6 +890,7 @@ def _set_case_values(doc, payload: dict) -> None:
             "approved_rate": flt(row.get("approved_rate")),
             "accepted_amount": flt(row.get("accepted_qty")) * flt(row.get("approved_rate")),
             "rejection_reason": row.get("rejection_reason") or "",
+            "rejected_returned_qty": flt(row.get("rejected_returned_qty")),
             "notes": row.notes or "",
         })
 
@@ -795,6 +924,19 @@ def save_case(payload):
             ) == 1
         )
 
+    response_entered = any(
+        flt(row.get("accepted_qty")) > 0
+        or flt(row.get("rejected_qty")) > 0
+        or flt(row.get("approved_rate")) > 0
+        or bool((row.get("rejection_reason") or "").strip())
+        for row in (payload.get("items") or [])
+    )
+    if response_entered:
+        if not payload.get("supplier_response_date"):
+            frappe.throw(_("Enter the Supplier Response Date."))
+        if not payload.get("supplier_response_reference"):
+            frappe.throw(_("Enter the Supplier Response Reference."))
+
     _validate_invoice_case_payload(payload)
     _validate_regulatory_case_payload(
         payload,
@@ -815,11 +957,23 @@ def _supplier_handover_schema_requirements():
             "returns_with_supplier_warehouse",
             "handover_stock_entry",
             "handed_over_quantity",
+            "supplier_response_date",
+            "supplier_response_reference",
+            "supplier_response_attachment",
+            "supplier_response_notes",
+            "accepted_quantity",
+            "rejected_quantity",
+            "pending_response_quantity",
+            "rejection_return_stock_entry",
+            "rejected_return_quantity",
         ),
         "Pharmacy Return Item": (
             "delivered_qty",
+            "accepted_qty",
             "rejected_qty",
             "approved_rate",
+            "rejection_reason",
+            "rejected_returned_qty",
         ),
     }
 
@@ -947,6 +1101,14 @@ def get_case(name: str):
         frappe.db.get_value("Stock Entry", doc.get("handover_stock_entry"), "docstatus")
         if doc.get("handover_stock_entry") else None
     )
+    rejection_return_docstatus = (
+        frappe.db.get_value(
+            "Stock Entry",
+            doc.get("rejection_return_stock_entry"),
+            "docstatus",
+        )
+        if doc.get("rejection_return_stock_entry") else None
+    )
     item_rows = []
     for row in doc.items:
         values = row.as_dict()
@@ -969,8 +1131,10 @@ def get_case(name: str):
         "purchase_return": doc.purchase_return,
         "quarantine_stock_entry": doc.quarantine_stock_entry,
         "handover_stock_entry": doc.get("handover_stock_entry"),
+        "rejection_return_stock_entry": doc.get("rejection_return_stock_entry"),
         "quarantine_docstatus": quarantine_docstatus,
         "handover_docstatus": handover_docstatus,
+        "rejection_return_docstatus": rejection_return_docstatus,
         "recall_source_warehouse": doc.recall_source_warehouse,
         "recall_item_code": doc.recall_item_code,
         "recall_quarantine_warehouse": doc.recall_quarantine_warehouse,
@@ -978,6 +1142,10 @@ def get_case(name: str):
         "handover_date": doc.handover_date,
         "handover_reference": doc.handover_reference,
         "handover_attachment": doc.handover_attachment,
+        "supplier_response_date": doc.get("supplier_response_date"),
+        "supplier_response_reference": doc.get("supplier_response_reference"),
+        "supplier_response_attachment": doc.get("supplier_response_attachment"),
+        "supplier_response_notes": doc.get("supplier_response_notes"),
         "authority_notification_no": doc.authority_notification_no,
         "authority_notification_date": doc.authority_notification_date,
         "authority_notification_attachment": doc.authority_notification_attachment,
@@ -987,6 +1155,10 @@ def get_case(name: str):
         "approved_return_value": doc.approved_return_value,
         "quarantined_quantity": doc.quarantined_quantity,
         "handed_over_quantity": doc.get("handed_over_quantity"),
+        "accepted_quantity": doc.get("accepted_quantity"),
+        "rejected_quantity": doc.get("rejected_quantity"),
+        "pending_response_quantity": doc.get("pending_response_quantity"),
+        "rejected_return_quantity": doc.get("rejected_return_quantity"),
         "remarks": doc.remarks,
         "items": item_rows,
     }
@@ -1260,6 +1432,147 @@ def create_supplier_handover_draft(case_name: str):
     return {
         "case": case.name,
         "stock_entry": stock_entry.name,
+        "already_exists": 0,
+    }
+
+
+@frappe.whitelist()
+def create_rejected_quantity_return_draft(case_name: str):
+    _require_create()
+    verify_supplier_handover_schema()
+
+    if not frappe.has_permission("Stock Entry", "create"):
+        frappe.throw(_("You are not permitted to create Stock Entries."), frappe.PermissionError)
+
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    if case.return_type != "Regulatory Batch Recall":
+        frappe.throw(_("Rejected quantity return is only available for Regulatory Batch Recall cases."))
+
+    _sync_case_operational_status(case)
+
+    if not case.get("handover_stock_entry"):
+        frappe.throw(_("Create and submit the Supplier Handover Stock Entry first."))
+    handover_status = frappe.db.get_value(
+        "Stock Entry",
+        case.get("handover_stock_entry"),
+        "docstatus",
+    )
+    if handover_status != 1:
+        frappe.throw(_("Submit the Supplier Handover Stock Entry first."))
+
+    if case.get("rejection_return_stock_entry"):
+        if frappe.db.exists("Stock Entry", case.get("rejection_return_stock_entry")):
+            return {
+                "case": case.name,
+                "stock_entry": case.get("rejection_return_stock_entry"),
+                "already_exists": 1,
+            }
+        case.rejection_return_stock_entry = None
+
+    if not case.get("supplier_response_date"):
+        frappe.throw(_("Enter the Supplier Response Date."))
+    if not case.get("supplier_response_reference"):
+        frappe.throw(_("Enter the Supplier Response Reference."))
+
+    handed = sum(flt(row.delivered_qty) for row in case.items)
+    accepted = sum(flt(row.accepted_qty) for row in case.items)
+    rejected = sum(flt(row.rejected_qty) for row in case.items)
+    pending = max(0.0, handed - accepted - rejected)
+
+    if pending > 0.000001:
+        frappe.throw(
+            _("Complete the supplier response for all handed-over quantities before returning rejected stock. Pending quantity: {0}.").format(
+                pending
+            )
+        )
+
+    selected = [row for row in case.items if flt(row.rejected_qty) > 0]
+    if not selected:
+        frappe.throw(_("There is no rejected quantity to return to quarantine."))
+
+    source = case.get("returns_with_supplier_warehouse")
+    target = case.recall_quarantine_warehouse
+    if not source or not target:
+        frappe.throw(_("Returns With Supplier Warehouse and Recall Quarantine Warehouse are required."))
+    if source == target:
+        frappe.throw(_("Rejected quantity source and target warehouses must be different."))
+
+    from erpnext.stock.doctype.batch.batch import get_batch_qty
+
+    stock_entry = frappe.new_doc("Stock Entry")
+    stock_entry.company = case.company
+    stock_entry.purpose = "Material Transfer"
+    stock_entry.posting_date = case.get("supplier_response_date")
+    stock_entry.set_posting_time = 0
+    stock_entry.from_warehouse = source
+    stock_entry.to_warehouse = target
+    stock_entry.remarks = _(
+        "Supplier-rejected quantity returned to recall quarantine for Pharmacy Return Case {0}. "
+        "Supplier response reference: {1}"
+    ).format(case.name, case.get("supplier_response_reference"))
+
+    total_rejected = 0.0
+    for row in selected:
+        qty = flt(row.rejected_qty)
+        delivered = flt(row.delivered_qty)
+        if qty > delivered + 0.000001:
+            frappe.throw(
+                _("Rejected quantity for batch {0} cannot exceed handed-over quantity {1}.").format(
+                    frappe.bold(row.batch_no), delivered
+                )
+            )
+        if not (row.rejection_reason or "").strip():
+            frappe.throw(
+                _("Supplier Rejection Reason is required for batch {0}.").format(
+                    frappe.bold(row.batch_no)
+                )
+            )
+
+        current = flt(
+            get_batch_qty(
+                batch_no=row.batch_no,
+                warehouse=source,
+                item_code=row.item_code,
+                for_stock_levels=True,
+                consider_negative_batches=True,
+                ignore_reserved_stock=True,
+            )
+        )
+        if qty > current + 0.000001:
+            frappe.throw(
+                _("Rejected quantity for batch {0} cannot exceed current stock {1} in {2}.").format(
+                    frappe.bold(row.batch_no),
+                    current,
+                    frappe.bold(source),
+                )
+            )
+
+        stock_entry.append("items", {
+            "item_code": row.item_code,
+            "qty": qty,
+            "uom": row.stock_uom,
+            "stock_uom": row.stock_uom,
+            "conversion_factor": 1,
+            "s_warehouse": source,
+            "t_warehouse": target,
+            "batch_no": row.batch_no,
+            "use_serial_batch_fields": 1 if row.batch_no else 0,
+        })
+        total_rejected += qty
+
+    if hasattr(stock_entry, "set_stock_entry_type"):
+        stock_entry.set_stock_entry_type()
+    stock_entry.insert()
+
+    case.rejection_return_stock_entry = stock_entry.name
+    case.rejected_return_quantity = 0
+    case.operational_status = "Rejection Return Draft Created"
+    case.save(ignore_permissions=True)
+
+    return {
+        "case": case.name,
+        "stock_entry": stock_entry.name,
+        "rejected_quantity": total_rejected,
         "already_exists": 0,
     }
 
