@@ -1,0 +1,230 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-06-28 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "company",
+  "supplier",
+  "status",
+  "period_section",
+  "period_from",
+  "period_to",
+  "claim_basis",
+  "invoice_section",
+  "invoices",
+  "totals_section",
+  "gross_claim_total",
+  "purchase_returns_total",
+  "system_claim_total",
+  "supplier_printed_claim_total",
+  "match_status",
+  "settlement_section",
+  "net_amount_to_pay",
+  "settlement_discount_amount",
+  "settlement_discount_percentage",
+  "payment_due_date",
+  "payment_entry",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "SUP-CLM-.YYYY.-.#####",
+   "default": "SUP-CLM-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "label": "Supplier",
+   "options": "Supplier",
+   "reqd": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nUnder Review\nApproved\nPartly Paid\nPaid\nCancelled",
+   "default": "Draft",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "period_section",
+   "fieldtype": "Section Break",
+   "label": "Claim Period"
+  },
+  {
+   "fieldname": "period_from",
+   "fieldtype": "Date",
+   "label": "Period From",
+   "reqd": 1
+  },
+  {
+   "fieldname": "period_to",
+   "fieldtype": "Date",
+   "label": "Period To",
+   "reqd": 1
+  },
+  {
+   "fieldname": "claim_basis",
+   "fieldtype": "Select",
+   "label": "Claim Basis",
+   "options": "Supplier Invoice Date",
+   "default": "Supplier Invoice Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "invoice_section",
+   "fieldtype": "Section Break",
+   "label": "Included Supplier Invoices"
+  },
+  {
+   "fieldname": "invoices",
+   "fieldtype": "Table",
+   "label": "Invoices",
+   "options": "Supplier Claim Invoice"
+  },
+  {
+   "fieldname": "totals_section",
+   "fieldtype": "Section Break",
+   "label": "Claim Reconciliation"
+  },
+  {
+   "fieldname": "gross_claim_total",
+   "fieldtype": "Currency",
+   "label": "Gross Invoices",
+   "read_only": 1
+  },
+  {
+   "fieldname": "purchase_returns_total",
+   "fieldtype": "Currency",
+   "label": "Purchase Returns / Credit Notes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "system_claim_total",
+   "fieldtype": "Currency",
+   "label": "System Claim Total",
+   "read_only": 1
+  },
+  {
+   "fieldname": "supplier_printed_claim_total",
+   "fieldtype": "Currency",
+   "label": "Supplier Printed Claim Total",
+   "reqd": 1
+  },
+  {
+   "fieldname": "match_status",
+   "fieldtype": "Select",
+   "label": "Match Status",
+   "options": "Not Checked\nMatched\nMismatch",
+   "default": "Not Checked",
+   "read_only": 1
+  },
+  {
+   "fieldname": "settlement_section",
+   "fieldtype": "Section Break",
+   "label": "Settlement Discount"
+  },
+  {
+   "fieldname": "net_amount_to_pay",
+   "fieldtype": "Currency",
+   "label": "Net Amount To Pay After Discount",
+   "reqd": 1
+  },
+  {
+   "fieldname": "settlement_discount_amount",
+   "fieldtype": "Currency",
+   "label": "Settlement Discount Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "settlement_discount_percentage",
+   "fieldtype": "Percent",
+   "label": "Settlement Discount %",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_due_date",
+   "fieldtype": "Date",
+   "label": "Payment Due Date"
+  },
+  {
+   "fieldname": "payment_entry",
+   "fieldtype": "Link",
+   "label": "Payment Entry",
+   "options": "Payment Entry",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-06-28 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Supplier Claim",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "Purchase Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 1,
+   "cancel": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 1,
+   "cancel": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

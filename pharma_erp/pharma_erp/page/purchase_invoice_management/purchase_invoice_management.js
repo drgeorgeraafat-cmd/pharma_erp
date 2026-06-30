@@ -342,6 +342,9 @@ class PurchaseInvoiceManagementPageV1 {
                     <div class="pimv1-hero-actions">
                         <div class="pimv1-doc-badge" data-role="draft-badge">${__("New Draft")}</div>
                         <div class="pimv1-lifecycle-actions">
+                            <button type="button" class="btn btn-default btn-sm" data-action="returns-management">
+                                ${__("Returns Management")}
+                            </button>
                             <button type="button" class="btn btn-default btn-sm" data-action="page-save-draft">
                                 ${__("Save Draft")}
                             </button>
@@ -543,6 +546,14 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.on("click.pimv1", "[data-action='attach']", () => this.openUploader());
         this.$main.on("click.pimv1", "[data-action='page-save-draft']", () => this.saveDraft());
         this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
+        this.$main.on("click.pimv1", "[data-action='returns-management']", () => frappe.set_route("purchase-returns-management"));
+        this.$main.on("click.pimv1", "[data-action='create-purchase-return']", (event) => {
+            frappe.route_options = {
+                return_type: "Return Against Invoice",
+                purchase_invoice: $(event.currentTarget).data("name"),
+            };
+            frappe.set_route("purchase-returns-management");
+        });
         this.$main.on("click.pimv1", "[data-action='edit-row']", (event) => this.openItemDialog(Number($(event.currentTarget).data("index"))));
         this.$main.on("click.pimv1", "[data-action='delete-row']", (event) => this.deleteRow(Number($(event.currentTarget).data("index"))));
         this.$main.on("change.pimv1", "[data-inline-field]", (event) => this.onInlineChange(event));
@@ -2473,6 +2484,7 @@ class PurchaseInvoiceManagementPageV1 {
                 <td>${this.money(row.outstanding_amount)}</td>
                 <td><div class="pimv1-recent-actions">
                     ${cint(row.docstatus) === 0 ? `<button type="button" class="btn btn-xs btn-primary" data-action="load-draft" data-name="${this.escape(row.name)}">${__("Open in Page")}</button>` : ""}
+                    ${cint(row.docstatus) === 1 && !cint(row.is_return) ? `<button type="button" class="btn btn-xs btn-warning" data-action="create-purchase-return" data-name="${this.escape(row.name)}">${__("Create Return")}</button>` : ""}
                     <button type="button" class="btn btn-xs btn-default" data-action="open-invoice" data-name="${this.escape(row.name)}">${__("Official Document")}</button>
                 </div></td>
             </tr>`).join("")}

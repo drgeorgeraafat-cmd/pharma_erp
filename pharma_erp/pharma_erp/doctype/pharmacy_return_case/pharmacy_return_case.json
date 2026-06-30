@@ -1,0 +1,306 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-06-30 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "return_details_section",
+  "return_type",
+  "company",
+  "posting_date",
+  "column_break_return",
+  "supplier",
+  "original_purchase_invoice",
+  "purchase_return",
+  "operational_status",
+  "regulatory_section",
+  "authority_notification_no",
+  "authority_notification_date",
+  "authority_notification_attachment",
+  "items_section",
+  "items",
+  "settlement_section",
+  "settlement_method",
+  "requested_return_value",
+  "approved_return_value",
+  "rejected_return_value",
+  "column_break_settlement",
+  "claim_deduction_amount",
+  "refund_amount",
+  "remaining_settlement_amount",
+  "notes_section",
+  "handover_date",
+  "handover_reference",
+  "handover_attachment",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Naming Series",
+   "options": "PRC-.YYYY.-.#####",
+   "default": "PRC-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "fieldname": "return_details_section",
+   "fieldtype": "Section Break",
+   "label": "Return Details"
+  },
+  {
+   "fieldname": "return_type",
+   "fieldtype": "Select",
+   "label": "Return Type",
+   "options": "Return Against Invoice\nRegulatory Batch Recall\nExpired Drugs Return",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "label": "Posting Date",
+   "reqd": 1,
+   "default": "Today",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_return",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "label": "Receiving Company / Distributor",
+   "options": "Supplier",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The company receiving the returned goods is also responsible for refunding the pharmacy or deducting the accepted value from its supplier claim."
+  },
+  {
+   "fieldname": "original_purchase_invoice",
+   "fieldtype": "Link",
+   "label": "Original Purchase Invoice",
+   "options": "Purchase Invoice",
+   "depends_on": "eval:doc.return_type==\"Return Against Invoice\""
+  },
+  {
+   "fieldname": "purchase_return",
+   "fieldtype": "Link",
+   "label": "Official Purchase Return",
+   "options": "Purchase Invoice",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "operational_status",
+   "fieldtype": "Select",
+   "label": "Operational Status",
+   "options": "Draft\nUnder Review\nPurchase Return Draft Created\nPurchase Return Submitted\nQuarantined\nApproved for Return\nPartially Handed Over\nHanded Over\nAwaiting Supplier Approval\nPartially Accepted\nAccepted\nRejected\nFinancially Settled\nClosed\nCancelled",
+   "default": "Draft",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "regulatory_section",
+   "fieldtype": "Section Break",
+   "label": "Regulatory Recall Details",
+   "depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\""
+  },
+  {
+   "fieldname": "authority_notification_no",
+   "fieldtype": "Data",
+   "label": "Authority Notification Number"
+  },
+  {
+   "fieldname": "authority_notification_date",
+   "fieldtype": "Date",
+   "label": "Authority Notification Date"
+  },
+  {
+   "fieldname": "authority_notification_attachment",
+   "fieldtype": "Attach",
+   "label": "Authority Notification Attachment"
+  },
+  {
+   "fieldname": "items_section",
+   "fieldtype": "Section Break",
+   "label": "Return Items"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Items",
+   "options": "Pharmacy Return Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "settlement_section",
+   "fieldtype": "Section Break",
+   "label": "Financial Settlement"
+  },
+  {
+   "fieldname": "settlement_method",
+   "fieldtype": "Select",
+   "label": "Settlement Method",
+   "options": "Pending Settlement\nDeduct from Supplier Claim\nCash / Bank Refund\nMixed Settlement",
+   "default": "Pending Settlement",
+   "reqd": 1
+  },
+  {
+   "fieldname": "requested_return_value",
+   "fieldtype": "Currency",
+   "label": "Requested Return Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_return_value",
+   "fieldtype": "Currency",
+   "label": "Approved Return Value"
+  },
+  {
+   "fieldname": "rejected_return_value",
+   "fieldtype": "Currency",
+   "label": "Rejected Return Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_settlement",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "claim_deduction_amount",
+   "fieldtype": "Currency",
+   "label": "Claim Deduction Amount"
+  },
+  {
+   "fieldname": "refund_amount",
+   "fieldtype": "Currency",
+   "label": "Cash / Bank Refund Amount"
+  },
+  {
+   "fieldname": "remaining_settlement_amount",
+   "fieldtype": "Currency",
+   "label": "Remaining Settlement Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notes_section",
+   "fieldtype": "Section Break",
+   "label": "Notes and Handover"
+  },
+  {
+   "fieldname": "handover_date",
+   "fieldtype": "Date",
+   "label": "Handover Date"
+  },
+  {
+   "fieldname": "handover_reference",
+   "fieldtype": "Data",
+   "label": "Handover Receipt Number"
+  },
+  {
+   "fieldname": "handover_attachment",
+   "fieldtype": "Attach",
+   "label": "Handover Receipt Attachment"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-30 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Return Case",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Purchase Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Purchase User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Stock User"
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User"
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

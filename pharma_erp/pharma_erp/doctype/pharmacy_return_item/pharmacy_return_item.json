@@ -1,0 +1,192 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-06-30 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_code",
+  "item_name",
+  "original_purchase_invoice_item",
+  "batch_no",
+  "expiry_date",
+  "warehouse",
+  "stock_uom",
+  "qty_section",
+  "original_qty",
+  "already_returned_qty",
+  "available_to_return_qty",
+  "column_break_qty",
+  "return_qty",
+  "rate",
+  "tax_amount",
+  "return_amount",
+  "reason_section",
+  "return_reason",
+  "notes",
+  "acceptance_section",
+  "accepted_qty",
+  "accepted_amount",
+  "rejection_reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "original_purchase_invoice_item",
+   "fieldtype": "Data",
+   "label": "Original Purchase Invoice Item",
+   "read_only": 1
+  },
+  {
+   "fieldname": "batch_no",
+   "fieldtype": "Link",
+   "label": "Batch No",
+   "options": "Batch",
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "expiry_date",
+   "fieldtype": "Date",
+   "label": "Expiry Date",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "label": "Warehouse",
+   "options": "Warehouse",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "stock_uom",
+   "fieldtype": "Link",
+   "label": "Stock UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "qty_section",
+   "fieldtype": "Section Break",
+   "label": "Quantity Control"
+  },
+  {
+   "fieldname": "original_qty",
+   "fieldtype": "Float",
+   "label": "Original Quantity",
+   "read_only": 1
+  },
+  {
+   "fieldname": "already_returned_qty",
+   "fieldtype": "Float",
+   "label": "Already Returned Quantity",
+   "read_only": 1
+  },
+  {
+   "fieldname": "available_to_return_qty",
+   "fieldtype": "Float",
+   "label": "Available to Return",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_qty",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "return_qty",
+   "fieldtype": "Float",
+   "label": "Return Quantity",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "rate",
+   "fieldtype": "Currency",
+   "label": "Rate",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tax_amount",
+   "fieldtype": "Currency",
+   "label": "Original Tax Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "return_amount",
+   "fieldtype": "Currency",
+   "label": "Return Value",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "reason_section",
+   "fieldtype": "Section Break",
+   "label": "Reason"
+  },
+  {
+   "fieldname": "return_reason",
+   "fieldtype": "Select",
+   "label": "Return Reason",
+   "options": "Normal Return\nNear Expiry\nExpired\nDamaged\nWrong Item\nWrong Quantity\nSupplier Error\nHealth Authority Recall\nOther",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "acceptance_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Acceptance"
+  },
+  {
+   "fieldname": "accepted_qty",
+   "fieldtype": "Float",
+   "label": "Accepted Quantity"
+  },
+  {
+   "fieldname": "accepted_amount",
+   "fieldtype": "Currency",
+   "label": "Accepted Amount"
+  },
+  {
+   "fieldname": "rejection_reason",
+   "fieldtype": "Small Text",
+   "label": "Supplier Rejection Reason"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-30 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Return Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

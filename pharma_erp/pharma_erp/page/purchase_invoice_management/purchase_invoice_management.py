@@ -123,6 +123,8 @@ def _purchase_invoice_fields() -> list[str]:
             "outstanding_amount",
             "currency",
             "custom_payment_classification",
+            "is_return",
+            "return_against",
         ],
     )
 
