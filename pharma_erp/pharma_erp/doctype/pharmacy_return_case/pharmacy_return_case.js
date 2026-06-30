@@ -10,6 +10,11 @@ frappe.ui.form.on("Pharmacy Return Case", {
                 frappe.set_route("Form", "Purchase Invoice", frm.doc.purchase_return);
             }, __("View"));
         }
+        if (frm.doc.quarantine_stock_entry) {
+            frm.add_custom_button(__("Quarantine Stock Entry"), () => {
+                frappe.set_route("Form", "Stock Entry", frm.doc.quarantine_stock_entry);
+            }, __("View"));
+        }
         frm.add_custom_button(__("Returns Management"), () => frappe.set_route("purchase-returns-management"));
     },
     approved_return_value: calculate_settlement,

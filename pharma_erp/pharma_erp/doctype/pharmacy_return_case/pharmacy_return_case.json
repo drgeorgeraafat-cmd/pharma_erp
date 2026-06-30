@@ -20,6 +20,13 @@
   "authority_notification_no",
   "authority_notification_date",
   "authority_notification_attachment",
+  "recall_execution_section",
+  "recall_source_warehouse",
+  "recall_item_code",
+  "recall_quarantine_warehouse",
+  "quarantine_stock_entry",
+  "recall_column_break",
+  "quarantined_quantity",
   "items_section",
   "items",
   "settlement_section",
@@ -107,7 +114,7 @@
    "fieldname": "operational_status",
    "fieldtype": "Select",
    "label": "Operational Status",
-   "options": "Draft\nUnder Review\nPurchase Return Draft Created\nPurchase Return Submitted\nQuarantined\nApproved for Return\nPartially Handed Over\nHanded Over\nAwaiting Supplier Approval\nPartially Accepted\nAccepted\nRejected\nFinancially Settled\nClosed\nCancelled",
+   "options": "Draft\nUnder Review\nPurchase Return Draft Created\nPurchase Return Submitted\nQuarantine Transfer Draft Created\nQuarantined\nApproved for Return\nPartially Handed Over\nHanded Over\nAwaiting Supplier Approval\nPartially Accepted\nAccepted\nRejected\nFinancially Settled\nClosed\nCancelled",
    "default": "Draft",
    "reqd": 1,
    "in_list_view": 1
@@ -132,6 +139,49 @@
    "fieldname": "authority_notification_attachment",
    "fieldtype": "Attach",
    "label": "Authority Notification Attachment"
+  },
+  {
+   "fieldname": "recall_execution_section",
+   "fieldtype": "Section Break",
+   "label": "Recall Execution"
+  },
+  {
+   "fieldname": "recall_source_warehouse",
+   "fieldtype": "Link",
+   "label": "Source Warehouse",
+   "options": "Warehouse",
+   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+  },
+  {
+   "fieldname": "recall_item_code",
+   "fieldtype": "Link",
+   "label": "Recalled Item",
+   "options": "Item",
+   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+  },
+  {
+   "fieldname": "recall_quarantine_warehouse",
+   "fieldtype": "Link",
+   "label": "Recall Quarantine Warehouse",
+   "options": "Warehouse",
+   "mandatory_depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\""
+  },
+  {
+   "fieldname": "quarantine_stock_entry",
+   "fieldtype": "Link",
+   "label": "Quarantine Stock Entry",
+   "options": "Stock Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "recall_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "quarantined_quantity",
+   "fieldtype": "Float",
+   "label": "Quarantined Quantity",
+   "read_only": 1
   },
   {
    "fieldname": "items_section",

@@ -33,7 +33,15 @@ window.ItemInfoManager = {
 
     render(data) {
         const item = data.item || {};
-        const available = (data.warehouses || []).reduce((total, row) => total + flt(row.actual_qty || 0) - flt(row.reserved_qty || 0), 0);
+        // PHARMA SELLABLE STOCK V0.2.1
+        // Available stock must come from the configured sales warehouse only.
+        // Quarantine, expired-drug and returns-with-supplier warehouses are
+        // company stock, but they are not sellable stock.
+        const salesWarehouse = PharmacyPOS.state.settings.default_warehouse || "";
+        const salesWarehouseRow = (data.warehouses || []).find(row => row.warehouse === salesWarehouse);
+        const available = salesWarehouseRow
+            ? Math.max(0, flt(salesWarehouseRow.actual_qty || 0) - flt(salesWarehouseRow.reserved_qty || 0))
+            : Math.max(0, flt(item.actual_qty || 0));
         this.drawer.innerHTML = `
             <div class="drawer-header">
                 <div><h3>${frappe.utils.escape_html(item.item_name || item.item_code || item.name)}</h3><small>${frappe.utils.escape_html(item.item_code || item.name || "")}</small></div>

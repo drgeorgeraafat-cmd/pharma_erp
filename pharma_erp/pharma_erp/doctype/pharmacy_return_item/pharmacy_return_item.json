@@ -19,6 +19,8 @@
   "available_to_return_qty",
   "column_break_qty",
   "return_qty",
+  "stock_valuation_rate",
+  "stock_value",
   "rate",
   "tax_amount",
   "return_amount",
@@ -107,6 +109,18 @@
    "read_only": 1
   },
   {
+   "fieldname": "quarantine_warehouse",
+   "fieldtype": "Link",
+   "label": "Quarantine Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "quarantined_qty",
+   "fieldtype": "Float",
+   "label": "Quarantined Quantity",
+   "read_only": 1
+  },
+  {
    "fieldname": "column_break_qty",
    "fieldtype": "Column Break"
   },
@@ -117,6 +131,18 @@
    "reqd": 1,
    "in_list_view": 1,
    "columns": 1
+  },
+  {
+   "fieldname": "stock_valuation_rate",
+   "fieldtype": "Currency",
+   "label": "Stock Valuation Rate",
+   "read_only": 1
+  },
+  {
+   "fieldname": "stock_value",
+   "fieldtype": "Currency",
+   "label": "Stock Value",
+   "read_only": 1
   },
   {
    "fieldname": "rate",
