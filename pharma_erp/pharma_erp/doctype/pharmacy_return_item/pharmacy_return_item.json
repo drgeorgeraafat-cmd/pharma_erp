@@ -28,6 +28,9 @@
   "return_reason",
   "notes",
   "acceptance_section",
+  "delivered_qty",
+  "rejected_qty",
+  "approved_rate",
   "accepted_qty",
   "accepted_amount",
   "rejection_reason"
@@ -202,6 +205,24 @@
    "fieldname": "rejection_reason",
    "fieldtype": "Small Text",
    "label": "Supplier Rejection Reason"
+  },
+  {
+   "fieldname": "delivered_qty",
+   "fieldtype": "Float",
+   "label": "Handover Quantity",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "rejected_qty",
+   "fieldtype": "Float",
+   "label": "Rejected Quantity",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "approved_rate",
+   "fieldtype": "Currency",
+   "label": "Approved Settlement Rate",
+   "options": "Company:company:default_currency"
   }
  ],
  "istable": 1,

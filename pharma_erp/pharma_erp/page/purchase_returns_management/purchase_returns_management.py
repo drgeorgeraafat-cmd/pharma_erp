@@ -90,20 +90,50 @@ def _special_warehouses(company: str | None) -> dict[str, str | None]:
 
 
 def _sync_case_operational_status(doc) -> None:
-    if doc.return_type != "Regulatory Batch Recall" or not doc.quarantine_stock_entry:
+    if doc.return_type != "Regulatory Batch Recall":
         return
-    docstatus = frappe.db.get_value("Stock Entry", doc.quarantine_stock_entry, "docstatus")
+
+    quarantine_status = (
+        frappe.db.get_value("Stock Entry", doc.quarantine_stock_entry, "docstatus")
+        if doc.quarantine_stock_entry else None
+    )
+    handover_status = (
+        frappe.db.get_value("Stock Entry", doc.get("handover_stock_entry"), "docstatus")
+        if doc.get("handover_stock_entry") else None
+    )
+
+    if quarantine_status == 1:
+        quarantined_total = 0.0
+        for row in doc.items:
+            target_qty = flt(row.return_qty)
+            quarantined_total += target_qty
+            if flt(row.quarantined_qty) != target_qty:
+                row.db_set("quarantined_qty", target_qty, update_modified=False)
+                row.quarantined_qty = target_qty
+        if flt(doc.quarantined_quantity) != quarantined_total:
+            doc.db_set("quarantined_quantity", quarantined_total, update_modified=False)
+            doc.quarantined_quantity = quarantined_total
+
     desired = None
-    if docstatus == 1:
+    if handover_status == 1:
+        handed_over = sum(flt(row.delivered_qty) for row in doc.items)
+        quarantined = sum(flt(row.quarantined_qty) or flt(row.return_qty) for row in doc.items)
+        if flt(doc.get("handed_over_quantity")) != handed_over:
+            doc.db_set("handed_over_quantity", handed_over, update_modified=False)
+            doc.handed_over_quantity = handed_over
+        desired = "Handed Over" if handed_over + 0.000001 >= quarantined else "Partially Handed Over"
+    elif handover_status == 0:
+        desired = "Handover Transfer Draft Created"
+    elif quarantine_status == 1:
         desired = "Quarantined"
-    elif docstatus == 0:
+    elif quarantine_status == 0:
         desired = "Quarantine Transfer Draft Created"
-    elif docstatus == 2:
+    elif quarantine_status == 2:
         desired = "Under Review"
+
     if desired and doc.operational_status != desired:
         doc.db_set("operational_status", desired, update_modified=False)
         doc.operational_status = desired
-
 
 def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
     filters = {"company": company} if company else {}
@@ -112,21 +142,33 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
         filters=filters,
         fields=[
             "name", "posting_date", "return_type", "supplier", "original_purchase_invoice",
-            "purchase_return", "quarantine_stock_entry", "operational_status",
-            "requested_return_value", "approved_return_value", "settlement_method", "modified",
+            "purchase_return", "quarantine_stock_entry", "handover_stock_entry",
+            "operational_status", "requested_return_value", "approved_return_value",
+            "settlement_method", "handed_over_quantity", "modified",
         ],
         order_by="modified desc",
         limit_page_length=max(1, min(cint(limit) or 20, 100)),
     )
     for row in rows:
-        if row.return_type == "Regulatory Batch Recall" and row.quarantine_stock_entry:
-            docstatus = frappe.db.get_value("Stock Entry", row.quarantine_stock_entry, "docstatus")
-            row.operational_status = (
-                "Quarantined" if docstatus == 1
-                else "Quarantine Transfer Draft Created" if docstatus == 0
-                else "Under Review" if docstatus == 2
-                else row.operational_status
+        if row.return_type == "Regulatory Batch Recall":
+            handover_status = (
+                frappe.db.get_value("Stock Entry", row.get("handover_stock_entry"), "docstatus")
+                if row.get("handover_stock_entry") else None
             )
+            quarantine_status = (
+                frappe.db.get_value("Stock Entry", row.quarantine_stock_entry, "docstatus")
+                if row.quarantine_stock_entry else None
+            )
+            if handover_status == 1:
+                row.operational_status = "Handed Over"
+            elif handover_status == 0:
+                row.operational_status = "Handover Transfer Draft Created"
+            elif quarantine_status == 1:
+                row.operational_status = "Quarantined"
+            elif quarantine_status == 0:
+                row.operational_status = "Quarantine Transfer Draft Created"
+            elif quarantine_status == 2:
+                row.operational_status = "Under Review"
     return rows
 
 
@@ -569,7 +611,7 @@ def _validate_invoice_case_payload(payload: dict) -> None:
             frappe.throw(_("Select a return reason for item {0}.").format(frappe.bold(original.item_code)))
 
 
-def _validate_regulatory_case_payload(payload: dict) -> None:
+def _validate_regulatory_case_payload(payload: dict, validate_source_stock: bool = True) -> None:
     if payload.get("return_type") != "Regulatory Batch Recall":
         return
     if not payload.get("authority_notification_no"):
@@ -598,16 +640,71 @@ def _validate_regulatory_case_payload(payload: dict) -> None:
         batch_item = frappe.db.get_value("Batch", row.batch_no, "item")
         if batch_item != row.item_code:
             frappe.throw(_("Batch {0} does not belong to item {1}.").format(frappe.bold(row.batch_no), frappe.bold(row.item_code)))
-        current = flt(get_batch_qty(
-            batch_no=row.batch_no,
-            warehouse=row.warehouse,
-            item_code=row.item_code,
-            for_stock_levels=True,
-            consider_negative_batches=True,
-            ignore_reserved_stock=True,
-        ))
-        if flt(row.return_qty) > current + 0.000001:
-            frappe.throw(_("Recall quantity for batch {0} in {1} cannot exceed current stock {2}.").format(frappe.bold(row.batch_no), frappe.bold(row.warehouse), current))
+        if validate_source_stock:
+            current = flt(get_batch_qty(
+                batch_no=row.batch_no,
+                warehouse=row.warehouse,
+                item_code=row.item_code,
+                for_stock_levels=True,
+                consider_negative_batches=True,
+                ignore_reserved_stock=True,
+            ))
+            if flt(row.return_qty) > current + 0.000001:
+                frappe.throw(
+                    _("Recall quantity for batch {0} in {1} cannot exceed current stock {2}.").format(
+                        frappe.bold(row.batch_no),
+                        frappe.bold(row.warehouse),
+                        current,
+                    )
+                )
+        delivered = flt(row.get("delivered_qty"))
+        quarantined = flt(row.get("quarantined_qty")) or flt(row.return_qty)
+        if delivered < 0:
+            frappe.throw(_("Handover quantity cannot be negative for batch {0}.").format(frappe.bold(row.batch_no)))
+        if delivered > quarantined + 0.000001:
+            frappe.throw(
+                _("Handover quantity for batch {0} cannot exceed quarantined quantity {1}.").format(
+                    frappe.bold(row.batch_no), quarantined
+                )
+            )
+
+
+def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
+    if doc.return_type != "Regulatory Batch Recall":
+        return
+
+    quarantine_status = (
+        frappe.db.get_value("Stock Entry", doc.quarantine_stock_entry, "docstatus")
+        if doc.quarantine_stock_entry else None
+    )
+    handover_status = (
+        frappe.db.get_value("Stock Entry", doc.get("handover_stock_entry"), "docstatus")
+        if doc.get("handover_stock_entry") else None
+    )
+    incoming = {
+        (row.get("item_code"), row.get("batch_no"), row.get("warehouse")): frappe._dict(row)
+        for row in (payload.get("items") or [])
+        if flt(row.get("return_qty")) > 0
+    }
+    existing = {
+        (row.item_code, row.batch_no, row.warehouse): row
+        for row in doc.items
+        if flt(row.return_qty) > 0
+    }
+
+    if quarantine_status == 1:
+        if set(incoming) != set(existing):
+            frappe.throw(_("Recalled lines cannot be added or removed after the quarantine transfer is submitted."))
+        for key, old_row in existing.items():
+            if abs(flt(incoming[key].return_qty) - flt(old_row.return_qty)) > 0.000001:
+                frappe.throw(_("Recall quantities cannot be changed after the quarantine transfer is submitted."))
+
+    if handover_status == 1:
+        for key, old_row in existing.items():
+            if key not in incoming:
+                frappe.throw(_("Handover lines cannot be removed after supplier handover is submitted."))
+            if abs(flt(incoming[key].get("delivered_qty")) - flt(old_row.delivered_qty)) > 0.000001:
+                frappe.throw(_("Handover quantities cannot be changed after supplier handover is submitted."))
 
 
 def _set_case_values(doc, payload: dict) -> None:
@@ -626,6 +723,15 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.recall_source_warehouse = payload.get("recall_source_warehouse") or None
     doc.recall_item_code = None
     doc.recall_quarantine_warehouse = payload.get("recall_quarantine_warehouse") or None
+    doc.returns_with_supplier_warehouse = (
+        payload.get("returns_with_supplier_warehouse")
+        or doc.get("returns_with_supplier_warehouse")
+        or _special_warehouses(doc.company).get("supplier")
+        or None
+    )
+    doc.handover_date = payload.get("handover_date") or None
+    doc.handover_reference = payload.get("handover_reference") or None
+    doc.handover_attachment = payload.get("handover_attachment") or None
     doc.set("items", [])
     for source in payload.get("items") or []:
         row = frappe._dict(source)
@@ -650,6 +756,12 @@ def _set_case_values(doc, payload: dict) -> None:
             "tax_amount": flt(row.tax_amount),
             "return_amount": flt(row.return_qty) * flt(row.rate),
             "return_reason": "Health Authority Recall" if return_type == "Regulatory Batch Recall" else (row.return_reason or "Normal Return"),
+            "delivered_qty": flt(row.get("delivered_qty")),
+            "accepted_qty": flt(row.get("accepted_qty")),
+            "rejected_qty": flt(row.get("rejected_qty")),
+            "approved_rate": flt(row.get("approved_rate")),
+            "accepted_amount": flt(row.get("accepted_qty")) * flt(row.get("approved_rate")),
+            "rejection_reason": row.get("rejection_reason") or "",
             "notes": row.notes or "",
         })
 
@@ -666,18 +778,160 @@ def save_case(payload):
         frappe.throw(_("Select a valid company."))
     if not payload.get("supplier") or not frappe.db.exists("Supplier", payload.get("supplier")):
         frappe.throw(_("Select the company or distributor receiving the return."))
-    _validate_invoice_case_payload(payload)
-    _validate_regulatory_case_payload(payload)
 
+    doc = None
+    quarantine_submitted = False
     if payload.get("name"):
         doc = frappe.get_doc("Pharmacy Return Case", payload.get("name"))
         if doc.docstatus != 0:
             frappe.throw(_("Only a draft Return Case can be edited."))
-    else:
+        _validate_locked_regulatory_rows(doc, payload)
+        quarantine_submitted = bool(
+            doc.quarantine_stock_entry
+            and frappe.db.get_value(
+                "Stock Entry",
+                doc.quarantine_stock_entry,
+                "docstatus",
+            ) == 1
+        )
+
+    _validate_invoice_case_payload(payload)
+    _validate_regulatory_case_payload(
+        payload,
+        validate_source_stock=not quarantine_submitted,
+    )
+
+    if doc is None:
         doc = frappe.new_doc("Pharmacy Return Case")
+
     _set_case_values(doc, payload)
     doc.save()
     return get_case(doc.name)
+
+
+def _supplier_handover_schema_requirements():
+    return {
+        "Pharmacy Return Case": (
+            "returns_with_supplier_warehouse",
+            "handover_stock_entry",
+            "handed_over_quantity",
+        ),
+        "Pharmacy Return Item": (
+            "delivered_qty",
+            "rejected_qty",
+            "approved_rate",
+        ),
+    }
+
+
+def _supplier_handover_doctype_files():
+    return {
+        "Pharmacy Return Case": frappe.get_app_path(
+            "pharma_erp",
+            "pharma_erp",
+            "doctype",
+            "pharmacy_return_case",
+            "pharmacy_return_case.json",
+        ),
+        "Pharmacy Return Item": frappe.get_app_path(
+            "pharma_erp",
+            "pharma_erp",
+            "doctype",
+            "pharmacy_return_item",
+            "pharmacy_return_item.json",
+        ),
+    }
+
+
+def _sync_supplier_handover_schema():
+    import json
+    import os
+
+    from frappe.modules.import_file import import_file_by_path
+
+    requirements = _supplier_handover_schema_requirements()
+    files = _supplier_handover_doctype_files()
+
+    for doctype, path in files.items():
+        if not os.path.exists(path):
+            frappe.throw(
+                _("Supplier handover DocType file is missing: {0}").format(path)
+            )
+
+        with open(path, encoding="utf-8") as source:
+            data = json.load(source)
+
+        source_fields = {
+            field.get("fieldname")
+            for field in (data.get("fields") or [])
+            if field.get("fieldname")
+        }
+        missing_from_file = [
+            field for field in requirements[doctype]
+            if field not in source_fields
+        ]
+        if missing_from_file:
+            frappe.throw(
+                _(
+                    "Installed DocType file {0} is outdated. Missing fields: {1}"
+                ).format(
+                    path,
+                    ", ".join(missing_from_file),
+                )
+            )
+
+        # Import the exact JSON file by absolute path. This avoids module-path
+        # resolution and guarantees the file copied by this update is used.
+        import_file_by_path(path, force=True)
+
+    frappe.clear_cache()
+    frappe.db.updatedb("Pharmacy Return Case")
+    frappe.db.updatedb("Pharmacy Return Item")
+    frappe.clear_cache()
+
+
+@frappe.whitelist()
+def repair_supplier_handover_schema():
+    _sync_supplier_handover_schema()
+    return verify_supplier_handover_schema()
+
+
+@frappe.whitelist()
+def verify_supplier_handover_schema():
+    requirements = _supplier_handover_schema_requirements()
+    missing_meta = {}
+    missing_columns = {}
+
+    for doctype, fields in requirements.items():
+        meta = frappe.get_meta(doctype, cached=False)
+        meta_missing = [field for field in fields if not meta.has_field(field)]
+        column_missing = [
+            field for field in fields
+            if not frappe.db.has_column(doctype, field)
+        ]
+
+        if meta_missing:
+            missing_meta[doctype] = meta_missing
+        if column_missing:
+            missing_columns[doctype] = column_missing
+
+    if missing_meta or missing_columns:
+        frappe.throw(
+            _(
+                "Supplier handover schema is incomplete. "
+                "Missing DocType fields: {0}. Missing database columns: {1}."
+            ).format(
+                frappe.as_json(missing_meta) if missing_meta else "None",
+                frappe.as_json(missing_columns) if missing_columns else "None",
+            )
+        )
+
+    return {
+        "requirements": requirements,
+        "doctype_files": _supplier_handover_doctype_files(),
+        "physical_columns_verified": 1,
+        "ok": 1,
+    }
 
 
 @frappe.whitelist()
@@ -685,17 +939,25 @@ def get_case(name: str):
     _require_read()
     doc = frappe.get_doc("Pharmacy Return Case", name)
     _sync_case_operational_status(doc)
-    if doc.return_type == "Regulatory Batch Recall" and doc.quarantine_stock_entry:
-        status = frappe.db.get_value("Stock Entry", doc.quarantine_stock_entry, "docstatus")
-        if status == 1:
-            total = sum(flt(row.return_qty) for row in doc.items)
-            if flt(doc.quarantined_quantity) != total:
-                doc.db_set("quarantined_quantity", total, update_modified=False)
-                for row in doc.items:
-                    if flt(row.quarantined_qty) != flt(row.return_qty):
-                        row.db_set("quarantined_qty", flt(row.return_qty), update_modified=False)
-                        row.quarantined_qty = flt(row.return_qty)
-                doc.quarantined_quantity = total
+    quarantine_docstatus = (
+        frappe.db.get_value("Stock Entry", doc.quarantine_stock_entry, "docstatus")
+        if doc.quarantine_stock_entry else None
+    )
+    handover_docstatus = (
+        frappe.db.get_value("Stock Entry", doc.get("handover_stock_entry"), "docstatus")
+        if doc.get("handover_stock_entry") else None
+    )
+    item_rows = []
+    for row in doc.items:
+        values = row.as_dict()
+        if (
+            doc.return_type == "Regulatory Batch Recall"
+            and quarantine_docstatus == 1
+            and handover_docstatus != 1
+            and flt(values.get("delivered_qty")) <= 0
+        ):
+            values["delivered_qty"] = flt(values.get("quarantined_qty")) or flt(values.get("return_qty"))
+        item_rows.append(values)
     return {
         "name": doc.name,
         "docstatus": doc.docstatus,
@@ -706,9 +968,16 @@ def get_case(name: str):
         "original_purchase_invoice": doc.original_purchase_invoice,
         "purchase_return": doc.purchase_return,
         "quarantine_stock_entry": doc.quarantine_stock_entry,
+        "handover_stock_entry": doc.get("handover_stock_entry"),
+        "quarantine_docstatus": quarantine_docstatus,
+        "handover_docstatus": handover_docstatus,
         "recall_source_warehouse": doc.recall_source_warehouse,
         "recall_item_code": doc.recall_item_code,
         "recall_quarantine_warehouse": doc.recall_quarantine_warehouse,
+        "returns_with_supplier_warehouse": doc.get("returns_with_supplier_warehouse"),
+        "handover_date": doc.handover_date,
+        "handover_reference": doc.handover_reference,
+        "handover_attachment": doc.handover_attachment,
         "authority_notification_no": doc.authority_notification_no,
         "authority_notification_date": doc.authority_notification_date,
         "authority_notification_attachment": doc.authority_notification_attachment,
@@ -717,8 +986,9 @@ def get_case(name: str):
         "requested_return_value": doc.requested_return_value,
         "approved_return_value": doc.approved_return_value,
         "quarantined_quantity": doc.quarantined_quantity,
+        "handed_over_quantity": doc.get("handed_over_quantity"),
         "remarks": doc.remarks,
-        "items": [row.as_dict() for row in doc.items],
+        "items": item_rows,
     }
 
 
@@ -864,6 +1134,134 @@ def create_quarantine_transfer_draft(case_name: str):
         row.quarantine_warehouse = case.recall_quarantine_warehouse
     case.save(ignore_permissions=True)
     return {"case": case.name, "stock_entry": stock_entry.name, "already_exists": 0}
+
+
+@frappe.whitelist()
+def create_supplier_handover_draft(case_name: str):
+    _require_create()
+    verify_supplier_handover_schema()
+    if not frappe.has_permission("Stock Entry", "create"):
+        frappe.throw(_("You are not permitted to create Stock Entries."), frappe.PermissionError)
+
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    if case.return_type != "Regulatory Batch Recall":
+        frappe.throw(_("Supplier handover is only available for Regulatory Batch Recall cases."))
+
+    _sync_case_operational_status(case)
+
+    if not case.quarantine_stock_entry:
+        frappe.throw(_("Create and submit the quarantine transfer before supplier handover."))
+    quarantine_status = frappe.db.get_value("Stock Entry", case.quarantine_stock_entry, "docstatus")
+    if quarantine_status != 1:
+        frappe.throw(_("The quarantine Stock Entry must be submitted before supplier handover."))
+
+    if case.get("handover_stock_entry"):
+        if frappe.db.exists("Stock Entry", case.get("handover_stock_entry")):
+            return {
+                "case": case.name,
+                "stock_entry": case.get("handover_stock_entry"),
+                "already_exists": 1,
+            }
+        case.handover_stock_entry = None
+
+    if not case.handover_date:
+        frappe.throw(_("Enter the Supplier Handover Date."))
+    if not case.handover_reference:
+        frappe.throw(_("Enter the Supplier Handover Receipt Number."))
+    if not case.get("returns_with_supplier_warehouse"):
+        default_supplier_warehouse = _special_warehouses(case.company).get("supplier")
+        if default_supplier_warehouse:
+            case.returns_with_supplier_warehouse = default_supplier_warehouse
+            case.db_set(
+                "returns_with_supplier_warehouse",
+                default_supplier_warehouse,
+                update_modified=False,
+            )
+        else:
+            frappe.throw(_("Select the Returns With Supplier Warehouse."))
+
+    target = frappe.db.get_value(
+        "Warehouse", case.get("returns_with_supplier_warehouse"),
+        ["company", "is_group", "disabled"], as_dict=True,
+    )
+    if not target or target.company != case.company or target.is_group or target.disabled:
+        frappe.throw(_("Select an active Returns With Supplier Warehouse for the same company."))
+    if case.get("returns_with_supplier_warehouse") == case.recall_quarantine_warehouse:
+        frappe.throw(_("Returns With Supplier Warehouse must differ from the quarantine warehouse."))
+
+    selected = [row for row in case.items if flt(row.delivered_qty) > 0]
+    if not selected:
+        frappe.throw(_("Enter a Handover Quantity for at least one recalled item."))
+
+    from erpnext.stock.doctype.batch.batch import get_batch_qty
+
+    stock_entry = frappe.new_doc("Stock Entry")
+    stock_entry.company = case.company
+    stock_entry.purpose = "Material Transfer"
+    stock_entry.posting_date = case.handover_date
+    stock_entry.set_posting_time = 0
+    stock_entry.from_warehouse = case.recall_quarantine_warehouse
+    stock_entry.to_warehouse = case.get("returns_with_supplier_warehouse")
+    stock_entry.remarks = _(
+        "Supplier handover for Pharmacy Return Case {0}. "
+        "Authority notice: {1}. Receipt: {2}"
+    ).format(case.name, case.authority_notification_no, case.handover_reference)
+
+    total_delivered = 0.0
+    for row in selected:
+        qty = flt(row.delivered_qty)
+        quarantined = flt(row.quarantined_qty) or flt(row.return_qty)
+        if qty > quarantined + 0.000001:
+            frappe.throw(
+                _("Handover quantity for batch {0} cannot exceed quarantined quantity {1}.").format(
+                    frappe.bold(row.batch_no), quarantined
+                )
+            )
+
+        current = flt(
+            get_batch_qty(
+                batch_no=row.batch_no,
+                warehouse=case.recall_quarantine_warehouse,
+                item_code=row.item_code,
+                for_stock_levels=True,
+                consider_negative_batches=True,
+                ignore_reserved_stock=True,
+            )
+        )
+        if qty > current + 0.000001:
+            frappe.throw(
+                _("Handover quantity for batch {0} cannot exceed current quarantine stock {1}.").format(
+                    frappe.bold(row.batch_no), current
+                )
+            )
+
+        stock_entry.append("items", {
+            "item_code": row.item_code,
+            "qty": qty,
+            "uom": row.stock_uom,
+            "stock_uom": row.stock_uom,
+            "conversion_factor": 1,
+            "s_warehouse": case.recall_quarantine_warehouse,
+            "t_warehouse": case.get("returns_with_supplier_warehouse"),
+            "batch_no": row.batch_no,
+            "use_serial_batch_fields": 1 if row.batch_no else 0,
+        })
+        total_delivered += qty
+
+    if hasattr(stock_entry, "set_stock_entry_type"):
+        stock_entry.set_stock_entry_type()
+    stock_entry.insert()
+
+    case.handover_stock_entry = stock_entry.name
+    case.handed_over_quantity = total_delivered
+    case.operational_status = "Handover Transfer Draft Created"
+    case.save(ignore_permissions=True)
+
+    return {
+        "case": case.name,
+        "stock_entry": stock_entry.name,
+        "already_exists": 0,
+    }
 
 
 @frappe.whitelist()

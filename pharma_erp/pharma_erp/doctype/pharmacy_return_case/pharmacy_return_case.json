@@ -29,6 +29,14 @@
   "quarantined_quantity",
   "items_section",
   "items",
+  "supplier_handover_section",
+  "returns_with_supplier_warehouse",
+  "handover_stock_entry",
+  "supplier_handover_column",
+  "handover_date",
+  "handover_reference",
+  "handover_attachment",
+  "handed_over_quantity",
   "settlement_section",
   "settlement_method",
   "requested_return_value",
@@ -39,9 +47,6 @@
   "refund_amount",
   "remaining_settlement_amount",
   "notes_section",
-  "handover_date",
-  "handover_reference",
-  "handover_attachment",
   "remarks"
  ],
  "fields": [
@@ -114,7 +119,7 @@
    "fieldname": "operational_status",
    "fieldtype": "Select",
    "label": "Operational Status",
-   "options": "Draft\nUnder Review\nPurchase Return Draft Created\nPurchase Return Submitted\nQuarantine Transfer Draft Created\nQuarantined\nApproved for Return\nPartially Handed Over\nHanded Over\nAwaiting Supplier Approval\nPartially Accepted\nAccepted\nRejected\nFinancially Settled\nClosed\nCancelled",
+   "options": "Draft\nUnder Review\nPurchase Return Draft Created\nPurchase Return Submitted\nQuarantine Transfer Draft Created\nQuarantined\nHandover Transfer Draft Created\nApproved for Return\nPartially Handed Over\nHanded Over\nAwaiting Supplier Approval\nPartially Accepted\nAccepted\nRejected\nFinancially Settled\nClosed\nCancelled",
    "default": "Draft",
    "reqd": 1,
    "in_list_view": 1
@@ -253,22 +258,55 @@
   {
    "fieldname": "handover_date",
    "fieldtype": "Date",
-   "label": "Handover Date"
+   "label": "Supplier Handover Date"
   },
   {
    "fieldname": "handover_reference",
    "fieldtype": "Data",
-   "label": "Handover Receipt Number"
+   "label": "Supplier Handover Receipt Number"
   },
   {
    "fieldname": "handover_attachment",
    "fieldtype": "Attach",
-   "label": "Handover Receipt Attachment"
+   "label": "Supplier Handover Receipt Attachment"
   },
   {
    "fieldname": "remarks",
    "fieldtype": "Small Text",
    "label": "Remarks"
+  },
+  {
+   "fieldname": "supplier_handover_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Handover",
+   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+  },
+  {
+   "fieldname": "returns_with_supplier_warehouse",
+   "fieldtype": "Link",
+   "label": "Returns With Supplier Warehouse",
+   "options": "Warehouse",
+   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+  },
+  {
+   "fieldname": "handover_stock_entry",
+   "fieldtype": "Link",
+   "label": "Supplier Handover Stock Entry",
+   "options": "Stock Entry",
+   "read_only": 1,
+   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+  },
+  {
+   "fieldname": "supplier_handover_column",
+   "fieldtype": "Column Break",
+   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+  },
+  {
+   "fieldname": "handed_over_quantity",
+   "fieldtype": "Float",
+   "label": "Handed Over Quantity",
+   "read_only": 1,
+   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
   }
  ],
  "index_web_pages_for_search": 1,

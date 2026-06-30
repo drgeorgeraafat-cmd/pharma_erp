@@ -29,3 +29,7 @@ pharma_erp.patches.v1_2.setup_purchase_vat_inclusive_controls
 pharma_erp.patches.v1_2.setup_direct_net_before_vat_anchor
 pharma_erp.patches.v1_3.setup_purchase_returns_foundation
 pharma_erp.patches.v1_4.setup_regulatory_batch_recall
+pharma_erp.patches.v1_5.setup_return_supplier_handover
+pharma_erp.patches.v1_6.backfill_supplier_handover_warehouse
+pharma_erp.patches.v1_7.ensure_supplier_handover_physical_schema
+pharma_erp.patches.v1_8.direct_import_supplier_handover_doctypes
