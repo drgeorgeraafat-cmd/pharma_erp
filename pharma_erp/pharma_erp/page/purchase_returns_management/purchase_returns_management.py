@@ -109,6 +109,22 @@ def _sync_case_operational_status(doc) -> None:
         frappe.db.get_value("Stock Entry", doc.get("rejection_return_stock_entry"), "docstatus")
         if doc.get("rejection_return_stock_entry") else None
     )
+    debit_note = (
+        frappe.db.get_value(
+            "Purchase Invoice",
+            doc.get("approved_debit_note"),
+            [
+                "docstatus",
+                "status",
+                "grand_total",
+                "outstanding_amount",
+                "is_return",
+                "update_stock",
+            ],
+            as_dict=True,
+        )
+        if doc.get("approved_debit_note") else None
+    )
 
     if quarantine_status == 1:
         quarantined_total = 0.0
@@ -135,11 +151,11 @@ def _sync_case_operational_status(doc) -> None:
         if rejection_status == 1:
             returned = 0.0
             for row in doc.items:
-                target = flt(row.rejected_qty)
-                returned += target
-                if flt(row.rejected_returned_qty) != target:
-                    row.db_set("rejected_returned_qty", target, update_modified=False)
-                    row.rejected_returned_qty = target
+                target_qty = flt(row.rejected_qty)
+                returned += target_qty
+                if flt(row.rejected_returned_qty) != target_qty:
+                    row.db_set("rejected_returned_qty", target_qty, update_modified=False)
+                    row.rejected_returned_qty = target_qty
             if flt(doc.get("rejected_return_quantity")) != returned:
                 doc.db_set("rejected_return_quantity", returned, update_modified=False)
                 doc.rejected_return_quantity = returned
@@ -154,8 +170,37 @@ def _sync_case_operational_status(doc) -> None:
             doc.db_set(fieldname, value, update_modified=False)
             setattr(doc, fieldname, value)
 
+    if debit_note:
+        note_amount = abs(flt(debit_note.grand_total))
+        note_outstanding = abs(flt(debit_note.outstanding_amount))
+        note_status = debit_note.status or (
+            "Draft" if debit_note.docstatus == 0
+            else "Submitted" if debit_note.docstatus == 1
+            else "Cancelled"
+        )
+        note_values = {
+            "approved_debit_note_amount": note_amount,
+            "approved_debit_note_outstanding": note_outstanding,
+            "approved_debit_note_status": note_status,
+            "accepted_stock_finalized_quantity": accepted if debit_note.docstatus == 1 else 0,
+        }
+        for fieldname, value in note_values.items():
+            current = doc.get(fieldname)
+            changed = (
+                abs(flt(current) - flt(value)) > 0.000001
+                if fieldname != "approved_debit_note_status"
+                else (current or "") != (value or "")
+            )
+            if changed:
+                doc.db_set(fieldname, value, update_modified=False)
+                setattr(doc, fieldname, value)
+
     desired = None
-    if rejection_status == 0:
+    if debit_note and debit_note.docstatus == 0:
+        desired = "Approved Debit Note Draft Created"
+    elif debit_note and debit_note.docstatus == 1:
+        desired = "Approved Debit Note Submitted"
+    elif rejection_status == 0:
         desired = "Rejection Return Draft Created"
     elif handover_status == 1:
         if handed_over <= 0:
@@ -193,7 +238,9 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
         fields=[
             "name", "posting_date", "return_type", "supplier", "original_purchase_invoice",
             "purchase_return", "quarantine_stock_entry", "handover_stock_entry",
-            "rejection_return_stock_entry", "operational_status",
+            "rejection_return_stock_entry", "approved_debit_note",
+            "approved_debit_note_amount", "approved_debit_note_outstanding",
+            "approved_debit_note_status", "operational_status",
             "requested_return_value", "approved_return_value", "settlement_method",
             "handed_over_quantity", "accepted_quantity", "rejected_quantity",
             "pending_response_quantity", "modified",
@@ -203,6 +250,15 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
     )
     for row in rows:
         if row.return_type == "Regulatory Batch Recall":
+            debit_note = (
+                frappe.db.get_value(
+                    "Purchase Invoice",
+                    row.get("approved_debit_note"),
+                    ["docstatus", "status", "grand_total", "outstanding_amount"],
+                    as_dict=True,
+                )
+                if row.get("approved_debit_note") else None
+            )
             rejection_status = (
                 frappe.db.get_value("Stock Entry", row.get("rejection_return_stock_entry"), "docstatus")
                 if row.get("rejection_return_stock_entry") else None
@@ -215,7 +271,17 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
                 frappe.db.get_value("Stock Entry", row.quarantine_stock_entry, "docstatus")
                 if row.quarantine_stock_entry else None
             )
-            if rejection_status == 0:
+            if debit_note and debit_note.docstatus == 0:
+                row.operational_status = "Approved Debit Note Draft Created"
+                row.approved_debit_note_amount = abs(flt(debit_note.grand_total))
+                row.approved_debit_note_outstanding = abs(flt(debit_note.outstanding_amount))
+                row.approved_debit_note_status = debit_note.status or "Draft"
+            elif debit_note and debit_note.docstatus == 1:
+                row.operational_status = "Approved Debit Note Submitted"
+                row.approved_debit_note_amount = abs(flt(debit_note.grand_total))
+                row.approved_debit_note_outstanding = abs(flt(debit_note.outstanding_amount))
+                row.approved_debit_note_status = debit_note.status or "Return"
+            elif rejection_status == 0:
                 row.operational_status = "Rejection Return Draft Created"
             elif handover_status == 1:
                 handed = flt(row.handed_over_quantity)
@@ -799,6 +865,33 @@ def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
             if abs(flt(incoming[key].get("delivered_qty")) - flt(old_row.delivered_qty)) > 0.000001:
                 frappe.throw(_("Handover quantities cannot be changed after supplier handover is submitted."))
 
+    debit_note_status = (
+        frappe.db.get_value(
+            "Purchase Invoice",
+            doc.get("approved_debit_note"),
+            "docstatus",
+        )
+        if doc.get("approved_debit_note") else None
+    )
+    if debit_note_status in (0, 1):
+        for key, old_row in existing.items():
+            new_row = incoming.get(key)
+            if not new_row:
+                frappe.throw(_("Supplier response lines cannot be removed while the Approved Debit Note exists."))
+            for fieldname in ("accepted_qty", "rejected_qty", "approved_rate", "rejection_reason"):
+                old_value = old_row.get(fieldname) or ""
+                new_value = new_row.get(fieldname) or ""
+                if fieldname == "rejection_reason":
+                    changed = str(new_value).strip() != str(old_value).strip()
+                else:
+                    changed = abs(flt(new_value) - flt(old_value)) > 0.000001
+                if changed:
+                    frappe.throw(
+                        _("Supplier response cannot be changed while Approved Debit Note {0} exists.").format(
+                            frappe.bold(doc.get("approved_debit_note"))
+                        )
+                    )
+
     rejection_status = (
         frappe.db.get_value(
             "Stock Entry",
@@ -860,6 +953,12 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.supplier_response_reference = payload.get("supplier_response_reference") or None
     doc.supplier_response_attachment = payload.get("supplier_response_attachment") or None
     doc.supplier_response_notes = payload.get("supplier_response_notes") or None
+    doc.approved_debit_note_posting_date = (
+        payload.get("approved_debit_note_posting_date")
+        or doc.get("approved_debit_note_posting_date")
+        or payload.get("supplier_response_date")
+        or None
+    )
     doc.set("items", [])
     for source in payload.get("items") or []:
         row = frappe._dict(source)
@@ -966,6 +1065,12 @@ def _supplier_handover_schema_requirements():
             "pending_response_quantity",
             "rejection_return_stock_entry",
             "rejected_return_quantity",
+            "approved_debit_note_posting_date",
+            "approved_debit_note",
+            "approved_debit_note_status",
+            "approved_debit_note_amount",
+            "approved_debit_note_outstanding",
+            "accepted_stock_finalized_quantity",
         ),
         "Pharmacy Return Item": (
             "delivered_qty",
@@ -1109,6 +1214,22 @@ def get_case(name: str):
         )
         if doc.get("rejection_return_stock_entry") else None
     )
+    debit_note_details = (
+        frappe.db.get_value(
+            "Purchase Invoice",
+            doc.get("approved_debit_note"),
+            [
+                "docstatus",
+                "status",
+                "grand_total",
+                "outstanding_amount",
+                "is_return",
+                "update_stock",
+            ],
+            as_dict=True,
+        )
+        if doc.get("approved_debit_note") else None
+    )
     item_rows = []
     for row in doc.items:
         values = row.as_dict()
@@ -1132,6 +1253,13 @@ def get_case(name: str):
         "quarantine_stock_entry": doc.quarantine_stock_entry,
         "handover_stock_entry": doc.get("handover_stock_entry"),
         "rejection_return_stock_entry": doc.get("rejection_return_stock_entry"),
+        "approved_debit_note": doc.get("approved_debit_note"),
+        "approved_debit_note_posting_date": doc.get("approved_debit_note_posting_date"),
+        "approved_debit_note_docstatus": debit_note_details.docstatus if debit_note_details else None,
+        "approved_debit_note_status": debit_note_details.status if debit_note_details else doc.get("approved_debit_note_status"),
+        "approved_debit_note_amount": abs(flt(debit_note_details.grand_total)) if debit_note_details else flt(doc.get("approved_debit_note_amount")),
+        "approved_debit_note_outstanding": abs(flt(debit_note_details.outstanding_amount)) if debit_note_details else flt(doc.get("approved_debit_note_outstanding")),
+        "approved_debit_note_update_stock": debit_note_details.update_stock if debit_note_details else None,
         "quarantine_docstatus": quarantine_docstatus,
         "handover_docstatus": handover_docstatus,
         "rejection_return_docstatus": rejection_return_docstatus,
@@ -1159,6 +1287,7 @@ def get_case(name: str):
         "rejected_quantity": doc.get("rejected_quantity"),
         "pending_response_quantity": doc.get("pending_response_quantity"),
         "rejected_return_quantity": doc.get("rejected_return_quantity"),
+        "accepted_stock_finalized_quantity": doc.get("accepted_stock_finalized_quantity"),
         "remarks": doc.remarks,
         "items": item_rows,
     }
@@ -1573,6 +1702,230 @@ def create_rejected_quantity_return_draft(case_name: str):
         "case": case.name,
         "stock_entry": stock_entry.name,
         "rejected_quantity": total_rejected,
+        "already_exists": 0,
+    }
+
+
+@frappe.whitelist()
+def create_approved_debit_note_draft(case_name: str):
+    _require_create()
+    verify_supplier_handover_schema()
+
+    if not frappe.has_permission("Purchase Invoice", "create"):
+        frappe.throw(_("You are not permitted to create Purchase Debit Notes."), frappe.PermissionError)
+
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    if case.return_type != "Regulatory Batch Recall":
+        frappe.throw(_("Approved Debit Note is only available for Regulatory Batch Recall cases."))
+
+    _sync_case_operational_status(case)
+
+    if case.get("approved_debit_note"):
+        if frappe.db.exists("Purchase Invoice", case.get("approved_debit_note")):
+            existing_status = frappe.db.get_value(
+                "Purchase Invoice",
+                case.get("approved_debit_note"),
+                "docstatus",
+            )
+            if existing_status in (0, 1):
+                return {
+                    "case": case.name,
+                    "purchase_invoice": case.get("approved_debit_note"),
+                    "already_exists": 1,
+                }
+        case.approved_debit_note = None
+
+    handover_status = (
+        frappe.db.get_value("Stock Entry", case.get("handover_stock_entry"), "docstatus")
+        if case.get("handover_stock_entry") else None
+    )
+    if handover_status != 1:
+        frappe.throw(_("Submit the Supplier Handover Stock Entry before creating the Approved Debit Note."))
+
+    pending = max(
+        0.0,
+        sum(flt(row.delivered_qty) for row in case.items)
+        - sum(flt(row.accepted_qty) for row in case.items)
+        - sum(flt(row.rejected_qty) for row in case.items),
+    )
+    if pending > 0.000001:
+        frappe.throw(
+            _("Complete the supplier response first. Pending quantity: {0}.").format(pending)
+        )
+
+    accepted_rows = [row for row in case.items if flt(row.accepted_qty) > 0]
+    if not accepted_rows:
+        frappe.throw(_("There is no accepted quantity for an Approved Debit Note."))
+
+    rejected = sum(flt(row.rejected_qty) for row in case.items)
+    if rejected > 0:
+        rejection_status = (
+            frappe.db.get_value(
+                "Stock Entry",
+                case.get("rejection_return_stock_entry"),
+                "docstatus",
+            )
+            if case.get("rejection_return_stock_entry") else None
+        )
+        if rejection_status != 1:
+            frappe.throw(
+                _("Submit the Rejected Quantity Return Stock Entry before creating the Approved Debit Note.")
+            )
+
+    source_warehouse = case.get("returns_with_supplier_warehouse")
+    if not source_warehouse:
+        frappe.throw(_("Returns With Supplier Warehouse is required."))
+
+    warehouse = frappe.db.get_value(
+        "Warehouse",
+        source_warehouse,
+        ["company", "is_group", "disabled"],
+        as_dict=True,
+    )
+    if not warehouse or warehouse.company != case.company or warehouse.is_group or warehouse.disabled:
+        frappe.throw(_("Select an active Returns With Supplier Warehouse for the same company."))
+
+    from erpnext.stock.doctype.batch.batch import get_batch_qty
+
+    for row in accepted_rows:
+        accepted_qty = flt(row.accepted_qty)
+        if not row.batch_no:
+            frappe.throw(_("Batch No is required for accepted item {0}.").format(frappe.bold(row.item_code)))
+        current = flt(
+            get_batch_qty(
+                batch_no=row.batch_no,
+                warehouse=source_warehouse,
+                item_code=row.item_code,
+                for_stock_levels=True,
+                consider_negative_batches=True,
+                ignore_reserved_stock=True,
+            )
+        )
+        if accepted_qty > current + 0.000001:
+            frappe.throw(
+                _("Accepted quantity for batch {0} cannot exceed current stock {1} in {2}.").format(
+                    frappe.bold(row.batch_no),
+                    current,
+                    frappe.bold(source_warehouse),
+                )
+            )
+        if flt(row.approved_rate) <= 0:
+            frappe.throw(
+                _("Approved Settlement Rate is required for accepted item {0}.").format(
+                    frappe.bold(row.item_code)
+                )
+            )
+
+    debit_note = frappe.new_doc("Purchase Invoice")
+    debit_note.company = case.company
+    debit_note.supplier = case.supplier
+    debit_note.posting_date = (
+        case.get("approved_debit_note_posting_date")
+        or case.get("supplier_response_date")
+        or nowdate()
+    )
+    debit_note.set_posting_time = 0
+    debit_note.is_return = 1
+    debit_note.update_stock = 1
+    debit_note.update_outstanding_for_self = 1
+    debit_note.ignore_pricing_rule = 1
+    debit_note.apply_tds = 0
+    debit_note.return_against = None
+    debit_note.remarks = _(
+        "Approved supplier debit note for Pharmacy Return Case {0}. "
+        "Authority notice: {1}. Supplier response: {2}. "
+        "Accepted stock is issued from {3}."
+    ).format(
+        case.name,
+        case.authority_notification_no or "-",
+        case.get("supplier_response_reference") or "-",
+        source_warehouse,
+    )
+
+    selected_rows = []
+    for case_row in accepted_rows:
+        qty = -abs(flt(case_row.accepted_qty))
+        debit_note.append(
+            "items",
+            {
+                "item_code": case_row.item_code,
+                "item_name": case_row.item_name,
+                "qty": qty,
+                "received_qty": qty,
+                "stock_qty": qty,
+                "rate": flt(case_row.approved_rate),
+                "uom": case_row.stock_uom,
+                "stock_uom": case_row.stock_uom,
+                "conversion_factor": 1,
+                "warehouse": source_warehouse,
+                "batch_no": case_row.batch_no,
+                "use_serial_batch_fields": 1,
+            },
+        )
+        selected_rows.append(case_row)
+
+    debit_note.run_method("set_missing_values")
+
+    # The supplier-approved rates are final values for this workflow.
+    # Do not load supplier tax templates or pricing rules on top of them.
+    debit_note.taxes_and_charges = None
+    debit_note.set("taxes", [])
+    debit_note.apply_tds = 0
+    debit_note.tax_withholding_category = None
+
+    for invoice_row, case_row in zip(debit_note.items, selected_rows):
+        qty = -abs(flt(case_row.accepted_qty))
+        invoice_row.qty = qty
+        invoice_row.received_qty = qty
+        invoice_row.conversion_factor = 1
+        invoice_row.stock_qty = qty
+        invoice_row.rate = flt(case_row.approved_rate)
+        invoice_row.price_list_rate = flt(case_row.approved_rate)
+        invoice_row.discount_percentage = 0
+        invoice_row.discount_amount = 0
+        invoice_row.warehouse = source_warehouse
+        invoice_row.batch_no = case_row.batch_no
+        if invoice_row.meta.has_field("serial_and_batch_bundle"):
+            invoice_row.serial_and_batch_bundle = None
+        if invoice_row.meta.has_field("use_serial_batch_fields"):
+            invoice_row.use_serial_batch_fields = 1
+
+    debit_note.run_method("calculate_taxes_and_totals")
+
+    expected_value = sum(
+        flt(row.accepted_qty) * flt(row.approved_rate)
+        for row in accepted_rows
+    )
+    actual_value = abs(flt(debit_note.grand_total))
+    if abs(actual_value - expected_value) > 0.01:
+        frappe.throw(
+            _("Approved Debit Note total {0} does not match approved supplier value {1}.").format(
+                actual_value,
+                expected_value,
+            )
+        )
+
+    if debit_note.meta.has_field("custom_pharmacy_return_case"):
+        debit_note.custom_pharmacy_return_case = case.name
+
+    debit_note.insert()
+
+    case.approved_debit_note = debit_note.name
+    case.approved_debit_note_posting_date = debit_note.posting_date
+    case.approved_debit_note_amount = actual_value
+    case.approved_debit_note_outstanding = actual_value
+    case.approved_debit_note_status = "Draft"
+    case.accepted_stock_finalized_quantity = 0
+    case.operational_status = "Approved Debit Note Draft Created"
+    case.save(ignore_permissions=True)
+
+    return {
+        "case": case.name,
+        "purchase_invoice": debit_note.name,
+        "approved_value": actual_value,
+        "accepted_quantity": sum(flt(row.accepted_qty) for row in accepted_rows),
+        "source_warehouse": source_warehouse,
+        "update_stock": 1,
         "already_exists": 0,
     }
 

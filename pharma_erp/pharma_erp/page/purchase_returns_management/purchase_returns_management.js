@@ -17,6 +17,11 @@ class PharmacyPurchaseReturnsManagement {
         this.quarantineStockEntry = null;
         this.handoverStockEntry = null;
         this.rejectionReturnStockEntry = null;
+        this.approvedDebitNote = null;
+        this.approvedDebitNoteDocstatus = null;
+        this.approvedDebitNoteStatus = null;
+        this.approvedDebitNoteAmount = 0;
+        this.approvedDebitNoteOutstanding = 0;
         this.quarantineDocstatus = null;
         this.handoverDocstatus = null;
         this.rejectionReturnDocstatus = null;
@@ -65,6 +70,8 @@ class PharmacyPurchaseReturnsManagement {
                         <button class="btn btn-success btn-sm" data-action="save-response">${__("Save Supplier Response")}</button>
                         <button class="btn btn-danger btn-sm" data-action="create-rejection-return">${__("Create Rejected Qty Return Draft")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-rejection-return" disabled>${__("Open Rejected Qty Return")}</button>
+                        <button class="btn btn-primary btn-sm" data-action="create-approved-debit-note">${__("Create Approved Debit Note Draft")}</button>
+                        <button class="btn btn-default btn-sm" data-action="open-approved-debit-note" disabled>${__("Open Approved Debit Note")}</button>
                         <span class="prm-muted" data-role="invoice-summary"></span>
                     </div>
                 </div>
@@ -82,6 +89,9 @@ class PharmacyPurchaseReturnsManagement {
                         <div data-role="rejected-qty-card"><span class="prm-muted">${__("Rejected Qty")}</span><strong data-role="total-rejected-qty">0</strong></div>
                         <div data-role="pending-response-card"><span class="prm-muted">${__("Pending Supplier Response")}</span><strong data-role="total-pending-response">0</strong></div>
                         <div data-role="approved-value-card"><span class="prm-muted">${__("Approved Value")}</span><strong data-role="total-approved-value">0.00</strong></div>
+                        <div data-role="debit-note-amount-card"><span class="prm-muted">${__("Debit Note Amount")}</span><strong data-role="debit-note-amount">0.00</strong></div>
+                        <div data-role="debit-note-outstanding-card"><span class="prm-muted">${__("Supplier Credit Outstanding")}</span><strong data-role="debit-note-outstanding">0.00</strong></div>
+                        <div data-role="debit-note-status-card"><span class="prm-muted">${__("Debit Note Status")}</span><strong data-role="debit-note-status">—</strong></div>
                     </div>
                 </div>
                 <div class="prm-panel"><h4>${__("Recent Return Cases")}</h4><div data-role="recent"></div></div>
@@ -137,6 +147,7 @@ class PharmacyPurchaseReturnsManagement {
         this.makeControl("supplier_response_reference", {label:__("Supplier Response Reference"), fieldtype:"Data"});
         this.makeControl("supplier_response_attachment", {label:__("Supplier Response Attachment"), fieldtype:"Data", read_only:1});
         this.makeControl("supplier_response_notes", {label:__("Supplier Response Notes"), fieldtype:"Small Text"});
+        this.makeControl("approved_debit_note_posting_date", {label:__("Approved Debit Note Posting Date"), fieldtype:"Date"});
         this.makeControl("original_purchase_invoice", {label:__("Original Purchase Invoice"), fieldtype:"Link", options:"Purchase Invoice", reqd:1, get_query:()=>({filters:{docstatus:1,is_return:0,company:this.value("company")||undefined}})});
         this.makeControl("settlement_method", {label:__("Settlement Method"), fieldtype:"Select", options:"Pending Settlement\nDeduct from Supplier Claim\nCash / Bank Refund\nMixed Settlement", reqd:1}, "Pending Settlement");
         this.makeControl("authority_notification_no", {label:__("Authority Notification Number"), fieldtype:"Data"});
@@ -181,6 +192,7 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.on("click", "[data-action='save-response']", ()=>this.saveSupplierResponse());
         this.$main.on("click", "[data-action='create-handover']", ()=>this.createSupplierHandoverDraft());
         this.$main.on("click", "[data-action='create-rejection-return']", ()=>this.createRejectedQuantityReturnDraft());
+        this.$main.on("click", "[data-action='create-approved-debit-note']", ()=>this.createApprovedDebitNoteDraft());
         this.$main.on("click", "[data-action='save-case']", ()=>this.saveCase());
         this.$main.on("click", "[data-action='create-primary']", ()=>this.createPrimaryDraft());
         this.$main.on("click", "[data-action='open-original']", ()=>{const n=this.value("original_purchase_invoice");if(n)frappe.set_route("Form","Purchase Invoice",n);});
@@ -188,6 +200,7 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.on("click", "[data-action='open-quarantine']", ()=>{if(this.quarantineStockEntry)frappe.set_route("Form","Stock Entry",this.quarantineStockEntry);});
         this.$main.on("click", "[data-action='open-handover']", ()=>{if(this.handoverStockEntry)frappe.set_route("Form","Stock Entry",this.handoverStockEntry);});
         this.$main.on("click", "[data-action='open-rejection-return']", ()=>{if(this.rejectionReturnStockEntry)frappe.set_route("Form","Stock Entry",this.rejectionReturnStockEntry);});
+        this.$main.on("click", "[data-action='open-approved-debit-note']", ()=>{if(this.approvedDebitNote)frappe.set_route("Form","Purchase Invoice",this.approvedDebitNote);});
         this.$main.on("click", ".prm-type:not(.disabled)", e=>this.setReturnType($(e.currentTarget).data("type")));
         this.$main.on("input change", "[data-row-field]", e=>this.updateRow(e));
         this.$main.on("click", "[data-action='remove-recall-row']", e=>this.removeRecallRow(Number($(e.currentTarget).data("index"))));
@@ -198,6 +211,7 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.on("click", "[data-action='open-recent-quarantine']", e=>frappe.set_route("Form","Stock Entry",$(e.currentTarget).data("name")));
         this.$main.on("click", "[data-action='open-recent-handover']", e=>frappe.set_route("Form","Stock Entry",$(e.currentTarget).data("name")));
         this.$main.on("click", "[data-action='open-recent-rejection']", e=>frappe.set_route("Form","Stock Entry",$(e.currentTarget).data("name")));
+        this.$main.on("click", "[data-action='open-recent-debit-note']", e=>frappe.set_route("Form","Purchase Invoice",$(e.currentTarget).data("name")));
     }
 
     async loadBootstrap() {
@@ -254,17 +268,17 @@ class PharmacyPurchaseReturnsManagement {
         const invoiceMode=type==="Return Against Invoice";
         const recallMode=type==="Regulatory Batch Recall";
         ["original_purchase_invoice"].forEach(name=>this.showControl(name,invoiceMode));
-        ["recall_source_warehouse","recall_item_code","recall_batch_no","recall_quarantine_warehouse","authority_notification_no","authority_notification_date","authority_notification_attachment","returns_with_supplier_warehouse","handover_date","handover_reference","handover_attachment","supplier_response_date","supplier_response_reference","supplier_response_attachment","supplier_response_notes"].forEach(name=>this.showControl(name,recallMode));
+        ["recall_source_warehouse","recall_item_code","recall_batch_no","recall_quarantine_warehouse","authority_notification_no","authority_notification_date","authority_notification_attachment","returns_with_supplier_warehouse","handover_date","handover_reference","handover_attachment","supplier_response_date","supplier_response_reference","supplier_response_attachment","supplier_response_notes","approved_debit_note_posting_date"].forEach(name=>this.showControl(name,recallMode));
         this.$main.find("[data-action='load-invoice']").toggle(invoiceMode);
         this.$main.find("[data-action='open-original'],[data-action='open-return']").toggle(invoiceMode);
-        this.$main.find("[data-action='load-batch'],[data-action='attach-notice'],[data-action='open-quarantine'],[data-action='create-handover'],[data-action='open-handover'],[data-action='attach-handover'],[data-action='attach-response'],[data-action='save-response'],[data-action='create-rejection-return'],[data-action='open-rejection-return']").toggle(recallMode);
+        this.$main.find("[data-action='load-batch'],[data-action='attach-notice'],[data-action='open-quarantine'],[data-action='create-handover'],[data-action='open-handover'],[data-action='attach-handover'],[data-action='attach-response'],[data-action='save-response'],[data-action='create-rejection-return'],[data-action='open-rejection-return'],[data-action='create-approved-debit-note'],[data-action='open-approved-debit-note']").toggle(recallMode);
         this.$main.find("[data-action='create-primary']").text(invoiceMode?__("Create Purchase Return Draft"):__("Create Quarantine Transfer Draft"));
         this.$main.find('[data-role="qty-label"]').text(recallMode?__("Recall Quantity"):__("Selected Quantity"));
         this.$main.find('[data-role="value-label"]').text(recallMode?__("Expected Supplier Credit"):__("Requested Return Value"));
         this.$main.find('[data-role="context-note"]').text(recallMode
             ?__("The quarantine transfer uses the stock valuation rate. Expected settlement rate is separate and remains editable for supplier credit estimation.")
             :__("The company/distributor receiving the goods is the same party responsible for payment or deduction from its supplier claim."));
-        this.$main.find('[data-role="stock-value-card"],[data-role="difference-card"],[data-role="handover-qty-card"],[data-role="accepted-qty-card"],[data-role="rejected-qty-card"],[data-role="pending-response-card"],[data-role="approved-value-card"]').toggle(recallMode);
+        this.$main.find('[data-role="stock-value-card"],[data-role="difference-card"],[data-role="handover-qty-card"],[data-role="accepted-qty-card"],[data-role="rejected-qty-card"],[data-role="pending-response-card"],[data-role="approved-value-card"],[data-role="debit-note-amount-card"],[data-role="debit-note-outstanding-card"],[data-role="debit-note-status-card"]').toggle(recallMode);
         if(notify && type==="Expired Drugs Return") frappe.show_alert({message:__("Expired Drugs Return will be activated after regulatory recall testing."),indicator:"blue"},7);
         this.renderItems();
         this.syncButtons();
@@ -421,6 +435,11 @@ class PharmacyPurchaseReturnsManagement {
         this.quarantineStockEntry=doc.quarantine_stock_entry||null;
         this.handoverStockEntry=doc.handover_stock_entry||null;
         this.rejectionReturnStockEntry=doc.rejection_return_stock_entry||null;
+        this.approvedDebitNote=doc.approved_debit_note||null;
+        this.approvedDebitNoteDocstatus=doc.approved_debit_note_docstatus;
+        this.approvedDebitNoteStatus=doc.approved_debit_note_status||null;
+        this.approvedDebitNoteAmount=flt(doc.approved_debit_note_amount);
+        this.approvedDebitNoteOutstanding=flt(doc.approved_debit_note_outstanding);
         this.quarantineDocstatus=doc.quarantine_docstatus;
         this.handoverDocstatus=doc.handover_docstatus;
         this.rejectionReturnDocstatus=doc.rejection_return_docstatus;
@@ -454,6 +473,10 @@ class PharmacyPurchaseReturnsManagement {
         await this.setValue("supplier_response_reference",doc.supplier_response_reference);
         await this.setValue("supplier_response_attachment",doc.supplier_response_attachment);
         await this.setValue("supplier_response_notes",doc.supplier_response_notes);
+        await this.setValue(
+            "approved_debit_note_posting_date",
+            doc.approved_debit_note_posting_date || doc.supplier_response_date || frappe.datetime.get_today()
+        );
         await this.setValue("recall_batch_no","");
         await this.setValue("remarks",doc.remarks||"");
         await this.setValue("case_reference",doc.name);
@@ -484,7 +507,7 @@ class PharmacyPurchaseReturnsManagement {
                 const approvedValue=accepted*approvedRate;
                 const recallLocked=this.quarantineDocstatus===1?"disabled":"";
                 const handoverLocked=(this.quarantineDocstatus!==1||this.handoverDocstatus===1)?"disabled":"";
-                const responseLocked=(this.handoverDocstatus!==1||this.rejectionReturnDocstatus===1)?"disabled":"";
+                const responseLocked=(this.handoverDocstatus!==1||this.rejectionReturnDocstatus===1||[0,1].includes(this.approvedDebitNoteDocstatus))?"disabled":"";
                 const removeDisabled=this.quarantineDocstatus===1?"disabled":"";
                 return `<tr><td>${i+1}</td><td>${this.esc(r.warehouse||"")}</td><td><strong>${this.esc(r.item_name||r.item_code)}</strong><div class="prm-muted">${this.esc(r.item_code)}</div></td><td>${this.esc(r.batch_no||"—")}</td><td>${this.esc(r.expiry_date||"—")}</td><td><input class="form-control input-sm" type="number" min="0" max="${flt(r.available_to_return_qty)}" step="any" data-row-field="return_qty" data-index="${i}" value="${flt(r.return_qty)}" ${recallLocked}></td><td>${quarantined}</td><td><input class="form-control input-sm" type="number" min="0" max="${quarantined}" step="any" data-row-field="delivered_qty" data-index="${i}" value="${delivered}" ${handoverLocked}></td><td><input class="form-control input-sm" type="number" min="0" max="${delivered-rejected}" step="any" data-row-field="accepted_qty" data-index="${i}" value="${accepted}" ${responseLocked}></td><td><input class="form-control input-sm" type="number" min="0" max="${delivered-accepted}" step="any" data-row-field="rejected_qty" data-index="${i}" value="${rejected}" ${responseLocked}></td><td data-row-pending="${i}">${pending}</td><td><input class="form-control input-sm" type="number" min="0" step="any" data-row-field="approved_rate" data-index="${i}" value="${approvedRate}" ${responseLocked}></td><td data-row-approved-value="${i}">${this.money(approvedValue)}</td><td><input class="form-control input-sm" type="text" data-row-field="rejection_reason" data-index="${i}" value="${this.esc(r.rejection_reason||"")}" ${responseLocked}></td><td>${flt(r.rejected_returned_qty)}</td><td data-row-stock-value="${i}">${this.money(stockValue)}</td><td><input class="form-control input-sm" type="number" min="0" step="any" data-row-field="rate" data-index="${i}" value="${flt(r.rate)}"></td><td data-row-amount="${i}">${this.money(expectedCredit)}</td><td><button type="button" class="btn btn-xs btn-danger" data-action="remove-recall-row" data-index="${i}" ${removeDisabled}>${__("Remove")}</button></td></tr>`;
             }).join("")}</tbody></table>`);
@@ -559,15 +582,18 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.find('[data-role="total-rejected-qty"]').text(rejected);
         this.$main.find('[data-role="total-pending-response"]').text(Math.max(0,handed-accepted-rejected));
         this.$main.find('[data-role="total-approved-value"]').text(this.money(approvedValue));
+        this.$main.find('[data-role="debit-note-amount"]').text(this.money(this.approvedDebitNoteAmount));
+        this.$main.find('[data-role="debit-note-outstanding"]').text(this.money(this.approvedDebitNoteOutstanding));
+        this.$main.find('[data-role="debit-note-status"]').text(this.approvedDebitNoteStatus||"—");
     }
 
     payload(){return {
-        name:this.caseName,return_type:this.value("return_type"),company:this.value("company"),posting_date:this.value("posting_date"),supplier:this.value("supplier"),original_purchase_invoice:this.value("original_purchase_invoice"),settlement_method:this.value("settlement_method"),authority_notification_no:this.value("authority_notification_no"),authority_notification_date:this.value("authority_notification_date"),authority_notification_attachment:this.value("authority_notification_attachment"),recall_source_warehouse:this.value("recall_source_warehouse"),recall_item_code:this.value("recall_item_code"),recall_quarantine_warehouse:this.value("recall_quarantine_warehouse"),returns_with_supplier_warehouse:this.value("returns_with_supplier_warehouse"),handover_date:this.value("handover_date"),handover_reference:this.value("handover_reference"),handover_attachment:this.value("handover_attachment"),supplier_response_date:this.value("supplier_response_date"),supplier_response_reference:this.value("supplier_response_reference"),supplier_response_attachment:this.value("supplier_response_attachment"),supplier_response_notes:this.value("supplier_response_notes"),remarks:this.value("remarks"),items:this.rows
+        name:this.caseName,return_type:this.value("return_type"),company:this.value("company"),posting_date:this.value("posting_date"),supplier:this.value("supplier"),original_purchase_invoice:this.value("original_purchase_invoice"),settlement_method:this.value("settlement_method"),authority_notification_no:this.value("authority_notification_no"),authority_notification_date:this.value("authority_notification_date"),authority_notification_attachment:this.value("authority_notification_attachment"),recall_source_warehouse:this.value("recall_source_warehouse"),recall_item_code:this.value("recall_item_code"),recall_quarantine_warehouse:this.value("recall_quarantine_warehouse"),returns_with_supplier_warehouse:this.value("returns_with_supplier_warehouse"),handover_date:this.value("handover_date"),handover_reference:this.value("handover_reference"),handover_attachment:this.value("handover_attachment"),supplier_response_date:this.value("supplier_response_date"),supplier_response_reference:this.value("supplier_response_reference"),supplier_response_attachment:this.value("supplier_response_attachment"),supplier_response_notes:this.value("supplier_response_notes"),approved_debit_note_posting_date:this.value("approved_debit_note_posting_date"),remarks:this.value("remarks"),items:this.rows
     };}
 
     async saveCase(silent=false){
         const r=await frappe.call({method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.save_case",args:{payload:this.payload()},freeze:true,freeze_message:__("Saving return case...")});
-        const doc=r.message||{};this.caseName=doc.name;this.purchaseReturn=doc.purchase_return||null;this.quarantineStockEntry=doc.quarantine_stock_entry||null;this.handoverStockEntry=doc.handover_stock_entry||null;this.rejectionReturnStockEntry=doc.rejection_return_stock_entry||null;this.quarantineDocstatus=doc.quarantine_docstatus;this.handoverDocstatus=doc.handover_docstatus;this.rejectionReturnDocstatus=doc.rejection_return_docstatus;await this.setValue("case_reference",doc.name);this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${doc.operational_status||__("Draft")}`);this.syncButtons();if(!silent)frappe.show_alert({message:__("Return Case {0} saved.",[doc.name]),indicator:"green"},6);await this.refreshRecent();return doc;
+        const doc=r.message||{};this.caseName=doc.name;this.purchaseReturn=doc.purchase_return||null;this.quarantineStockEntry=doc.quarantine_stock_entry||null;this.handoverStockEntry=doc.handover_stock_entry||null;this.rejectionReturnStockEntry=doc.rejection_return_stock_entry||null;this.approvedDebitNote=doc.approved_debit_note||null;this.approvedDebitNoteDocstatus=doc.approved_debit_note_docstatus;this.approvedDebitNoteStatus=doc.approved_debit_note_status||null;this.approvedDebitNoteAmount=flt(doc.approved_debit_note_amount);this.approvedDebitNoteOutstanding=flt(doc.approved_debit_note_outstanding);this.quarantineDocstatus=doc.quarantine_docstatus;this.handoverDocstatus=doc.handover_docstatus;this.rejectionReturnDocstatus=doc.rejection_return_docstatus;await this.setValue("case_reference",doc.name);this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${doc.operational_status||__("Draft")}`);this.syncButtons();if(!silent)frappe.show_alert({message:__("Return Case {0} saved.",[doc.name]),indicator:"green"},6);await this.refreshRecent();return doc;
     }
 
     async createPrimaryDraft(){
@@ -669,12 +695,78 @@ class PharmacyPurchaseReturnsManagement {
         frappe.set_route("Form","Stock Entry",this.rejectionReturnStockEntry);
     }
 
+    async createApprovedDebitNoteDraft(){
+        const doc=await this.saveCase(true);
+        if(doc.handover_docstatus!==1){
+            frappe.msgprint({
+                title:__("Submitted Supplier Handover Required"),
+                message:__("Submit the Supplier Handover Stock Entry first."),
+                indicator:"orange"
+            });
+            return;
+        }
+        if(flt(doc.pending_response_quantity)>0){
+            frappe.msgprint({
+                title:__("Incomplete Supplier Response"),
+                message:__("Complete the supplier response first. Pending quantity: {0}.",[doc.pending_response_quantity]),
+                indicator:"orange"
+            });
+            return;
+        }
+        if(flt(doc.accepted_quantity)<=0){
+            frappe.msgprint({
+                title:__("No Accepted Quantity"),
+                message:__("There is no accepted quantity for a supplier debit note."),
+                indicator:"blue"
+            });
+            return;
+        }
+        if(flt(doc.rejected_quantity)>0 && doc.rejection_return_docstatus!==1){
+            frappe.msgprint({
+                title:__("Submitted Rejected Quantity Return Required"),
+                message:__("Submit the rejected quantity return before creating the Approved Debit Note."),
+                indicator:"orange"
+            });
+            return;
+        }
+
+        const answer=await new Promise(resolve=>frappe.confirm(
+            __("Create an Approved Purchase Debit Note for {0}? Update Stock will be enabled and accepted quantities will leave Returns With Supplier warehouse.",[this.money(doc.approved_return_value)]),
+            ()=>resolve(true),
+            ()=>resolve(false)
+        ));
+        if(!answer)return;
+
+        const r=await frappe.call({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.create_approved_debit_note_draft",
+            args:{case_name:doc.name},
+            freeze:true,
+            freeze_message:__("Creating approved supplier debit note...")
+        });
+
+        this.approvedDebitNote=r.message.purchase_invoice;
+        this.approvedDebitNoteDocstatus=0;
+        this.approvedDebitNoteStatus="Draft";
+        this.approvedDebitNoteAmount=flt(r.message.approved_value);
+        this.approvedDebitNoteOutstanding=flt(r.message.approved_value);
+        this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${__("Approved Debit Note Draft Created")}`);
+        this.refreshTotals();
+        this.syncButtons();
+        frappe.show_alert({
+            message:__("Approved Debit Note {0} created as Draft.",[this.approvedDebitNote]),
+            indicator:"green"
+        },8);
+        await this.refreshRecent();
+        frappe.set_route("Form","Purchase Invoice",this.approvedDebitNote);
+    }
+
     syncButtons(){
         this.$main.find('[data-action="open-original"]').prop("disabled",!this.value("original_purchase_invoice"));
         this.$main.find('[data-action="open-return"]').prop("disabled",!this.purchaseReturn);
         this.$main.find('[data-action="open-quarantine"]').prop("disabled",!this.quarantineStockEntry);
         this.$main.find('[data-action="open-handover"]').prop("disabled",!this.handoverStockEntry);
         this.$main.find('[data-action="open-rejection-return"]').prop("disabled",!this.rejectionReturnStockEntry);
+        this.$main.find('[data-action="open-approved-debit-note"]').prop("disabled",!this.approvedDebitNote);
         this.$main.find('[data-action="save-response"]').prop("disabled",this.handoverDocstatus!==1||this.rejectionReturnDocstatus===1);
         const totalRejected=this.rows.reduce((total,row)=>total+flt(row.rejected_qty),0);
         const totalPending=this.rows.reduce((total,row)=>total+Math.max(0,flt(row.delivered_qty)-flt(row.accepted_qty)-flt(row.rejected_qty)),0);
@@ -684,6 +776,24 @@ class PharmacyPurchaseReturnsManagement {
                 || totalRejected<=0
                 || totalPending>0.000001
                 || this.rejectionReturnDocstatus===1
+        );
+        const totalAccepted=this.rows.reduce((total,row)=>total+flt(row.accepted_qty),0);
+        const rejectionReady=totalRejected<=0||this.rejectionReturnDocstatus===1;
+        this.$main.find('[data-action="create-approved-debit-note"]').prop(
+            "disabled",
+            this.value("return_type")!=="Regulatory Batch Recall"
+                || this.handoverDocstatus!==1
+                || totalAccepted<=0
+                || totalPending>0.000001
+                || !rejectionReady
+                || this.approvedDebitNoteDocstatus===1
+                || this.approvedDebitNoteDocstatus===0
+        );
+        this.$main.find('[data-action="save-response"]').prop(
+            "disabled",
+            this.handoverDocstatus!==1
+                || this.rejectionReturnDocstatus===1
+                || [0,1].includes(this.approvedDebitNoteDocstatus)
         );
         this.$main.find('[data-action="create-handover"]').prop(
             "disabled",
@@ -699,16 +809,16 @@ class PharmacyPurchaseReturnsManagement {
     renderRecent(rows){
         const $h=this.$main.find('[data-role="recent"]');
         if(!rows.length){$h.html(`<div class="prm-empty">${__("No return cases yet.")}</div>`);return;}
-        $h.html(`<div class="prm-table-wrap"><table class="prm-recent"><thead><tr><th>${__("Case")}</th><th>${__("Date")}</th><th>${__("Type")}</th><th>${__("Receiving Company")}</th><th>${__("Quarantine")}</th><th>${__("Supplier Handover")}</th><th>${__("Rejected Return")}</th><th>${__("Status")}</th><th>${__("Accepted / Rejected")}</th><th>${__("Approved Value")}</th><th>${__("Actions")}</th></tr></thead><tbody>${rows.map(r=>{
-            const quarantine=r.quarantine_stock_entry||"—";
+        $h.html(`<div class="prm-table-wrap"><table class="prm-recent"><thead><tr><th>${__("Case")}</th><th>${__("Date")}</th><th>${__("Receiving Company")}</th><th>${__("Supplier Handover")}</th><th>${__("Rejected Return")}</th><th>${__("Approved Debit Note")}</th><th>${__("Status")}</th><th>${__("Accepted / Rejected")}</th><th>${__("Approved Value")}</th><th>${__("Outstanding Credit")}</th><th>${__("Actions")}</th></tr></thead><tbody>${rows.map(r=>{
             const handover=r.handover_stock_entry||"—";
             const rejection=r.rejection_return_stock_entry||"—";
-            return `<tr><td><strong>${this.esc(r.name)}</strong></td><td>${this.esc(r.posting_date||"")}</td><td>${this.esc(r.return_type||"")}</td><td>${this.esc(r.supplier||"")}</td><td>${r.quarantine_stock_entry?`<span class="prm-link" data-action="open-recent-quarantine" data-name="${this.esc(quarantine)}">${this.esc(quarantine)}</span>`:this.esc(quarantine)}</td><td>${r.handover_stock_entry?`<span class="prm-link" data-action="open-recent-handover" data-name="${this.esc(handover)}">${this.esc(handover)}</span>`:this.esc(handover)}</td><td>${r.rejection_return_stock_entry?`<span class="prm-link" data-action="open-recent-rejection" data-name="${this.esc(rejection)}">${this.esc(rejection)}</span>`:this.esc(rejection)}</td><td>${this.esc(r.operational_status||"")}</td><td>${flt(r.accepted_quantity)} / ${flt(r.rejected_quantity)}</td><td>${this.money(r.approved_return_value)}</td><td><div class="prm-actions" style="justify-content:flex-start;min-width:210px"><button type="button" class="btn btn-primary btn-xs" data-action="open-case-page" data-name="${this.esc(r.name)}">${__("Open in Page")}</button><button type="button" class="btn btn-default btn-xs" data-action="open-case-document" data-name="${this.esc(r.name)}">${__("Open Document")}</button></div></td></tr>`;
+            const debitNote=r.approved_debit_note||"—";
+            return `<tr><td><strong>${this.esc(r.name)}</strong></td><td>${this.esc(r.posting_date||"")}</td><td>${this.esc(r.supplier||"")}</td><td>${r.handover_stock_entry?`<span class="prm-link" data-action="open-recent-handover" data-name="${this.esc(handover)}">${this.esc(handover)}</span>`:this.esc(handover)}</td><td>${r.rejection_return_stock_entry?`<span class="prm-link" data-action="open-recent-rejection" data-name="${this.esc(rejection)}">${this.esc(rejection)}</span>`:this.esc(rejection)}</td><td>${r.approved_debit_note?`<span class="prm-link" data-action="open-recent-debit-note" data-name="${this.esc(debitNote)}">${this.esc(debitNote)}</span>`:this.esc(debitNote)}</td><td>${this.esc(r.operational_status||"")}</td><td>${flt(r.accepted_quantity)} / ${flt(r.rejected_quantity)}</td><td>${this.money(r.approved_return_value)}</td><td>${this.money(r.approved_debit_note_outstanding)}</td><td><div class="prm-actions" style="justify-content:flex-start;min-width:210px"><button type="button" class="btn btn-primary btn-xs" data-action="open-case-page" data-name="${this.esc(r.name)}">${__("Open in Page")}</button><button type="button" class="btn btn-default btn-xs" data-action="open-case-document" data-name="${this.esc(r.name)}">${__("Open Document")}</button></div></td></tr>`;
         }).join("")}</tbody></table></div>`);
     }
 
     async newCase(){
-        this.caseName=null;this.purchaseReturn=null;this.quarantineStockEntry=null;this.handoverStockEntry=null;this.rejectionReturnStockEntry=null;this.quarantineDocstatus=null;this.handoverDocstatus=null;this.rejectionReturnDocstatus=null;this.rows=[];
+        this.caseName=null;this.purchaseReturn=null;this.quarantineStockEntry=null;this.handoverStockEntry=null;this.rejectionReturnStockEntry=null;this.approvedDebitNote=null;this.approvedDebitNoteDocstatus=null;this.approvedDebitNoteStatus=null;this.approvedDebitNoteAmount=0;this.approvedDebitNoteOutstanding=0;this.quarantineDocstatus=null;this.handoverDocstatus=null;this.rejectionReturnDocstatus=null;this.rows=[];
         await this.setReturnType("Return Against Invoice",false);
         await this.setValue("supplier","");await this.setValue("original_purchase_invoice","");await this.setValue("settlement_method","Pending Settlement");await this.setValue("authority_notification_no","");await this.setValue("authority_notification_date","");await this.setValue("authority_notification_attachment","");await this.setValue("recall_item_code","");await this.setValue("recall_batch_no","");await this.setValue("recall_source_warehouse","");await this.applyCompanyDefaults();await this.setValue("remarks","");await this.setValue("case_reference","");
         this.$main.find('[data-role="case-status"]').text(__("New Case"));this.$main.find('[data-role="invoice-summary"]').text("");this.renderItems();this.syncButtons();

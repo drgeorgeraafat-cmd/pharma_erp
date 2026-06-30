@@ -13,6 +13,7 @@ class PharmacyReturnCase(Document):
         self._validate_regulatory_recall()
         self._validate_supplier_handover()
         self._validate_supplier_response()
+        self._validate_approved_debit_note()
         self._calculate_totals()
         self._validate_settlement()
 
@@ -143,6 +144,45 @@ class PharmacyReturnCase(Document):
                 frappe.throw(_("Row {0}: Approved Settlement Rate is required for accepted quantity.").format(row.idx))
             if rejected > 0 and not (row.rejection_reason or "").strip():
                 frappe.throw(_("Row {0}: Supplier Rejection Reason is required.").format(row.idx))
+
+    def _validate_approved_debit_note(self):
+        if self.return_type != "Regulatory Batch Recall":
+            return
+        if not self.get("approved_debit_note"):
+            return
+        if not frappe.db.exists("Purchase Invoice", self.get("approved_debit_note")):
+            frappe.throw(_("Approved Supplier Debit Note does not exist."))
+
+        debit_note = frappe.db.get_value(
+            "Purchase Invoice",
+            self.get("approved_debit_note"),
+            [
+                "company",
+                "supplier",
+                "docstatus",
+                "is_return",
+                "update_stock",
+                "grand_total",
+            ],
+            as_dict=True,
+        )
+        if debit_note.company != self.company or debit_note.supplier != self.supplier:
+            frappe.throw(_("Approved Supplier Debit Note belongs to another company or supplier."))
+        if not debit_note.is_return:
+            frappe.throw(_("Approved Supplier Debit Note must be a Purchase Invoice Return / Debit Note."))
+        if not debit_note.update_stock:
+            frappe.throw(_("Approved Supplier Debit Note must update stock to remove accepted goods from Returns With Supplier."))
+        if debit_note.docstatus in (0, 1):
+            approved = sum(
+                flt(row.accepted_qty) * flt(row.approved_rate)
+                for row in self.items
+            )
+            if abs(abs(flt(debit_note.grand_total)) - approved) > 0.01:
+                frappe.throw(
+                    _("Supplier response value cannot be changed while Approved Debit Note {0} exists.").format(
+                        frappe.bold(self.get("approved_debit_note"))
+                    )
+                )
 
     def _calculate_totals(self):
         requested = 0.0

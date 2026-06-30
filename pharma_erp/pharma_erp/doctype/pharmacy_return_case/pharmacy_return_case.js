@@ -25,6 +25,11 @@ frappe.ui.form.on("Pharmacy Return Case", {
                 frappe.set_route("Form", "Stock Entry", frm.doc.rejection_return_stock_entry);
             }, __("View"));
         }
+        if (frm.doc.approved_debit_note) {
+            frm.add_custom_button(__("Approved Supplier Debit Note"), () => {
+                frappe.set_route("Form", "Purchase Invoice", frm.doc.approved_debit_note);
+            }, __("View"));
+        }
         frm.add_custom_button(__("Returns Management"), () => frappe.set_route("purchase-returns-management"));
     },
     approved_return_value: calculate_settlement,

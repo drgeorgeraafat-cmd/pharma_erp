@@ -34,3 +34,4 @@ pharma_erp.patches.v1_6.backfill_supplier_handover_warehouse
 pharma_erp.patches.v1_7.ensure_supplier_handover_physical_schema
 pharma_erp.patches.v1_8.direct_import_supplier_handover_doctypes
 pharma_erp.patches.v1_9.setup_supplier_response_rejection_return
+pharma_erp.patches.v1_10.setup_approved_supplier_debit_note
