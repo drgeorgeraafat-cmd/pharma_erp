@@ -230,6 +230,346 @@ def _sync_case_operational_status(doc) -> None:
         doc.db_set("operational_status", desired, update_modified=False)
         doc.operational_status = desired
 
+def _case_settlement_document(doc) -> str | None:
+    direct = doc.get("approved_debit_note") or doc.get("purchase_return")
+    if direct and frappe.db.exists("Purchase Invoice", direct):
+        return direct
+
+    purchase_invoice_meta = frappe.get_meta("Purchase Invoice")
+
+    # Best fallback: a return invoice explicitly linked to this return case.
+    if purchase_invoice_meta.has_field("custom_pharmacy_return_case"):
+        linked = frappe.db.get_value(
+            "Purchase Invoice",
+            {
+                "custom_pharmacy_return_case": doc.name,
+                "is_return": 1,
+                "docstatus": ["<", 2],
+            },
+            "name",
+            order_by="posting_date desc, creation desc",
+        )
+        if linked:
+            return linked
+
+    # Legacy fallback: inspect the linked Supplier Claim rows and locate
+    # the return/debit note belonging to this case or original invoice.
+    if doc.get("supplier_claim"):
+        claim_rows = frappe.get_all(
+            "Supplier Claim Invoice",
+            filters={
+                "parent": doc.get("supplier_claim"),
+                "parenttype": "Supplier Claim",
+                "is_return": 1,
+            },
+            fields=["purchase_invoice", "included_amount"],
+            order_by="idx asc",
+        )
+        for row in claim_rows:
+            purchase_invoice = row.purchase_invoice
+            if not purchase_invoice:
+                continue
+
+            if purchase_invoice_meta.has_field("custom_pharmacy_return_case"):
+                linked_case = frappe.db.get_value(
+                    "Purchase Invoice",
+                    purchase_invoice,
+                    "custom_pharmacy_return_case",
+                )
+                if linked_case == doc.name:
+                    return purchase_invoice
+
+            if doc.return_type == "Return Against Invoice":
+                note = frappe.db.get_value(
+                    "Purchase Invoice",
+                    purchase_invoice,
+                    [
+                        "return_against",
+                        "supplier",
+                        "company",
+                        "is_return",
+                        "docstatus",
+                    ],
+                    as_dict=True,
+                )
+                if (
+                    note
+                    and note.is_return
+                    and note.docstatus < 2
+                    and note.supplier == doc.supplier
+                    and note.company == doc.company
+                    and note.return_against == doc.original_purchase_invoice
+                ):
+                    return purchase_invoice
+
+    # Last fallback for old Return Against Invoice records.
+    if (
+        doc.return_type == "Return Against Invoice"
+        and doc.original_purchase_invoice
+    ):
+        return frappe.db.get_value(
+            "Purchase Invoice",
+            {
+                "return_against": doc.original_purchase_invoice,
+                "supplier": doc.supplier,
+                "company": doc.company,
+                "is_return": 1,
+                "docstatus": ["<", 2],
+            },
+            "name",
+            order_by="posting_date desc, creation desc",
+        )
+
+    return None
+
+
+def _case_settlement_base(doc) -> float:
+    financial_document = _case_settlement_document(doc)
+    if financial_document and frappe.db.exists(
+        "Purchase Invoice",
+        financial_document,
+    ):
+        note = frappe.db.get_value(
+            "Purchase Invoice",
+            financial_document,
+            ["docstatus", "is_return", "grand_total"],
+            as_dict=True,
+        )
+        if note and note.is_return and note.docstatus < 2:
+            return abs(flt(note.grand_total))
+
+    if doc.return_type == "Regulatory Batch Recall":
+        return flt(doc.approved_return_value)
+
+    return (
+        flt(doc.approved_return_value)
+        or flt(doc.requested_return_value)
+    )
+
+
+def _case_status_before_claim(doc) -> str:
+    if doc.return_type == "Return Against Invoice":
+        purchase_return = doc.get("purchase_return")
+        if purchase_return:
+            status = frappe.db.get_value(
+                "Purchase Invoice",
+                purchase_return,
+                "docstatus",
+            )
+            if status == 1:
+                return "Purchase Return Submitted"
+            if status == 0:
+                return "Purchase Return Draft Created"
+        return "Under Review"
+
+    if doc.get("approved_debit_note"):
+        status = frappe.db.get_value(
+            "Purchase Invoice",
+            doc.get("approved_debit_note"),
+            "docstatus",
+        )
+        if status == 1:
+            return "Approved Debit Note Submitted"
+        if status == 0:
+            return "Approved Debit Note Draft Created"
+
+    return doc.operational_status or "Under Review"
+
+
+def _sync_supplier_claim_settlement(doc) -> None:
+    if not doc.get("supplier_claim"):
+        return
+    if not frappe.db.exists("Supplier Claim", doc.get("supplier_claim")):
+        return
+
+    claim = frappe.db.get_value(
+        "Supplier Claim",
+        doc.get("supplier_claim"),
+        ["docstatus", "status"],
+        as_dict=True,
+    )
+    settlement_document = _case_settlement_document(doc)
+    deduction = (
+        abs(
+            flt(
+                frappe.db.get_value(
+                    "Supplier Claim Invoice",
+                    {
+                        "parent": doc.get("supplier_claim"),
+                        "parenttype": "Supplier Claim",
+                        "purchase_invoice": settlement_document,
+                    },
+                    "included_amount",
+                )
+            )
+        )
+        if settlement_document
+        else 0
+    )
+
+    settlement_base = _case_settlement_base(doc)
+    refund = flt(doc.refund_amount)
+
+    if abs(flt(doc.approved_return_value) - settlement_base) > 0.01:
+        doc.db_set(
+            "approved_return_value",
+            settlement_base,
+            update_modified=False,
+        )
+        doc.approved_return_value = settlement_base
+
+    if claim.docstatus == 0:
+        values = {
+            "planned_claim_deduction_amount": deduction or settlement_base,
+            "claim_deduction_amount": 0,
+            "settled_amount": refund,
+            "remaining_settlement_amount": max(
+                0.0,
+                settlement_base - refund,
+            ),
+            "settlement_status": "Claim Deduction Draft",
+        }
+        desired = "Claim Deduction Draft Created"
+    elif claim.docstatus == 1:
+        remaining = max(
+            0.0,
+            settlement_base - deduction - refund,
+        )
+        values = {
+            "planned_claim_deduction_amount": deduction,
+            "claim_deduction_amount": deduction,
+            "settled_amount": deduction + refund,
+            "remaining_settlement_amount": remaining,
+            "settlement_status": (
+                "Settled"
+                if claim.status == "Paid" and remaining <= 0.01
+                else "Claim Deduction Confirmed"
+                if remaining <= 0.01
+                else "Partially Settled"
+            ),
+        }
+        desired = (
+            "Financially Settled"
+            if claim.status == "Paid" and remaining <= 0.01
+            else "Claim Deduction Confirmed"
+        )
+    else:
+        values = {
+            "planned_claim_deduction_amount": 0,
+            "claim_deduction_amount": 0,
+            "settled_amount": refund,
+            "remaining_settlement_amount": max(
+                0.0,
+                settlement_base - refund,
+            ),
+            "settlement_status": (
+                "Partially Settled"
+                if refund > 0
+                else "Cancelled"
+            ),
+        }
+        desired = _case_status_before_claim(doc)
+
+    for fieldname, value in values.items():
+        current = doc.get(fieldname)
+        changed = (
+            abs(flt(current) - flt(value)) > 0.000001
+            if fieldname != "settlement_status"
+            else (current or "") != (value or "")
+        )
+        if changed:
+            doc.db_set(
+                fieldname,
+                value,
+                update_modified=False,
+            )
+            setattr(doc, fieldname, value)
+
+    if (
+        desired
+        and doc.operational_status not in {"Closed", "Cancelled"}
+        and doc.operational_status != desired
+    ):
+        doc.db_set(
+            "operational_status",
+            desired,
+            update_modified=False,
+        )
+        doc.operational_status = desired
+
+
+@frappe.whitelist()
+def repair_all_return_case_claim_settlements():
+    repaired = []
+    skipped = []
+
+    cases = frappe.get_all(
+        "Pharmacy Return Case",
+        filters={"supplier_claim": ["is", "set"]},
+        fields=["name"],
+        limit_page_length=0,
+    )
+
+    for row in cases:
+        doc = frappe.get_doc("Pharmacy Return Case", row.name)
+        financial_document = _case_settlement_document(doc)
+        if not financial_document:
+            skipped.append({
+                "case": doc.name,
+                "reason": "No linked return/debit note found",
+            })
+            continue
+
+        note = frappe.db.get_value(
+            "Purchase Invoice",
+            financial_document,
+            [
+                "docstatus",
+                "is_return",
+                "grand_total",
+                "return_against",
+            ],
+            as_dict=True,
+        )
+        if not note or not note.is_return or note.docstatus >= 2:
+            skipped.append({
+                "case": doc.name,
+                "reason": "Financial document is not an active submitted/draft return",
+            })
+            continue
+
+        if (
+            doc.return_type == "Return Against Invoice"
+            and not doc.get("purchase_return")
+        ):
+            doc.db_set(
+                "purchase_return",
+                financial_document,
+                update_modified=False,
+            )
+            doc.purchase_return = financial_document
+
+        _sync_supplier_claim_settlement(doc)
+
+        repaired.append({
+            "case": doc.name,
+            "financial_document": financial_document,
+            "approved_value": flt(doc.approved_return_value),
+            "claim_deduction": flt(doc.claim_deduction_amount),
+            "remaining": flt(doc.remaining_settlement_amount),
+            "settlement_status": doc.settlement_status,
+        })
+
+    frappe.db.commit()
+    return {
+        "repaired": repaired,
+        "skipped": skipped,
+        "repaired_count": len(repaired),
+        "skipped_count": len(skipped),
+    }
+
+
+
 def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
     filters = {"company": company} if company else {}
     rows = frappe.get_list(
@@ -240,7 +580,10 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
             "purchase_return", "quarantine_stock_entry", "handover_stock_entry",
             "rejection_return_stock_entry", "approved_debit_note",
             "approved_debit_note_amount", "approved_debit_note_outstanding",
-            "approved_debit_note_status", "operational_status",
+            "approved_debit_note_status", "supplier_claim",
+            "settlement_status", "planned_claim_deduction_amount",
+            "claim_deduction_amount", "settled_amount",
+            "remaining_settlement_amount", "operational_status",
             "requested_return_value", "approved_return_value", "settlement_method",
             "handed_over_quantity", "accepted_quantity", "rejected_quantity",
             "pending_response_quantity", "modified",
@@ -249,7 +592,35 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
         limit_page_length=max(1, min(cint(limit) or 20, 100)),
     )
     for row in rows:
-        if row.return_type == "Regulatory Batch Recall":
+        if row.get("supplier_claim"):
+            case_doc = frappe.get_doc("Pharmacy Return Case", row.name)
+            _sync_supplier_claim_settlement(case_doc)
+            for fieldname in (
+                "purchase_return",
+                "approved_return_value",
+                "claim_deduction_amount",
+                "planned_claim_deduction_amount",
+                "settled_amount",
+                "remaining_settlement_amount",
+                "settlement_status",
+                "operational_status",
+            ):
+                row[fieldname] = case_doc.get(fieldname)
+
+        settlement_status = row.get("settlement_status") or ""
+        settlement_operational_status = {
+            "Claim Deduction Draft": "Claim Deduction Draft Created",
+            "Claim Deduction Confirmed": "Claim Deduction Confirmed",
+            "Partially Settled": "Claim Deduction Confirmed",
+            "Settled": "Financially Settled",
+        }.get(settlement_status)
+
+        if settlement_operational_status:
+            # Financial settlement state has priority over the earlier
+            # stock / supplier-response / Debit Note workflow states.
+            row.operational_status = settlement_operational_status
+
+        elif row.return_type == "Regulatory Batch Recall":
             debit_note = (
                 frappe.db.get_value(
                     "Purchase Invoice",
@@ -953,6 +1324,7 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.supplier_response_reference = payload.get("supplier_response_reference") or None
     doc.supplier_response_attachment = payload.get("supplier_response_attachment") or None
     doc.supplier_response_notes = payload.get("supplier_response_notes") or None
+    doc.supplier_claim = payload.get("supplier_claim") or doc.get("supplier_claim") or None
     doc.approved_debit_note_posting_date = (
         payload.get("approved_debit_note_posting_date")
         or doc.get("approved_debit_note_posting_date")
@@ -1071,6 +1443,10 @@ def _supplier_handover_schema_requirements():
             "approved_debit_note_amount",
             "approved_debit_note_outstanding",
             "accepted_stock_finalized_quantity",
+            "supplier_claim",
+            "settlement_status",
+            "planned_claim_deduction_amount",
+            "settled_amount",
         ),
         "Pharmacy Return Item": (
             "delivered_qty",
@@ -1198,6 +1574,7 @@ def get_case(name: str):
     _require_read()
     doc = frappe.get_doc("Pharmacy Return Case", name)
     _sync_case_operational_status(doc)
+    _sync_supplier_claim_settlement(doc)
     quarantine_docstatus = (
         frappe.db.get_value("Stock Entry", doc.quarantine_stock_entry, "docstatus")
         if doc.quarantine_stock_entry else None
@@ -1260,6 +1637,13 @@ def get_case(name: str):
         "approved_debit_note_amount": abs(flt(debit_note_details.grand_total)) if debit_note_details else flt(doc.get("approved_debit_note_amount")),
         "approved_debit_note_outstanding": abs(flt(debit_note_details.outstanding_amount)) if debit_note_details else flt(doc.get("approved_debit_note_outstanding")),
         "approved_debit_note_update_stock": debit_note_details.update_stock if debit_note_details else None,
+        "supplier_claim": doc.get("supplier_claim"),
+        "settlement_status": doc.get("settlement_status"),
+        "planned_claim_deduction_amount": flt(doc.get("planned_claim_deduction_amount")),
+        "claim_deduction_amount": flt(doc.claim_deduction_amount),
+        "refund_amount": flt(doc.refund_amount),
+        "settled_amount": flt(doc.get("settled_amount")),
+        "remaining_settlement_amount": flt(doc.remaining_settlement_amount),
         "quarantine_docstatus": quarantine_docstatus,
         "handover_docstatus": handover_docstatus,
         "rejection_return_docstatus": rejection_return_docstatus,
@@ -1928,6 +2312,61 @@ def create_approved_debit_note_draft(case_name: str):
         "update_stock": 1,
         "already_exists": 0,
     }
+
+
+@frappe.whitelist()
+def create_or_link_supplier_claim_deduction(case_name: str, supplier_claim: str | None = None):
+    _require_create()
+    verify_supplier_handover_schema()
+    if not frappe.has_permission("Supplier Claim", "create"):
+        frappe.throw(_("You are not permitted to create Supplier Claims."), frappe.PermissionError)
+    case=frappe.get_doc("Pharmacy Return Case",case_name)
+    if case.return_type != "Regulatory Batch Recall":
+        frappe.throw(_("Supplier Claim deduction is only available for Regulatory Batch Recall cases."))
+    _sync_case_operational_status(case); _sync_supplier_claim_settlement(case)
+    debit_note=case.get("approved_debit_note")
+    if not debit_note:
+        frappe.throw(_("Create and submit the Approved Supplier Debit Note first."))
+    note=frappe.db.get_value("Purchase Invoice",debit_note,["docstatus","company","supplier","posting_date","bill_no","bill_date","grand_total","outstanding_amount","is_return","status"],as_dict=True)
+    if not note or note.docstatus != 1 or not note.is_return:
+        frappe.throw(_("Submit the Approved Supplier Debit Note first."))
+    approved=flt(case.approved_return_value); deduction=abs(flt(note.grand_total))
+    if abs(deduction-approved)>0.01:
+        frappe.throw(_("Debit Note amount {0} does not match Approved Return Value {1}.").format(deduction,approved))
+    meta=frappe.get_meta("Purchase Invoice")
+    linked=frappe.db.get_value("Purchase Invoice",debit_note,"custom_supplier_claim") if meta.has_field("custom_supplier_claim") else None
+    if linked and linked != supplier_claim:
+        frappe.throw(_("Approved Debit Note is already linked to Supplier Claim {0}.").format(frappe.bold(linked)))
+    selected=supplier_claim or case.get("supplier_claim")
+    if selected:
+        claim=frappe.get_doc("Supplier Claim",selected)
+        if claim.docstatus != 0:
+            return {"case":case.name,"supplier_claim":claim.name,"already_exists":1,"docstatus":claim.docstatus,"planned_deduction":deduction}
+        if claim.company != case.company or claim.supplier != case.supplier:
+            frappe.throw(_("Supplier Claim belongs to another company or supplier."))
+    else:
+        from frappe.utils import get_first_day,get_last_day
+        claim=frappe.new_doc("Supplier Claim")
+        claim.company=case.company; claim.supplier=case.supplier
+        claim.period_from=get_first_day(note.posting_date); claim.period_to=get_last_day(note.posting_date)
+        claim.claim_basis="Supplier Invoice Date"; claim.status="Draft"
+        # This Draft initially contains only the approved Debit Note.
+        claim.supplier_printed_claim_total=0
+        claim.net_amount_to_pay=0
+    existing=next((row for row in claim.invoices if row.purchase_invoice==debit_note),None)
+    values={"purchase_invoice":debit_note,"supplier_invoice_no":note.bill_no,"supplier_invoice_date":note.bill_date or note.posting_date,"posting_date":note.posting_date,"grand_total":flt(note.grand_total),"outstanding_amount":flt(note.outstanding_amount),"included_amount":-deduction,"is_return":1,"invoice_status":note.status}
+    if existing:
+        for k,v in values.items(): setattr(existing,k,v)
+    else:
+        claim.append("invoices",values)
+    claim.save()
+    case.supplier_claim=claim.name; case.settlement_method="Deduct from Supplier Claim"
+    case.settlement_status="Claim Deduction Draft"; case.planned_claim_deduction_amount=deduction
+    case.claim_deduction_amount=0; case.settled_amount=flt(case.refund_amount)
+    case.remaining_settlement_amount=max(0.0,approved-flt(case.refund_amount))
+    case.operational_status="Claim Deduction Draft Created"
+    case.save(ignore_permissions=True)
+    return {"case":case.name,"supplier_claim":claim.name,"planned_deduction":deduction,"system_claim_total":flt(claim.system_claim_total),"already_exists":0,"docstatus":claim.docstatus}
 
 
 @frappe.whitelist()

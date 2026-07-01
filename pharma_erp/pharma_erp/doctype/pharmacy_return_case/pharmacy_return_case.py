@@ -14,6 +14,7 @@ class PharmacyReturnCase(Document):
         self._validate_supplier_handover()
         self._validate_supplier_response()
         self._validate_approved_debit_note()
+        self._validate_supplier_claim_settlement()
         self._calculate_totals()
         self._validate_settlement()
 
@@ -184,6 +185,140 @@ class PharmacyReturnCase(Document):
                     )
                 )
 
+    def _settlement_financial_document(self):
+        direct = (
+            self.get("approved_debit_note")
+            or self.get("purchase_return")
+        )
+        if direct and frappe.db.exists("Purchase Invoice", direct):
+            return direct
+
+        meta = frappe.get_meta("Purchase Invoice")
+        if meta.has_field("custom_pharmacy_return_case"):
+            linked = frappe.db.get_value(
+                "Purchase Invoice",
+                {
+                    "custom_pharmacy_return_case": self.name,
+                    "is_return": 1,
+                    "docstatus": ["<", 2],
+                },
+                "name",
+                order_by="posting_date desc, creation desc",
+            )
+            if linked:
+                return linked
+
+        if self.get("supplier_claim"):
+            rows = frappe.get_all(
+                "Supplier Claim Invoice",
+                filters={
+                    "parent": self.get("supplier_claim"),
+                    "parenttype": "Supplier Claim",
+                    "is_return": 1,
+                },
+                fields=["purchase_invoice"],
+                order_by="idx asc",
+            )
+            for row in rows:
+                if not row.purchase_invoice:
+                    continue
+
+                if meta.has_field("custom_pharmacy_return_case"):
+                    linked_case = frappe.db.get_value(
+                        "Purchase Invoice",
+                        row.purchase_invoice,
+                        "custom_pharmacy_return_case",
+                    )
+                    if linked_case == self.name:
+                        return row.purchase_invoice
+
+                if (
+                    self.return_type == "Return Against Invoice"
+                    and self.original_purchase_invoice
+                ):
+                    return_against = frappe.db.get_value(
+                        "Purchase Invoice",
+                        row.purchase_invoice,
+                        "return_against",
+                    )
+                    if return_against == self.original_purchase_invoice:
+                        return row.purchase_invoice
+
+        if (
+            self.return_type == "Return Against Invoice"
+            and self.original_purchase_invoice
+        ):
+            return frappe.db.get_value(
+                "Purchase Invoice",
+                {
+                    "return_against": self.original_purchase_invoice,
+                    "supplier": self.supplier,
+                    "company": self.company,
+                    "is_return": 1,
+                    "docstatus": ["<", 2],
+                },
+                "name",
+                order_by="posting_date desc, creation desc",
+            )
+
+        return None
+
+    def _settlement_base_value(self):
+        if self.return_type == "Regulatory Batch Recall":
+            return sum(
+                flt(row.accepted_qty) * flt(row.approved_rate)
+                for row in self.items
+            )
+
+        financial_document = self._settlement_financial_document()
+        if financial_document:
+            note = frappe.db.get_value(
+                "Purchase Invoice",
+                financial_document,
+                ["docstatus", "is_return", "grand_total"],
+                as_dict=True,
+            )
+            if note and note.is_return and note.docstatus < 2:
+                return abs(flt(note.grand_total))
+
+        calculated = sum(
+            flt(row.return_qty) * flt(row.rate)
+            for row in self.items
+        )
+        return calculated or flt(self.requested_return_value)
+
+
+    def _validate_supplier_claim_settlement(self):
+        if self.get("supplier_claim"):
+            claim = frappe.db.get_value(
+                "Supplier Claim",
+                self.get("supplier_claim"),
+                ["company", "supplier"],
+                as_dict=True,
+            )
+            if not claim:
+                frappe.throw(_("Supplier Claim does not exist."))
+            if claim.company != self.company or claim.supplier != self.supplier:
+                frappe.throw(
+                    _("Supplier Claim belongs to another company or supplier.")
+                )
+
+        settlement_base = self._settlement_base_value()
+        planned = flt(self.get("planned_claim_deduction_amount"))
+        actual = flt(self.claim_deduction_amount)
+        refund = flt(self.refund_amount)
+
+        if planned < 0 or actual < 0 or refund < 0:
+            frappe.throw(_("Settlement amounts cannot be negative."))
+        if planned > settlement_base + 0.01:
+            frappe.throw(
+                _("Planned Claim Deduction cannot exceed the return settlement value.")
+            )
+        if actual + refund > settlement_base + 0.01:
+            frappe.throw(
+                _("Settled amount cannot exceed the return settlement value.")
+            )
+
     def _calculate_totals(self):
         requested = 0.0
         quarantined = 0.0
@@ -213,13 +348,31 @@ class PharmacyReturnCase(Document):
         self.rejected_quantity = rejected
         self.pending_response_quantity = max(0.0, handed_over - accepted - rejected)
         self.rejected_return_quantity = rejected_returned
-        self.approved_return_value = approved
-        self.rejected_return_value = max(0.0, requested - approved)
+
+        settlement_base = (
+            approved
+            if self.return_type == "Regulatory Batch Recall"
+            else self._settlement_base_value()
+        )
+        self.approved_return_value = settlement_base
+        self.rejected_return_value = max(0.0, requested - settlement_base)
+
+        settled = flt(self.claim_deduction_amount) + flt(self.refund_amount)
+        self.settled_amount = settled
         self.remaining_settlement_amount = max(
             0.0,
-            flt(self.approved_return_value) - flt(self.claim_deduction_amount) - flt(self.refund_amount),
+            settlement_base - settled,
         )
 
     def _validate_settlement(self):
-        if flt(self.claim_deduction_amount) + flt(self.refund_amount) > flt(self.approved_return_value) + 0.000001:
-            frappe.throw(_("Claim deduction plus refund cannot exceed the approved return value."))
+        settlement_base = self._settlement_base_value()
+        if (
+            flt(self.claim_deduction_amount) + flt(self.refund_amount)
+            > settlement_base + 0.000001
+        ):
+            frappe.throw(
+                _(
+                    "Claim deduction plus refund cannot exceed "
+                    "the return settlement value."
+                )
+            )
