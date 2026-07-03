@@ -149,6 +149,49 @@ def _pricing_pair(
     return base, discount, net, selected_mode
 
 
+
+
+def _pricing_pair_vat_aware(
+    base_rate: Any,
+    discount_percentage: Any,
+    net_rate: Any,
+    mode: str | None,
+    vat_rate: Any,
+    is_vat_taxable: Any,
+) -> tuple[float, float, float, str]:
+    # Approved values in the return page use Base Price as the supplier gross
+    # price when the item is VAT-taxable. Therefore a discount percentage must
+    # be applied to the gross price first, then the VAT-exclusive rate is derived.
+    # Example: gross 100, VAT 14%, discount 20% -> gross credit 80,
+    # net rate 70.175439, VAT 9.824561.
+    base = max(0.0, flt(base_rate))
+    discount = _clamp_discount(discount_percentage)
+    net = max(0.0, flt(net_rate))
+    selected_mode = (
+        mode
+        if mode in {"Discount Percentage", "Net Unit Value"}
+        else "Discount Percentage"
+    )
+    vat = max(0.0, flt(vat_rate)) if cint(is_vat_taxable) else 0.0
+    vat_factor = 1.0 + (vat / 100.0) if vat > 0 else 1.0
+
+    if base <= 0 and net > 0:
+        base = net * vat_factor
+
+    if selected_mode == "Net Unit Value":
+        if base > 0:
+            max_net = base / vat_factor
+            net = min(net, max_net)
+            gross_equivalent = net * vat_factor
+            discount = _clamp_discount((base - gross_equivalent) * 100.0 / base)
+        else:
+            discount = 0.0
+    else:
+        gross_after_discount = base * (1.0 - discount / 100.0)
+        net = gross_after_discount / vat_factor
+
+    return base, discount, net, selected_mode
+
 def _default_company() -> str | None:
     return (
         frappe.defaults.get_user_default("Company")
@@ -1787,11 +1830,13 @@ def _normalize_payload_row_pricing(
             approved_rate_input = net_rate
             approved_discount_input = discount_percentage
             approved_mode_input = "Net Unit Value"
-        _, approved_discount, approved_rate, approved_mode = _pricing_pair(
+        ignored_base_rate, approved_discount, approved_rate, approved_mode = _pricing_pair_vat_aware(
             base_rate,
             approved_discount_input,
             approved_rate_input,
             approved_mode_input,
+            vat_rate,
+            cint(vat.get("is_vat_taxable")),
         )
     else:
         approved_discount = 0.0
@@ -3225,6 +3270,27 @@ def create_approved_debit_note_draft(case_name: str):
                 )
             )
 
+    # Safety normalization for existing saved cases. The UI and save_case path both
+    # store approved_rate as VAT-exclusive. This block prevents old rows, saved before
+    # v1.0.1, from creating a debit note where VAT is added twice.
+    for row in accepted_rows:
+        if cint(row.get("is_vat_taxable")) and flt(row.get("vat_rate")) > 0:
+            ignored_base_rate, fixed_discount, fixed_rate, fixed_mode = _pricing_pair_vat_aware(
+                row.get("base_rate"),
+                row.get("approved_discount_percentage"),
+                row.get("approved_rate"),
+                row.get("approved_pricing_input_mode"),
+                row.get("vat_rate"),
+                row.get("is_vat_taxable"),
+            )
+            row.approved_discount_percentage = fixed_discount
+            row.approved_rate = fixed_rate
+            row.approved_pricing_input_mode = fixed_mode
+            row.approved_net_amount = flt(row.accepted_qty) * fixed_rate
+            row.approved_tax_amount = row.approved_net_amount * flt(row.get("vat_rate")) / 100.0
+            row.approved_total_credit = row.approved_net_amount + row.approved_tax_amount
+            row.accepted_amount = row.approved_total_credit
+
     debit_note = frappe.new_doc("Purchase Invoice")
     debit_note.company = case.company
     debit_note.supplier = case.supplier
@@ -3263,8 +3329,8 @@ def create_approved_debit_note_draft(case_name: str):
                 "received_qty": qty,
                 "stock_qty": qty,
                 "rate": flt(case_row.approved_rate),
-                "price_list_rate": flt(case_row.base_rate) or flt(case_row.approved_rate),
-                "discount_percentage": flt(case_row.approved_discount_percentage),
+                "price_list_rate": flt(case_row.approved_rate),
+                "discount_percentage": 0,
                 "uom": case_row.stock_uom,
                 "stock_uom": case_row.stock_uom,
                 "conversion_factor": 1,
@@ -3330,8 +3396,8 @@ def create_approved_debit_note_draft(case_name: str):
         invoice_row.conversion_factor = 1
         invoice_row.stock_qty = qty
         invoice_row.rate = flt(case_row.approved_rate)
-        invoice_row.price_list_rate = flt(case_row.base_rate) or flt(case_row.approved_rate)
-        invoice_row.discount_percentage = flt(case_row.approved_discount_percentage)
+        invoice_row.price_list_rate = flt(case_row.approved_rate)
+        invoice_row.discount_percentage = 0
         invoice_row.discount_amount = 0
         invoice_row.warehouse = source_warehouse
         invoice_row.batch_no = case_row.batch_no
@@ -3356,7 +3422,12 @@ def create_approved_debit_note_draft(case_name: str):
 
     expected_value = sum(flt(row.get("approved_total_credit")) for row in accepted_rows)
     actual_value = abs(flt(debit_note.grand_total))
-    if abs(actual_value - expected_value) > 0.01:
+
+    # ERPNext may round VAT-inclusive discounted rates at invoice line precision,
+    # causing a small 0.01 currency difference, e.g. expected 160.00 vs actual 160.01.
+    # Accept small currency rounding differences and settle using the actual debit-note total.
+    rounding_difference = abs(flt(actual_value, 2) - flt(expected_value, 2))
+    if rounding_difference > 0.05:
         frappe.throw(
             _("Approved Debit Note total {0} does not match approved supplier value {1}.").format(
                 actual_value,
@@ -3483,6 +3554,8 @@ def create_supplier_refund_payment_draft(
             "supplier",
             "outstanding_amount",
             "grand_total",
+            "rounded_total",
+            "disable_rounded_total",
         ],
         as_dict=True,
     )
@@ -3495,17 +3568,28 @@ def create_supplier_refund_payment_draft(
             _("The settlement document belongs to another company or supplier.")
         )
 
-    amount = flt(amount)
-    remaining = flt(case.remaining_settlement_amount)
-    if remaining <= 0.01:
+    note_outstanding = flt(note.outstanding_amount)
+    document_remaining = abs(note_outstanding)
+
+    if not document_remaining:
         frappe.throw(_("This return case is already fully settled."))
+
+    amount = flt(amount)
+    remaining = max(flt(case.remaining_settlement_amount), document_remaining)
+
     if amount <= 0:
         frappe.throw(_("Refund Amount to Receive must be greater than zero."))
-    if amount > remaining + 0.01:
+
+    # If the entered amount only differs from the real supplier balance by rounding,
+    # use the exact ERPNext outstanding balance.
+    if abs(amount - document_remaining) <= 0.05:
+        amount = document_remaining
+
+    if amount > document_remaining + 0.01:
         frappe.throw(
-            _("Refund amount {0} cannot exceed remaining settlement {1}.").format(
+            _("Refund amount {0} cannot exceed outstanding supplier credit {1}.").format(
                 amount,
-                remaining,
+                document_remaining,
             )
         )
 
@@ -3595,10 +3679,16 @@ def create_supplier_refund_payment_draft(
             row.reference_doctype == "Purchase Invoice"
             and row.reference_name == settlement_document
         ):
-            row.total_amount = -abs(flt(note.grand_total))
-            row.outstanding_amount = -abs(
-                flt(note.outstanding_amount) or flt(note.grand_total)
-            )
+            invoice_total = (
+                flt(note.rounded_total)
+                if not cint(note.get("disable_rounded_total"))
+                else flt(note.grand_total)
+            ) or flt(note.grand_total)
+
+            # Purchase Return / Supplier Debit Note has negative outstanding.
+            # Allocation must keep the same sign as outstanding_amount.
+            row.total_amount = -abs(invoice_total)
+            row.outstanding_amount = note_outstanding
             row.allocated_amount = -abs(amount)
 
     payment_entry.custom_pharmacy_return_case = case.name

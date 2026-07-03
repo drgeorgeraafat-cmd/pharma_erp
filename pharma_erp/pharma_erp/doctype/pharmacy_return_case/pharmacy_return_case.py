@@ -214,6 +214,9 @@ class PharmacyReturnCase(Document):
                 "is_return",
                 "update_stock",
                 "grand_total",
+                "rounded_total",
+                "disable_rounded_total",
+                "outstanding_amount",
             ],
             as_dict=True,
         )
@@ -225,7 +228,20 @@ class PharmacyReturnCase(Document):
             frappe.throw(_("Approved Supplier Debit Note must update stock to remove accepted goods from Returns With Supplier."))
         if debit_note.docstatus in (0, 1):
             approved = sum(flt(row.get("approved_total_credit")) for row in self.items)
-            if abs(abs(flt(debit_note.grand_total)) - approved) > 0.01:
+
+            # For Purchase Invoices with rounding enabled, ERPNext posts/settles using
+            # rounded_total/outstanding even if grand_total differs by a cent.
+            if cint(debit_note.get("disable_rounded_total")):
+                debit_total = abs(flt(debit_note.get("grand_total")))
+            else:
+                debit_total = abs(flt(debit_note.get("rounded_total"))) or abs(flt(debit_note.get("grand_total")))
+
+            # Submitted debit notes may expose the payable supplier balance through outstanding.
+            outstanding_total = abs(flt(debit_note.get("outstanding_amount")))
+            if outstanding_total:
+                debit_total = max(debit_total, outstanding_total)
+
+            if abs(debit_total - approved) > 0.05:
                 frappe.throw(
                     _("Supplier response value cannot be changed while Approved Debit Note {0} exists.").format(
                         frappe.bold(self.get("approved_debit_note"))
@@ -409,11 +425,13 @@ class PharmacyReturnCase(Document):
                 or flt(row.get("approved_rate")) > 0
                 or flt(row.get("approved_discount_percentage")) > 0
             ):
-                _, approved_discount, approved_rate, approved_mode = _pricing_pair(
+                ignored_base_rate, approved_discount, approved_rate, approved_mode = _pricing_pair_vat_aware(
                     row.base_rate,
                     row.get("approved_discount_percentage"),
                     row.get("approved_rate"),
                     row.get("approved_pricing_input_mode"),
+                    row.get("vat_rate"),
+                    row.get("is_vat_taxable"),
                 )
             else:
                 approved_discount = 0.0
@@ -462,3 +480,35 @@ class PharmacyReturnCase(Document):
                     "the return settlement value."
                 )
             )
+
+
+def _pricing_pair_vat_aware(base_rate, approved_discount_percentage=None, approved_rate=None, approved_pricing_input_mode=None, vat_rate=0, is_vat_taxable=0):
+    base_rate = flt(base_rate)
+    discount = flt(approved_discount_percentage)
+    approved_rate = flt(approved_rate)
+    vat_rate = flt(vat_rate)
+    mode = approved_pricing_input_mode or "Discount Percentage"
+    mode_key = (mode or "").strip().lower()
+
+    if flt(is_vat_taxable) and vat_rate > 0 and base_rate > 0:
+        divisor = 1 + (vat_rate / 100.0)
+
+        # If user explicitly entered Approved Net Unit, it is already VAT-exclusive.
+        if mode_key in ("approved net unit", "net unit", "rate") and approved_rate > 0:
+            net_rate = approved_rate
+            gross_equivalent = net_rate * divisor
+            discount = ((base_rate - gross_equivalent) / base_rate) * 100.0 if base_rate else 0.0
+            return base_rate, discount, net_rate, "Approved Net Unit"
+
+        # Discount % is applied to the gross VAT-inclusive supplier price.
+        gross_after_discount = base_rate * (1 - (discount / 100.0))
+        net_rate = gross_after_discount / divisor
+        return base_rate, discount, net_rate, "Discount Percentage"
+
+    return _pricing_pair(
+        base_rate,
+        approved_discount_percentage,
+        approved_rate,
+        approved_pricing_input_mode,
+    )
+
