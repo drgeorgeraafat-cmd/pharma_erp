@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, getdate
+from frappe.utils import flt, getdate, nowdate
 
 
 class SupplierClaim(Document):
@@ -12,6 +12,7 @@ class SupplierClaim(Document):
 
     def before_submit(self):
         self._calculate_totals()
+        self._validate_invoice_rows_are_open()
         if not self.invoices:
             frappe.throw(_("Fetch at least one eligible supplier invoice."))
         if self.match_status != "Matched":
@@ -32,6 +33,14 @@ class SupplierClaim(Document):
 
     def on_update_after_submit(self):
         self._sync_return_cases(cancel=False)
+
+    def before_cancel(self):
+        if self.get("accounting_settlement_status") == "Reconciled":
+            frappe.throw(
+                _(
+                    "Supplier Claim accounting is reconciled. Reverse the accounting settlement before cancelling the claim."
+                )
+            )
 
     def on_cancel(self):
         meta = frappe.get_meta("Purchase Invoice")
@@ -72,6 +81,148 @@ class SupplierClaim(Document):
             self.settlement_discount_percentage = (
                 self.settlement_discount_amount / system_total * 100
             )
+
+    def _validate_invoice_rows_are_open(self):
+        """Validate that every claim row can still be settled now.
+
+        Draft Supplier Claims may live for a while. During that time a debit note
+        can be refunded in cash/bank or another invoice can be reconciled. The
+        submitted Supplier Claim must therefore validate against the *live*
+        Purchase Invoice outstanding amount, not against the stale child-row
+        snapshot that was captured when the row was fetched.
+        """
+        meta = frappe.get_meta("Purchase Invoice")
+        has_claim_link = meta.has_field("custom_supplier_claim")
+        has_return_case_link = meta.has_field("custom_pharmacy_return_case")
+        seen = set()
+        tolerance = 0.01
+
+        for row in self.invoices:
+            if not row.purchase_invoice:
+                continue
+
+            if row.purchase_invoice in seen:
+                frappe.throw(
+                    _("Purchase Invoice {0} is duplicated in this Supplier Claim.").format(
+                        frappe.bold(row.purchase_invoice)
+                    )
+                )
+            seen.add(row.purchase_invoice)
+
+            fields = [
+                "name",
+                "docstatus",
+                "company",
+                "supplier",
+                "is_return",
+                "grand_total",
+                "outstanding_amount",
+                "status",
+            ]
+            if has_claim_link:
+                fields.append("custom_supplier_claim")
+            if has_return_case_link:
+                fields.append("custom_pharmacy_return_case")
+
+            invoice = frappe.db.get_value(
+                "Purchase Invoice",
+                row.purchase_invoice,
+                fields,
+                as_dict=True,
+            )
+            if not invoice:
+                frappe.throw(
+                    _("Purchase Invoice {0} does not exist.").format(
+                        frappe.bold(row.purchase_invoice)
+                    )
+                )
+            if invoice.docstatus != 1:
+                frappe.throw(
+                    _("Purchase Invoice {0} must be submitted before it can be included in a Supplier Claim.").format(
+                        frappe.bold(row.purchase_invoice)
+                    )
+                )
+            if invoice.company != self.company or invoice.supplier != self.supplier:
+                frappe.throw(
+                    _("Purchase Invoice {0} belongs to another company or supplier.").format(
+                        frappe.bold(row.purchase_invoice)
+                    )
+                )
+
+            linked_claim = invoice.get("custom_supplier_claim") if has_claim_link else None
+            if linked_claim and linked_claim != self.name:
+                frappe.throw(
+                    _("Purchase Invoice {0} already belongs to Supplier Claim {1}.").format(
+                        frappe.bold(row.purchase_invoice), frappe.bold(linked_claim)
+                    )
+                )
+
+            included = flt(row.included_amount)
+            outstanding = flt(invoice.outstanding_amount)
+            invoice_is_return = bool(invoice.is_return)
+
+            if invoice_is_return or included < 0:
+                if not invoice_is_return or included >= 0:
+                    frappe.throw(
+                        _("Purchase Invoice {0} is not a valid return credit row.").format(
+                            frappe.bold(row.purchase_invoice)
+                        )
+                    )
+                if outstanding >= -tolerance:
+                    message = _(
+                        "Purchase Return / Debit Note {0} has no open supplier credit outstanding and cannot be included in this Supplier Claim. It may already be refunded, reconciled, or settled."
+                    ).format(frappe.bold(row.purchase_invoice))
+                    case_name = invoice.get("custom_pharmacy_return_case") if has_return_case_link else None
+                    if case_name:
+                        case_state = frappe.db.get_value(
+                            "Pharmacy Return Case",
+                            case_name,
+                            [
+                                "operational_status",
+                                "settlement_status",
+                                "refund_payment_entry",
+                                "remaining_settlement_amount",
+                            ],
+                            as_dict=True,
+                        )
+                        if case_state:
+                            message += " " + _(
+                                "Linked Return Case {0}: {1} / {2}; Refund Payment: {3}; Remaining: {4}."
+                            ).format(
+                                frappe.bold(case_name),
+                                case_state.operational_status or "-",
+                                case_state.settlement_status or "-",
+                                case_state.refund_payment_entry or "-",
+                                flt(case_state.remaining_settlement_amount),
+                            )
+                    frappe.throw(message)
+                if abs(included) - abs(outstanding) > tolerance:
+                    frappe.throw(
+                        _(
+                            "Included amount {0} for Purchase Return {1} exceeds its open supplier credit outstanding {2}."
+                        ).format(
+                            abs(included),
+                            frappe.bold(row.purchase_invoice),
+                            abs(outstanding),
+                        )
+                    )
+            else:
+                if outstanding <= tolerance:
+                    frappe.throw(
+                        _(
+                            "Purchase Invoice {0} has no payable outstanding and cannot be included in this Supplier Claim."
+                        ).format(frappe.bold(row.purchase_invoice))
+                    )
+                if included - outstanding > tolerance:
+                    frappe.throw(
+                        _(
+                            "Included amount {0} for Purchase Invoice {1} exceeds its open payable outstanding {2}."
+                        ).format(
+                            included,
+                            frappe.bold(row.purchase_invoice),
+                            outstanding,
+                        )
+                    )
 
     def _return_case_settlement_base(self, case, row):
         note_total = abs(
@@ -122,6 +273,15 @@ class SupplierClaim(Document):
 
         return case.operational_status or "Under Review"
 
+    def _claim_settlement_date(self):
+        if self.payment_entry and frappe.db.exists("Payment Entry", self.payment_entry):
+            posting_date = frappe.db.get_value(
+                "Payment Entry", self.payment_entry, "posting_date"
+            )
+            if posting_date:
+                return posting_date
+        return nowdate()
+
     def _sync_return_cases(self, cancel=False):
         meta = frappe.get_meta("Purchase Invoice")
         if not meta.has_field("custom_pharmacy_return_case"):
@@ -137,23 +297,18 @@ class SupplierClaim(Document):
                 "custom_pharmacy_return_case",
             )
             if not case_name or not frappe.db.exists(
-                "Pharmacy Return Case",
-                case_name,
+                "Pharmacy Return Case", case_name
             ):
                 continue
 
             case = frappe.get_doc("Pharmacy Return Case", case_name)
             settlement_base = self._return_case_settlement_base(case, row)
-            deduction = min(
-                settlement_base,
-                abs(flt(row.included_amount)),
-            )
+            deduction = min(settlement_base, abs(flt(row.included_amount)))
             refund = flt(case.refund_amount)
 
             case.approved_return_value = settlement_base
             case.rejected_return_value = max(
-                0.0,
-                flt(case.requested_return_value) - settlement_base,
+                0.0, flt(case.requested_return_value) - settlement_base
             )
 
             if cancel:
@@ -162,38 +317,51 @@ class SupplierClaim(Document):
                 case.claim_deduction_amount = 0
                 case.settled_amount = refund
                 case.remaining_settlement_amount = max(
-                    0.0,
-                    settlement_base - refund,
+                    0.0, settlement_base - refund
                 )
                 case.settlement_status = (
                     "Partially Settled"
                     if refund > 0
-                    else "Pending Settlement"
+                    else "Credited to Supplier Account"
                 )
                 case.operational_status = self._status_before_claim(case)
+                if case.meta.has_field("claim_utilization_status"):
+                    case.claim_utilization_status = "Not Applied"
+                if case.meta.has_field("claim_settlement_date"):
+                    case.claim_settlement_date = None
                 case.save(ignore_permissions=True)
                 continue
 
             case.supplier_claim = self.name
             case.settlement_method = (
-                "Mixed Settlement"
-                if refund > 0
-                else "Deduct from Supplier Claim"
+                "Mixed Settlement" if refund > 0 else "Deduct from Supplier Claim"
             )
             case.planned_claim_deduction_amount = deduction
             case.claim_deduction_amount = deduction
             case.settled_amount = deduction + refund
             case.remaining_settlement_amount = max(
-                0.0,
-                settlement_base - deduction - refund,
+                0.0, settlement_base - deduction - refund
             )
 
-            if (
+            claim_is_closed = (
                 self.status == "Paid"
+                and self.get("accounting_settlement_status") == "Reconciled"
+            )
+            full_claim_use = (
+                deduction > 0
                 and case.remaining_settlement_amount <= 0.01
-            ):
-                case.settlement_status = "Settled"
-                case.operational_status = "Financially Settled"
+            )
+
+            if claim_is_closed:
+                if full_claim_use:
+                    case.settlement_status = "Settled Through Supplier Claim"
+                    case.operational_status = "Financially Settled"
+                    utilization = "Fully Utilized"
+                else:
+                    case.settlement_status = "Partially Settled"
+                    case.operational_status = "Partially Settled"
+                    utilization = "Partially Utilized"
+                settlement_date = self._claim_settlement_date()
             else:
                 case.settlement_status = (
                     "Claim Deduction Confirmed"
@@ -201,8 +369,67 @@ class SupplierClaim(Document):
                     else "Partially Settled"
                 )
                 case.operational_status = "Claim Deduction Confirmed"
+                utilization = "Confirmed in Submitted Claim"
+                settlement_date = None
+
+            if case.meta.has_field("claim_utilization_status"):
+                case.claim_utilization_status = utilization
+            if case.meta.has_field("claim_settlement_date"):
+                case.claim_settlement_date = settlement_date
 
             case.save(ignore_permissions=True)
+
+
+def _validate_claim_payment_entry(claim, payment_entry):
+    # Kept as a compatibility wrapper for integrations that imported this helper.
+    from pharma_erp.pharma_erp.supplier_claim_accounting import (
+        build_supplier_claim_settlement_plan,
+    )
+
+    if not payment_entry:
+        return None
+    build_supplier_claim_settlement_plan(claim.name, payment_entry)
+    return frappe.db.get_value(
+        "Payment Entry",
+        payment_entry,
+        [
+            "docstatus",
+            "payment_type",
+            "party_type",
+            "party",
+            "company",
+            "posting_date",
+            "paid_amount",
+            "received_amount",
+            "base_paid_amount",
+            "unallocated_amount",
+        ],
+        as_dict=True,
+    )
+
+
+@frappe.whitelist()
+def preview_claim_accounting_settlement(claim_name, payment_entry=None):
+    from pharma_erp.pharma_erp.supplier_claim_accounting import (
+        preview_supplier_claim_accounting,
+    )
+
+    return preview_supplier_claim_accounting(claim_name, payment_entry)
+
+
+@frappe.whitelist()
+def close_claim_as_paid(claim_name, payment_entry=None):
+    from pharma_erp.pharma_erp.supplier_claim_accounting import (
+        settle_supplier_claim_accounting,
+    )
+
+    claim = frappe.get_doc("Supplier Claim", claim_name)
+    claim.check_permission("write")
+    return settle_supplier_claim_accounting(
+        claim_name,
+        payment_entry or claim.payment_entry or None,
+        dry_run=False,
+    )
 
 
 @frappe.whitelist()
@@ -245,6 +472,7 @@ def get_eligible_invoices(
         where supplier = %(supplier)s
           and company = %(company)s
           and docstatus = 1
+          and abs(outstanding_amount) > 0.005
           and {date_condition}
         order by
             coalesce(bill_date, posting_date) asc,
@@ -262,6 +490,7 @@ def get_eligible_invoices(
 
     result = []
     meta = frappe.get_meta("Purchase Invoice")
+    tolerance = 0.01
     for row in rows:
         classification = (
             frappe.db.get_value(
@@ -296,11 +525,20 @@ def get_eligible_invoices(
         if classification and classification != "Claim Invoice" and not row.is_return:
             continue
 
-        amount = (
-            -abs(flt(row.grand_total))
-            if row.is_return
-            else flt(row.grand_total)
-        )
+        outstanding = flt(row.outstanding_amount)
+        if row.is_return:
+            # A return/debit note is eligible only while it still carries an
+            # open supplier credit. Cash-refunded or reconciled returns have
+            # outstanding_amount = 0 and must never be fetched into a claim.
+            if outstanding >= -tolerance:
+                continue
+            amount = -abs(outstanding)
+        else:
+            # Positive supplier invoices are eligible only while payable.
+            if outstanding <= tolerance:
+                continue
+            amount = outstanding
+
         result.append(
             {
                 "purchase_invoice": row.name,
@@ -308,7 +546,7 @@ def get_eligible_invoices(
                 "supplier_invoice_date": row.bill_date or row.posting_date,
                 "posting_date": row.posting_date,
                 "grand_total": flt(row.grand_total),
-                "outstanding_amount": flt(row.outstanding_amount),
+                "outstanding_amount": outstanding,
                 "included_amount": amount,
                 "is_return": row.is_return,
                 "invoice_status": row.status,

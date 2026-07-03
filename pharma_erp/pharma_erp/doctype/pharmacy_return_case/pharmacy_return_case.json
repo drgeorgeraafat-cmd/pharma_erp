@@ -61,6 +61,8 @@
   "supplier_claim",
   "settlement_status",
   "planned_claim_deduction_amount",
+  "claim_utilization_status",
+  "claim_settlement_date",
   "settled_amount",
   "requested_return_value",
   "approved_return_value",
@@ -69,6 +71,18 @@
   "claim_deduction_amount",
   "refund_amount",
   "remaining_settlement_amount",
+  "refund_settlement_section",
+  "refund_posting_date",
+  "refund_mode_of_payment",
+  "refund_account",
+  "refund_request_amount",
+  "refund_reference_no",
+  "refund_reference_date",
+  "refund_column_break",
+  "refund_payment_entry",
+  "refund_payment_entry_status",
+  "refund_entries_count",
+  "refund_notes",
   "notes_section",
   "remarks"
  ],
@@ -142,7 +156,7 @@
    "fieldname": "operational_status",
    "fieldtype": "Select",
    "label": "Operational Status",
-   "options": "Draft\nUnder Review\nPurchase Return Draft Created\nPurchase Return Submitted\nQuarantine Transfer Draft Created\nQuarantined\nHandover Transfer Draft Created\nApproved for Return\nPartially Handed Over\nHanded Over\nAwaiting Supplier Approval\nRejection Return Draft Created\nPartially Accepted\nAccepted\nRejected\nApproved Debit Note Draft Created\nApproved Debit Note Submitted\nClaim Deduction Draft Created\nClaim Deduction Confirmed\nFinancially Settled\nClosed\nCancelled",
+   "options": "Draft\nUnder Review\nPurchase Return Draft Created\nPurchase Return Submitted\nQuarantine Transfer Draft Created\nQuarantined\nHandover Transfer Draft Created\nApproved for Return\nPartially Handed Over\nHanded Over\nAwaiting Supplier Approval\nRejection Return Draft Created\nPartially Accepted\nAccepted\nRejected\nApproved Debit Note Draft Created\nApproved Debit Note Submitted\nClaim Deduction Draft Created\nClaim Deduction Confirmed\nRefund Payment Draft Created\nRefund Payment Submitted\nMixed Settlement Confirmed\nPartially Settled\nFinancially Settled\nClosed\nCancelled",
    "default": "Draft",
    "reqd": 1,
    "in_list_view": 1
@@ -150,23 +164,26 @@
   {
    "fieldname": "regulatory_section",
    "fieldtype": "Section Break",
-   "label": "Regulatory Recall Details",
-   "depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\""
+   "label": "Progressive Return Details",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "authority_notification_no",
    "fieldtype": "Data",
-   "label": "Authority Notification Number"
+   "label": "Authority Notification Number",
+   "depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\""
   },
   {
    "fieldname": "authority_notification_date",
    "fieldtype": "Date",
-   "label": "Authority Notification Date"
+   "label": "Authority Notification Date",
+   "depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\""
   },
   {
    "fieldname": "authority_notification_attachment",
    "fieldtype": "Attach",
-   "label": "Authority Notification Attachment"
+   "label": "Authority Notification Attachment",
+   "depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\""
   },
   {
    "fieldname": "recall_execution_section",
@@ -178,21 +195,22 @@
    "fieldtype": "Link",
    "label": "Source Warehouse",
    "options": "Warehouse",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "recall_item_code",
    "fieldtype": "Link",
-   "label": "Recalled Item",
+   "label": "Item",
    "options": "Item",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "recall_quarantine_warehouse",
    "fieldtype": "Link",
-   "label": "Recall Quarantine Warehouse",
+   "label": "Quarantine / Expired Drugs Warehouse",
    "options": "Warehouse",
-   "mandatory_depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\""
+   "mandatory_depends_on": "eval:doc.return_type==\"Regulatory Batch Recall\"",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "quarantine_stock_entry",
@@ -283,17 +301,20 @@
   {
    "fieldname": "handover_date",
    "fieldtype": "Date",
-   "label": "Supplier Handover Date"
+   "label": "Supplier Handover Date",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "handover_reference",
    "fieldtype": "Data",
-   "label": "Supplier Handover Receipt Number"
+   "label": "Supplier Handover Receipt Number",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "handover_attachment",
    "fieldtype": "Attach",
-   "label": "Supplier Handover Receipt Attachment"
+   "label": "Supplier Handover Receipt Attachment",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "remarks",
@@ -304,14 +325,14 @@
    "fieldname": "supplier_handover_section",
    "fieldtype": "Section Break",
    "label": "Supplier Handover",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "returns_with_supplier_warehouse",
    "fieldtype": "Link",
    "label": "Returns With Supplier Warehouse",
    "options": "Warehouse",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "handover_stock_entry",
@@ -319,75 +340,75 @@
    "label": "Supplier Handover Stock Entry",
    "options": "Stock Entry",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_handover_column",
    "fieldtype": "Column Break",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "handed_over_quantity",
    "fieldtype": "Float",
    "label": "Handed Over Quantity",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_response_section",
    "fieldtype": "Section Break",
    "label": "Supplier Response",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_response_date",
    "fieldtype": "Date",
    "label": "Supplier Response Date",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_response_reference",
    "fieldtype": "Data",
    "label": "Supplier Response Reference",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_response_attachment",
    "fieldtype": "Attach",
    "label": "Supplier Response Attachment",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_response_notes",
    "fieldtype": "Small Text",
    "label": "Supplier Response Notes",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_response_column",
    "fieldtype": "Column Break",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "accepted_quantity",
    "fieldtype": "Float",
    "label": "Accepted Quantity",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "rejected_quantity",
    "fieldtype": "Float",
    "label": "Rejected Quantity",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "pending_response_quantity",
    "fieldtype": "Float",
    "label": "Pending Supplier Response Quantity",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "rejection_return_stock_entry",
@@ -395,26 +416,26 @@
    "label": "Rejected Quantity Return Stock Entry",
    "options": "Stock Entry",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "rejected_return_quantity",
    "fieldtype": "Float",
    "label": "Rejected Quantity Returned to Quarantine",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "approved_debit_note_section",
    "fieldtype": "Section Break",
    "label": "Approved Supplier Debit Note",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "approved_debit_note_posting_date",
    "fieldtype": "Date",
    "label": "Approved Debit Note Posting Date",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "approved_debit_note",
@@ -422,19 +443,19 @@
    "label": "Approved Supplier Debit Note",
    "options": "Purchase Invoice",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "approved_debit_note_status",
    "fieldtype": "Data",
    "label": "Approved Debit Note Status",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "approved_debit_note_column",
    "fieldtype": "Column Break",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "approved_debit_note_amount",
@@ -442,7 +463,7 @@
    "label": "Approved Debit Note Amount",
    "read_only": 1,
    "options": "Company:company:default_currency",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "approved_debit_note_outstanding",
@@ -450,46 +471,122 @@
    "label": "Supplier Credit Outstanding",
    "read_only": 1,
    "options": "Company:company:default_currency",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "accepted_stock_finalized_quantity",
    "fieldtype": "Float",
    "label": "Accepted Stock Finalized Quantity",
    "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
    "fieldname": "supplier_claim",
    "fieldtype": "Link",
    "label": "Supplier Claim",
-   "options": "Supplier Claim",
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "options": "Supplier Claim"
   },
   {
    "fieldname": "settlement_status",
    "fieldtype": "Select",
    "label": "Settlement Status",
-   "options": "Pending Settlement\nClaim Deduction Draft\nClaim Deduction Confirmed\nPartially Settled\nSettled\nCancelled",
+   "options": "Pending Settlement\nCredited to Supplier Account\nClaim Deduction Draft\nClaim Deduction Confirmed\nRefund Draft\nRefund Confirmed\nMixed Settlement Draft\nMixed Settlement Confirmed\nPartially Settled\nSettled Through Supplier Claim\nSettled\nCancelled",
    "default": "Pending Settlement",
-   "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "read_only": 1
   },
   {
    "fieldname": "planned_claim_deduction_amount",
    "fieldtype": "Currency",
    "label": "Planned Claim Deduction",
    "options": "Company:company:default_currency",
-   "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "read_only": 1
+  },
+  {
+   "fieldname": "claim_utilization_status",
+   "fieldtype": "Select",
+   "label": "Supplier Credit Utilization",
+   "options": "Not Applied\nPlanned in Draft Claim\nConfirmed in Submitted Claim\nPartially Utilized\nFully Utilized",
+   "default": "Not Applied",
+   "read_only": 1
+  },
+  {
+   "fieldname": "claim_settlement_date",
+   "fieldtype": "Date",
+   "label": "Claim Settlement Date",
+   "read_only": 1
   },
   {
    "fieldname": "settled_amount",
    "fieldtype": "Currency",
    "label": "Settled Amount",
    "options": "Company:company:default_currency",
-   "read_only": 1,
-   "depends_on": "eval:doc.return_type=='Regulatory Batch Recall'"
+   "read_only": 1
+  },
+  {
+   "fieldname": "refund_settlement_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Cash / Bank Refund"
+  },
+  {
+   "fieldname": "refund_posting_date",
+   "fieldtype": "Date",
+   "label": "Refund Posting Date"
+  },
+  {
+   "fieldname": "refund_mode_of_payment",
+   "fieldtype": "Link",
+   "label": "Refund Mode of Payment",
+   "options": "Mode of Payment"
+  },
+  {
+   "fieldname": "refund_account",
+   "fieldtype": "Link",
+   "label": "Refund Receiving Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "refund_request_amount",
+   "fieldtype": "Currency",
+   "label": "Refund Amount to Receive",
+   "options": "Company:company:default_currency"
+  },
+  {
+   "fieldname": "refund_reference_no",
+   "fieldtype": "Data",
+   "label": "Refund Transaction Reference"
+  },
+  {
+   "fieldname": "refund_reference_date",
+   "fieldtype": "Date",
+   "label": "Refund Reference Date"
+  },
+  {
+   "fieldname": "refund_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "refund_payment_entry",
+   "fieldtype": "Link",
+   "label": "Latest Supplier Refund Payment Entry",
+   "options": "Payment Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "refund_payment_entry_status",
+   "fieldtype": "Data",
+   "label": "Latest Refund Payment Status",
+   "read_only": 1
+  },
+  {
+   "fieldname": "refund_entries_count",
+   "fieldtype": "Int",
+   "label": "Refund Payment Entries Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "refund_notes",
+   "fieldtype": "Small Text",
+   "label": "Refund Notes"
   }
  ],
  "index_web_pages_for_search": 1,

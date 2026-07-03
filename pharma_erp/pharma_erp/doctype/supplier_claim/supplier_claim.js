@@ -2,9 +2,86 @@ frappe.ui.form.on("Supplier Claim", {
     refresh(frm) {
         if (frm.doc.docstatus === 1 && frm.doc.status === "Approved") {
             frm.dashboard.set_headline_alert(
-                __("Claim deduction is confirmed. Final financial settlement occurs after claim payment and reconciliation."),
+                __("Claim deduction is confirmed. Close the claim as Paid after the supplier payment is completed."),
                 "blue"
             );
+        }
+        if (frm.doc.docstatus === 1 && frm.doc.status === "Paid" && frm.doc.accounting_settlement_status === "Reconciled") {
+            frm.dashboard.set_headline_alert(
+                __("Supplier Claim is Paid and accounting reconciliation is verified."),
+                "green"
+            );
+        } else if (frm.doc.docstatus === 1 && frm.doc.status === "Paid") {
+            frm.dashboard.set_headline_alert(
+                __("Supplier Claim is marked Paid but its accounting settlement still needs reconciliation."),
+                "orange"
+            );
+        }
+        const needsAccounting = frm.doc.docstatus === 1
+            && frm.doc.status !== "Cancelled"
+            && frm.doc.accounting_settlement_status !== "Reconciled";
+        if (needsAccounting) {
+            frm.add_custom_button(__(frm.doc.status === "Paid" ? "Repair Accounting Settlement" : "Reconcile & Close Claim as Paid"), async () => {
+                const netDue = flt(frm.doc.net_amount_to_pay);
+                const closeClaim = async (paymentEntry = null) => {
+                    const result = await frappe.call({
+                        method: "pharma_erp.pharma_erp.doctype.supplier_claim.supplier_claim.close_claim_as_paid",
+                        args: {
+                            claim_name: frm.doc.name,
+                            payment_entry: paymentEntry
+                        },
+                        freeze: true,
+                        freeze_message: __("Reconciling payment, Debit Notes and settlement discount...")
+                    });
+                    const data = result.message || {};
+                    frappe.show_alert({
+                        message: __("Supplier Claim {0} accounting settlement reconciled.", [data.supplier_claim || frm.doc.name]),
+                        indicator: "green"
+                    }, 8);
+                    await frm.reload_doc();
+                };
+
+                if (netDue <= 0.01) {
+                    frappe.confirm(
+                        __("Net Amount To Pay is zero. Close this Supplier Claim and settle all selected return credits?"),
+                        () => closeClaim()
+                    );
+                    return;
+                }
+
+                frappe.prompt([
+                    {
+                        fieldname: "payment_entry",
+                        label: __("Submitted Supplier Payment Entry"),
+                        fieldtype: "Link",
+                        options: "Payment Entry",
+                        reqd: 1,
+                        default: frm.doc.payment_entry || null,
+                        get_query: () => ({
+                            filters: {
+                                docstatus: 1,
+                                payment_type: "Pay",
+                                party_type: "Supplier",
+                                party: frm.doc.supplier,
+                                company: frm.doc.company
+                            }
+                        })
+                    }
+                ],
+                (values) => closeClaim(values.payment_entry),
+                __("Reconcile Supplier Claim Accounting"),
+                __("Reconcile"));
+            }, __("Settlement"));
+        }
+        if (frm.doc.docstatus === 1 && frm.doc.payment_entry) {
+            frm.add_custom_button(__("Open Payment Entry"), () => {
+                frappe.set_route("Form", "Payment Entry", frm.doc.payment_entry);
+            }, __("Settlement"));
+        }
+        if (frm.doc.docstatus === 1 && frm.doc.settlement_discount_journal_entry) {
+            frm.add_custom_button(__("Open Discount Journal Entry"), () => {
+                frappe.set_route("Form", "Journal Entry", frm.doc.settlement_discount_journal_entry);
+            }, __("Settlement"));
         }
         if (frm.doc.docstatus === 0) {
             frm.add_custom_button(__("Fetch Eligible Invoices"), async () => {

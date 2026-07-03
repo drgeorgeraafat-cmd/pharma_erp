@@ -14,7 +14,10 @@
   "outstanding_amount",
   "included_amount",
   "is_return",
-  "invoice_status"
+  "invoice_status",
+  "accounting_allocated_amount",
+  "accounting_outstanding_after",
+  "accounting_status"
  ],
  "fields": [
   {
@@ -76,6 +79,29 @@
    "fieldtype": "Data",
    "label": "Invoice Status",
    "read_only": 1
+  },
+  {
+   "fieldname": "accounting_allocated_amount",
+   "fieldtype": "Currency",
+   "label": "Accounting Allocated Amount",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "accounting_outstanding_after",
+   "fieldtype": "Currency",
+   "label": "Outstanding After Settlement",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "accounting_status",
+   "fieldtype": "Select",
+   "label": "Accounting Status",
+   "options": "Pending\nReconciled\nCancelled",
+   "default": "Pending",
+   "read_only": 1,
+   "allow_on_submit": 1
   }
  ],
  "istable": 1,

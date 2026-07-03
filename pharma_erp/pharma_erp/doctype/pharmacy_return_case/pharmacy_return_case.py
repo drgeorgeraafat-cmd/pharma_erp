@@ -3,7 +3,43 @@ from __future__ import annotations
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, flt
+
+PROGRESSIVE_RETURN_TYPES = {"Regulatory Batch Recall", "Expired Drugs Return"}
+
+
+def _is_progressive_return_type(return_type):
+    return (return_type or "") in PROGRESSIVE_RETURN_TYPES
+
+
+def _default_progressive_reason(return_type):
+    return "Expired" if return_type == "Expired Drugs Return" else "Health Authority Recall"
+
+
+def _clamp_discount(value):
+    return min(100.0, max(0.0, flt(value)))
+
+
+def _pricing_pair(base_rate, discount_percentage, net_rate, mode):
+    base = max(0.0, flt(base_rate))
+    discount = _clamp_discount(discount_percentage)
+    net = max(0.0, flt(net_rate))
+    selected_mode = (
+        mode
+        if mode in {"Discount Percentage", "Net Unit Value"}
+        else "Discount Percentage"
+    )
+    if base <= 0 and net > 0:
+        base = net
+    if selected_mode == "Net Unit Value":
+        if base > 0:
+            net = min(net, base)
+            discount = _clamp_discount((base - net) * 100.0 / base)
+        else:
+            discount = 0.0
+    else:
+        net = base * (1.0 - discount / 100.0)
+    return base, discount, net, selected_mode
 
 
 class PharmacyReturnCase(Document):
@@ -39,14 +75,15 @@ class PharmacyReturnCase(Document):
             frappe.throw(_("Original Purchase Invoice belongs to another company."))
 
     def _validate_regulatory_recall(self):
-        if self.return_type != "Regulatory Batch Recall":
+        if not _is_progressive_return_type(self.return_type):
             return
-        if not self.authority_notification_no:
-            frappe.throw(_("Authority Notification Number is required."))
-        if not self.authority_notification_date:
-            frappe.throw(_("Authority Notification Date is required."))
+        if self.return_type == "Regulatory Batch Recall":
+            if not self.authority_notification_no:
+                frappe.throw(_("Authority Notification Number is required."))
+            if not self.authority_notification_date:
+                frappe.throw(_("Authority Notification Date is required."))
         if not self.recall_quarantine_warehouse:
-            frappe.throw(_("Recall Quarantine Warehouse is required."))
+            frappe.throw(_("Quarantine / Expired Drugs Warehouse is required."))
         warehouse = frappe.db.get_value(
             "Warehouse", self.recall_quarantine_warehouse,
             ["company", "is_group", "disabled"], as_dict=True,
@@ -55,15 +92,15 @@ class PharmacyReturnCase(Document):
             frappe.throw(_("Select an active non-group quarantine warehouse for the same company."))
         selected = [row for row in self.items if flt(row.return_qty) > 0]
         if not selected:
-            frappe.throw(_("Add at least one recalled batch quantity."))
+            frappe.throw(_("Add at least one batch return quantity."))
         for row in selected:
             if not row.batch_no:
-                frappe.throw(_("Row {0}: Batch No is required for a regulatory recall.").format(row.idx))
-            row.return_reason = "Health Authority Recall"
+                frappe.throw(_("Row {0}: Batch No is required for this return type.").format(row.idx))
+            row.return_reason = _default_progressive_reason(self.return_type)
             row.quarantine_warehouse = self.recall_quarantine_warehouse
 
     def _validate_supplier_handover(self):
-        if self.return_type != "Regulatory Batch Recall":
+        if not _is_progressive_return_type(self.return_type):
             return
 
         delivered_rows = [row for row in self.items if flt(row.delivered_qty) > 0]
@@ -98,7 +135,7 @@ class PharmacyReturnCase(Document):
                 )
 
     def _validate_supplier_response(self):
-        if self.return_type != "Regulatory Batch Recall":
+        if not _is_progressive_return_type(self.return_type):
             return
 
         response_rows = [
@@ -132,9 +169,22 @@ class PharmacyReturnCase(Document):
             accepted = flt(row.accepted_qty)
             rejected = flt(row.rejected_qty)
             approved_rate = flt(row.approved_rate)
+            approved_discount = flt(row.get("approved_discount_percentage"))
 
             if accepted < 0 or rejected < 0 or approved_rate < 0:
                 frappe.throw(_("Row {0}: Supplier response quantities and rate cannot be negative.").format(row.idx))
+            if approved_discount < 0 or approved_discount > 100:
+                frappe.throw(
+                    _("Row {0}: Approved Discount Percentage must be between 0 and 100.").format(
+                        row.idx
+                    )
+                )
+            if flt(row.get("base_rate")) > 0 and approved_rate > flt(row.get("base_rate")) + 0.000001:
+                frappe.throw(
+                    _("Row {0}: Approved Net Unit Value cannot exceed Base Price.").format(
+                        row.idx
+                    )
+                )
             if accepted + rejected > delivered + 0.000001:
                 frappe.throw(
                     _("Row {0}: Accepted plus rejected quantity cannot exceed handed-over quantity {1}.").format(
@@ -147,7 +197,7 @@ class PharmacyReturnCase(Document):
                 frappe.throw(_("Row {0}: Supplier Rejection Reason is required.").format(row.idx))
 
     def _validate_approved_debit_note(self):
-        if self.return_type != "Regulatory Batch Recall":
+        if not _is_progressive_return_type(self.return_type):
             return
         if not self.get("approved_debit_note"):
             return
@@ -174,10 +224,7 @@ class PharmacyReturnCase(Document):
         if not debit_note.update_stock:
             frappe.throw(_("Approved Supplier Debit Note must update stock to remove accepted goods from Returns With Supplier."))
         if debit_note.docstatus in (0, 1):
-            approved = sum(
-                flt(row.accepted_qty) * flt(row.approved_rate)
-                for row in self.items
-            )
+            approved = sum(flt(row.get("approved_total_credit")) for row in self.items)
             if abs(abs(flt(debit_note.grand_total)) - approved) > 0.01:
                 frappe.throw(
                     _("Supplier response value cannot be changed while Approved Debit Note {0} exists.").format(
@@ -264,11 +311,8 @@ class PharmacyReturnCase(Document):
         return None
 
     def _settlement_base_value(self):
-        if self.return_type == "Regulatory Batch Recall":
-            return sum(
-                flt(row.accepted_qty) * flt(row.approved_rate)
-                for row in self.items
-            )
+        if _is_progressive_return_type(self.return_type):
+            return sum(flt(row.get("approved_total_credit")) for row in self.items)
 
         financial_document = self._settlement_financial_document()
         if financial_document:
@@ -281,10 +325,7 @@ class PharmacyReturnCase(Document):
             if note and note.is_return and note.docstatus < 2:
                 return abs(flt(note.grand_total))
 
-        calculated = sum(
-            flt(row.return_qty) * flt(row.rate)
-            for row in self.items
-        )
+        calculated = sum(flt(row.return_amount) for row in self.items)
         return calculated or flt(self.requested_return_value)
 
 
@@ -314,9 +355,19 @@ class PharmacyReturnCase(Document):
             frappe.throw(
                 _("Planned Claim Deduction cannot exceed the return settlement value.")
             )
+        requested_refund = flt(self.get("refund_request_amount"))
+        if requested_refund < 0:
+            frappe.throw(_("Refund Amount to Receive cannot be negative."))
         if actual + refund > settlement_base + 0.01:
             frappe.throw(
                 _("Settled amount cannot exceed the return settlement value.")
+            )
+        if actual + refund + requested_refund > settlement_base + 0.01:
+            frappe.throw(
+                _(
+                    "Requested refund plus confirmed settlements cannot exceed "
+                    "the return settlement value."
+                )
             )
 
     def _calculate_totals(self):
@@ -332,15 +383,50 @@ class PharmacyReturnCase(Document):
                 frappe.throw(_("Return quantity cannot be negative."))
             if flt(row.return_qty) > flt(row.available_to_return_qty) + 0.000001:
                 frappe.throw(_("Row {0}: Return quantity exceeds available quantity.").format(row.idx))
-            row.return_amount = flt(row.return_qty) * flt(row.rate)
+            base, discount, net_rate, mode = _pricing_pair(
+                row.get("base_rate"),
+                row.get("discount_percentage"),
+                row.get("rate"),
+                row.get("pricing_input_mode"),
+            )
+            row.base_rate = base
+            row.discount_percentage = discount
+            row.pricing_input_mode = mode
+            row.rate = net_rate
+            row.is_vat_taxable = cint(row.get("is_vat_taxable"))
+            row.vat_rate = max(0.0, flt(row.get("vat_rate"))) if row.is_vat_taxable else 0.0
+            row.net_return_amount = flt(row.return_qty) * row.rate
+            row.tax_amount = row.net_return_amount * row.vat_rate / 100.0
+            row.return_amount = row.net_return_amount + row.tax_amount
             requested += flt(row.return_amount)
             quarantined += flt(row.quarantined_qty)
             handed_over += flt(row.delivered_qty)
             accepted += flt(row.accepted_qty)
             rejected += flt(row.rejected_qty)
             rejected_returned += flt(row.rejected_returned_qty)
-            row.accepted_amount = flt(row.accepted_qty) * flt(row.approved_rate)
-            approved += flt(row.accepted_amount)
+            if (
+                flt(row.accepted_qty) > 0
+                or flt(row.get("approved_rate")) > 0
+                or flt(row.get("approved_discount_percentage")) > 0
+            ):
+                _, approved_discount, approved_rate, approved_mode = _pricing_pair(
+                    row.base_rate,
+                    row.get("approved_discount_percentage"),
+                    row.get("approved_rate"),
+                    row.get("approved_pricing_input_mode"),
+                )
+            else:
+                approved_discount = 0.0
+                approved_rate = 0.0
+                approved_mode = "Discount Percentage"
+            row.approved_discount_percentage = approved_discount
+            row.approved_pricing_input_mode = approved_mode
+            row.approved_rate = approved_rate
+            row.approved_net_amount = flt(row.accepted_qty) * row.approved_rate
+            row.approved_tax_amount = row.approved_net_amount * row.vat_rate / 100.0
+            row.approved_total_credit = row.approved_net_amount + row.approved_tax_amount
+            row.accepted_amount = row.approved_total_credit
+            approved += flt(row.approved_total_credit)
         self.requested_return_value = requested
         self.quarantined_quantity = quarantined
         self.handed_over_quantity = handed_over
@@ -351,7 +437,7 @@ class PharmacyReturnCase(Document):
 
         settlement_base = (
             approved
-            if self.return_type == "Regulatory Batch Recall"
+            if _is_progressive_return_type(self.return_type)
             else self._settlement_base_value()
         )
         self.approved_return_value = settlement_base

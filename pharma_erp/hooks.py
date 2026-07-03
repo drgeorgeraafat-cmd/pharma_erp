@@ -270,6 +270,7 @@ doc_events = {
         "before_cancel": [
             "pharma_erp.treasury_access.before_cancel_payment_entry",
             "pharma_erp.treasury_closing.before_cancel_treasury_document",
+            "pharma_erp.pharma_erp.supplier_claim_accounting.validate_supplier_claim_payment_cancel",
         ],
     },
     "Shift Cash Movement": {
@@ -286,7 +287,10 @@ doc_events = {
     },
     "Journal Entry": {
         "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",
-        "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
+        "before_cancel": [
+            "pharma_erp.treasury_closing.before_cancel_treasury_document",
+            "pharma_erp.pharma_erp.supplier_claim_accounting.validate_supplier_claim_journal_cancel",
+        ],
     },
     "Pharmacy Shift Closing": {
         "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",

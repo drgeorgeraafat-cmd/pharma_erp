@@ -18,6 +18,60 @@ SPECIAL_WAREHOUSE_NAMES = {
     "expired": "Expired Drugs",
     "supplier": "Returns With Supplier",
 }
+PROGRESSIVE_RETURN_TYPES = {"Regulatory Batch Recall", "Expired Drugs Return"}
+
+
+def _is_progressive_return_type(return_type: str | None) -> bool:
+    return (return_type or "") in PROGRESSIVE_RETURN_TYPES
+
+
+def _default_progressive_reason(return_type: str | None) -> str:
+    return "Expired" if return_type == "Expired Drugs Return" else "Health Authority Recall"
+
+
+def _progressive_quarantine_key(return_type: str | None) -> str:
+    return "expired" if return_type == "Expired Drugs Return" else "recall"
+
+VAT_KEYWORDS = (
+    "vat",
+    "value added",
+    "value-added",
+    "ضريبة القيمة",
+    "القيمة المضافة",
+)
+VAT_ENTRY_MODES = (
+    "No VAT",
+    "Auto by VAT %",
+    "VAT Per Unit",
+    "Total VAT for Line",
+)
+
+
+def _normalize_purchase_invoice_vat_entry_mode(
+    value: Any,
+    taxable: bool = False,
+) -> str:
+    """Normalize legacy/custom VAT mode text before inserting mapped returns.
+
+    Some historical Purchase Invoice Item rows contain malformed values such
+    as ``Auto by VAT %/%``. Frappe validates Select values on insert, so a
+    mapped Purchase Return must never copy that malformed text unchanged.
+    """
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if text in VAT_ENTRY_MODES:
+        return text
+
+    lowered = text.lower()
+    if "no vat" in lowered or "exempt" in lowered:
+        return "No VAT"
+    if "total" in lowered and "vat" in lowered:
+        return "Total VAT for Line"
+    if "per unit" in lowered and "vat" in lowered:
+        return "VAT Per Unit"
+    if "auto" in lowered and "vat" in lowered:
+        return "Auto by VAT %"
+
+    return "Auto by VAT %" if taxable else "No VAT"
 
 
 def _require_read() -> None:
@@ -42,6 +96,57 @@ def _parse(payload: Any) -> dict:
     if not isinstance(payload, dict):
         frappe.throw(_("Invalid return payload."))
     return dict(payload)
+
+
+def _safe_json_dict(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _looks_like_vat(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return any(keyword in text for keyword in VAT_KEYWORDS)
+
+
+def _clamp_discount(value: Any) -> float:
+    return min(100.0, max(0.0, flt(value)))
+
+
+def _pricing_pair(
+    base_rate: Any,
+    discount_percentage: Any,
+    net_rate: Any,
+    mode: str | None,
+) -> tuple[float, float, float, str]:
+    base = max(0.0, flt(base_rate))
+    discount = _clamp_discount(discount_percentage)
+    net = max(0.0, flt(net_rate))
+    selected_mode = (
+        mode
+        if mode in {"Discount Percentage", "Net Unit Value"}
+        else "Discount Percentage"
+    )
+
+    if base <= 0 and net > 0:
+        base = net
+
+    if selected_mode == "Net Unit Value":
+        if base > 0:
+            net = min(net, base)
+            discount = _clamp_discount((base - net) * 100.0 / base)
+        else:
+            discount = 0.0
+    else:
+        net = base * (1.0 - discount / 100.0)
+
+    return base, discount, net, selected_mode
 
 
 def _default_company() -> str | None:
@@ -90,7 +195,7 @@ def _special_warehouses(company: str | None) -> dict[str, str | None]:
 
 
 def _sync_case_operational_status(doc) -> None:
-    if doc.return_type != "Regulatory Batch Recall":
+    if not _is_progressive_return_type(doc.return_type):
         return
 
     protected_statuses = {"Financially Settled", "Closed", "Cancelled"}
@@ -338,7 +443,7 @@ def _case_settlement_base(doc) -> float:
         if note and note.is_return and note.docstatus < 2:
             return abs(flt(note.grand_total))
 
-    if doc.return_type == "Regulatory Batch Recall":
+    if _is_progressive_return_type(doc.return_type):
         return flt(doc.approved_return_value)
 
     return (
@@ -376,113 +481,233 @@ def _case_status_before_claim(doc) -> str:
     return doc.operational_status or "Under Review"
 
 
+def _get_case_refund_payment_entries(case_name: str) -> list[dict]:
+    meta = frappe.get_meta("Payment Entry")
+    if not meta.has_field("custom_pharmacy_return_case"):
+        return []
+
+    return frappe.get_all(
+        "Payment Entry",
+        filters={
+            "custom_pharmacy_return_case": case_name,
+            "docstatus": ["<", 2],
+        },
+        fields=[
+            "name",
+            "docstatus",
+            "status",
+            "payment_type",
+            "posting_date",
+            "mode_of_payment",
+            "paid_from",
+            "paid_to",
+            "paid_amount",
+            "received_amount",
+            "reference_no",
+            "reference_date",
+            "custom_supplier_refund_method",
+            "custom_supplier_refund_notes",
+            "creation",
+        ],
+        order_by="creation asc",
+        limit_page_length=0,
+    )
+
+
+def _refund_entry_amount(entry) -> float:
+    if entry.payment_type != "Receive":
+        return 0.0
+    return abs(flt(entry.received_amount) or flt(entry.paid_amount))
+
+
 def _sync_supplier_claim_settlement(doc) -> None:
-    if not doc.get("supplier_claim"):
-        return
-    if not frappe.db.exists("Supplier Claim", doc.get("supplier_claim")):
-        return
-
-    claim = frappe.db.get_value(
-        "Supplier Claim",
-        doc.get("supplier_claim"),
-        ["docstatus", "status"],
-        as_dict=True,
-    )
-    settlement_document = _case_settlement_document(doc)
-    deduction = (
-        abs(
-            flt(
-                frappe.db.get_value(
-                    "Supplier Claim Invoice",
-                    {
-                        "parent": doc.get("supplier_claim"),
-                        "parenttype": "Supplier Claim",
-                        "purchase_invoice": settlement_document,
-                    },
-                    "included_amount",
-                )
-            )
-        )
-        if settlement_document
-        else 0
-    )
-
     settlement_base = _case_settlement_base(doc)
-    refund = flt(doc.refund_amount)
+    if settlement_base <= 0:
+        return
 
     if abs(flt(doc.approved_return_value) - settlement_base) > 0.01:
-        doc.db_set(
-            "approved_return_value",
-            settlement_base,
-            update_modified=False,
-        )
+        doc.db_set("approved_return_value", settlement_base, update_modified=False)
         doc.approved_return_value = settlement_base
 
-    if claim.docstatus == 0:
-        values = {
-            "planned_claim_deduction_amount": deduction or settlement_base,
-            "claim_deduction_amount": 0,
-            "settled_amount": refund,
-            "remaining_settlement_amount": max(
-                0.0,
-                settlement_base - refund,
-            ),
-            "settlement_status": "Claim Deduction Draft",
-        }
-        desired = "Claim Deduction Draft Created"
-    elif claim.docstatus == 1:
-        remaining = max(
-            0.0,
-            settlement_base - deduction - refund,
+    settlement_document = _case_settlement_document(doc)
+    settlement_document_status = (
+        frappe.db.get_value("Purchase Invoice", settlement_document, "docstatus")
+        if settlement_document
+        else None
+    )
+
+    claim = None
+    planned_claim = 0.0
+    confirmed_claim = 0.0
+    claim_closed = False
+    claim_settlement_date = None
+    if doc.get("supplier_claim") and frappe.db.exists(
+        "Supplier Claim", doc.get("supplier_claim")
+    ):
+        claim = frappe.db.get_value(
+            "Supplier Claim",
+            doc.get("supplier_claim"),
+            ["docstatus", "status", "payment_entry"],
+            as_dict=True,
         )
-        values = {
-            "planned_claim_deduction_amount": deduction,
-            "claim_deduction_amount": deduction,
-            "settled_amount": deduction + refund,
-            "remaining_settlement_amount": remaining,
-            "settlement_status": (
-                "Settled"
-                if claim.status == "Paid" and remaining <= 0.01
-                else "Claim Deduction Confirmed"
-                if remaining <= 0.01
-                else "Partially Settled"
-            ),
-        }
-        desired = (
-            "Financially Settled"
-            if claim.status == "Paid" and remaining <= 0.01
-            else "Claim Deduction Confirmed"
+        claim_row_amount = (
+            abs(
+                flt(
+                    frappe.db.get_value(
+                        "Supplier Claim Invoice",
+                        {
+                            "parent": doc.get("supplier_claim"),
+                            "parenttype": "Supplier Claim",
+                            "purchase_invoice": settlement_document,
+                        },
+                        "included_amount",
+                    )
+                )
+            )
+            if settlement_document
+            else 0
         )
+        if claim.docstatus == 0:
+            planned_claim = claim_row_amount or settlement_base
+        elif claim.docstatus == 1:
+            planned_claim = claim_row_amount
+            confirmed_claim = min(settlement_base, claim_row_amount)
+            claim_closed = claim.status == "Paid"
+            if claim_closed:
+                if claim.payment_entry and frappe.db.exists(
+                    "Payment Entry", claim.payment_entry
+                ):
+                    claim_settlement_date = frappe.db.get_value(
+                        "Payment Entry", claim.payment_entry, "posting_date"
+                    )
+                claim_settlement_date = claim_settlement_date or nowdate()
+
+    refund_entries = _get_case_refund_payment_entries(doc.name)
+    draft_entries = [entry for entry in refund_entries if entry.docstatus == 0]
+    submitted_entries = [entry for entry in refund_entries if entry.docstatus == 1]
+
+    draft_refund = sum(_refund_entry_amount(entry) for entry in draft_entries)
+    confirmed_refund = sum(
+        _refund_entry_amount(entry) for entry in submitted_entries
+    )
+    latest_entry = refund_entries[-1] if refund_entries else None
+
+    remaining = max(0.0, settlement_base - confirmed_claim - confirmed_refund)
+    confirmed_total = confirmed_claim + confirmed_refund
+
+    if confirmed_claim > 0 or planned_claim > 0:
+        settlement_method = (
+            "Mixed Settlement"
+            if confirmed_refund > 0 or draft_refund > 0
+            else "Deduct from Supplier Claim"
+        )
+    elif confirmed_refund > 0 or draft_refund > 0:
+        settlement_method = "Cash / Bank Refund"
     else:
-        values = {
-            "planned_claim_deduction_amount": 0,
-            "claim_deduction_amount": 0,
-            "settled_amount": refund,
-            "remaining_settlement_amount": max(
-                0.0,
-                settlement_base - refund,
-            ),
-            "settlement_status": (
-                "Partially Settled"
-                if refund > 0
-                else "Cancelled"
-            ),
-        }
+        settlement_method = "Pending Settlement"
+
+    if claim and claim.docstatus == 0:
+        utilization_status = "Planned in Draft Claim"
+    elif claim and claim.docstatus == 1 and claim_closed:
+        utilization_status = (
+            "Fully Utilized" if remaining <= 0.01 else "Partially Utilized"
+        )
+    elif claim and claim.docstatus == 1:
+        utilization_status = "Confirmed in Submitted Claim"
+    else:
+        utilization_status = "Not Applied"
+
+    if draft_entries:
+        settlement_status = (
+            "Mixed Settlement Draft"
+            if confirmed_claim > 0 or planned_claim > 0 or confirmed_refund > 0
+            else "Refund Draft"
+        )
+        desired = "Refund Payment Draft Created"
+    elif claim_closed and confirmed_claim > 0:
+        if remaining <= 0.01:
+            settlement_status = "Settled Through Supplier Claim"
+            desired = "Financially Settled"
+        else:
+            settlement_status = "Partially Settled"
+            desired = "Partially Settled"
+    elif remaining <= 0.01 and confirmed_refund > 0:
+        settlement_status = "Settled"
+        desired = "Financially Settled"
+    elif confirmed_refund > 0:
+        settlement_status = "Partially Settled"
+        desired = "Partially Settled"
+    elif claim and claim.docstatus == 0:
+        settlement_status = "Claim Deduction Draft"
+        desired = "Claim Deduction Draft Created"
+    elif claim and claim.docstatus == 1:
+        if remaining <= 0.01:
+            settlement_status = "Claim Deduction Confirmed"
+            desired = "Claim Deduction Confirmed"
+        else:
+            settlement_status = "Partially Settled"
+            desired = "Claim Deduction Confirmed"
+    elif claim and claim.docstatus == 2:
+        settlement_status = (
+            "Credited to Supplier Account"
+            if settlement_document_status == 1
+            else "Pending Settlement"
+        )
+        desired = _case_status_before_claim(doc)
+    else:
+        settlement_status = (
+            "Credited to Supplier Account"
+            if settlement_document_status == 1
+            else "Pending Settlement"
+        )
         desired = _case_status_before_claim(doc)
 
-    for fieldname, value in values.items():
-        current = doc.get(fieldname)
-        changed = (
-            abs(flt(current) - flt(value)) > 0.000001
-            if fieldname != "settlement_status"
-            else (current or "") != (value or "")
+    latest_status = None
+    latest_name = None
+    if latest_entry:
+        latest_name = latest_entry.name
+        latest_status = latest_entry.status or (
+            "Draft"
+            if latest_entry.docstatus == 0
+            else "Submitted"
+            if latest_entry.docstatus == 1
+            else "Cancelled"
         )
+
+    values = {
+        "settlement_method": settlement_method,
+        "planned_claim_deduction_amount": planned_claim,
+        "claim_deduction_amount": confirmed_claim,
+        "refund_amount": confirmed_refund,
+        "settled_amount": confirmed_total,
+        "remaining_settlement_amount": remaining,
+        "settlement_status": settlement_status,
+        "claim_utilization_status": utilization_status,
+        "claim_settlement_date": claim_settlement_date,
+        "refund_payment_entry": latest_name,
+        "refund_payment_entry_status": latest_status,
+        "refund_entries_count": len(refund_entries),
+        "refund_request_amount": draft_refund if draft_entries else 0,
+    }
+
+    text_fields = {
+        "settlement_method",
+        "settlement_status",
+        "claim_utilization_status",
+        "refund_payment_entry",
+        "refund_payment_entry_status",
+    }
+    date_fields = {"claim_settlement_date"}
+    for fieldname, value in values.items():
+        if not doc.meta.has_field(fieldname):
+            continue
+        current = doc.get(fieldname)
+        if fieldname in text_fields or fieldname in date_fields:
+            changed = (current or "") != (value or "")
+        else:
+            changed = abs(flt(current) - flt(value)) > 0.000001
         if changed:
-            doc.db_set(
-                fieldname,
-                value,
-                update_modified=False,
-            )
+            doc.db_set(fieldname, value, update_modified=False)
             setattr(doc, fieldname, value)
 
     if (
@@ -490,11 +715,7 @@ def _sync_supplier_claim_settlement(doc) -> None:
         and doc.operational_status not in {"Closed", "Cancelled"}
         and doc.operational_status != desired
     ):
-        doc.db_set(
-            "operational_status",
-            desired,
-            update_modified=False,
-        )
+        doc.db_set("operational_status", desired, update_modified=False)
         doc.operational_status = desired
 
 
@@ -582,8 +803,11 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
             "approved_debit_note_amount", "approved_debit_note_outstanding",
             "approved_debit_note_status", "supplier_claim",
             "settlement_status", "planned_claim_deduction_amount",
-            "claim_deduction_amount", "settled_amount",
-            "remaining_settlement_amount", "operational_status",
+            "claim_utilization_status", "claim_settlement_date",
+            "claim_deduction_amount", "refund_amount", "settled_amount",
+            "remaining_settlement_amount", "refund_payment_entry",
+            "refund_payment_entry_status", "refund_entries_count",
+            "operational_status",
             "requested_return_value", "approved_return_value", "settlement_method",
             "handed_over_quantity", "accepted_quantity", "rejected_quantity",
             "pending_response_quantity", "modified",
@@ -592,26 +816,36 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
         limit_page_length=max(1, min(cint(limit) or 20, 100)),
     )
     for row in rows:
-        if row.get("supplier_claim"):
-            case_doc = frappe.get_doc("Pharmacy Return Case", row.name)
-            _sync_supplier_claim_settlement(case_doc)
-            for fieldname in (
-                "purchase_return",
-                "approved_return_value",
-                "claim_deduction_amount",
-                "planned_claim_deduction_amount",
-                "settled_amount",
-                "remaining_settlement_amount",
-                "settlement_status",
-                "operational_status",
-            ):
-                row[fieldname] = case_doc.get(fieldname)
+        case_doc = frappe.get_doc("Pharmacy Return Case", row.name)
+        _sync_supplier_claim_settlement(case_doc)
+        for fieldname in (
+            "purchase_return",
+            "approved_return_value",
+            "claim_deduction_amount",
+            "planned_claim_deduction_amount",
+            "refund_amount",
+            "refund_payment_entry",
+            "refund_payment_entry_status",
+            "refund_entries_count",
+            "settled_amount",
+            "remaining_settlement_amount",
+            "settlement_status",
+            "claim_utilization_status",
+            "claim_settlement_date",
+            "operational_status",
+        ):
+            row[fieldname] = case_doc.get(fieldname)
 
         settlement_status = row.get("settlement_status") or ""
         settlement_operational_status = {
             "Claim Deduction Draft": "Claim Deduction Draft Created",
             "Claim Deduction Confirmed": "Claim Deduction Confirmed",
-            "Partially Settled": "Claim Deduction Confirmed",
+            "Refund Draft": "Refund Payment Draft Created",
+            "Refund Confirmed": "Refund Payment Submitted",
+            "Mixed Settlement Draft": "Refund Payment Draft Created",
+            "Mixed Settlement Confirmed": "Mixed Settlement Confirmed",
+            "Partially Settled": "Partially Settled",
+            "Settled Through Supplier Claim": "Financially Settled",
             "Settled": "Financially Settled",
         }.get(settlement_status)
 
@@ -620,7 +854,7 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
             # stock / supplier-response / Debit Note workflow states.
             row.operational_status = settlement_operational_status
 
-        elif row.return_type == "Regulatory Batch Recall":
+        elif _is_progressive_return_type(row.return_type):
             debit_note = (
                 frappe.db.get_value(
                     "Purchase Invoice",
@@ -697,22 +931,361 @@ def get_bootstrap(company: str | None = None, purchase_invoice: str | None = Non
     return result
 
 
-def _returned_qty_by_original_item(invoice_name: str) -> dict[str, float]:
+def _returned_qty_by_original_item(
+    invoice_name: str,
+    exclude_purchase_return: str | None = None,
+) -> dict[str, float]:
+    conditions = [
+        "pi.return_against = %(invoice_name)s",
+        "pi.is_return = 1",
+        "pi.docstatus < 2",
+        "ifnull(pii.purchase_invoice_item, '') != ''",
+    ]
+    values = {"invoice_name": invoice_name}
+    if exclude_purchase_return:
+        conditions.append("pi.name != %(exclude_purchase_return)s")
+        values["exclude_purchase_return"] = exclude_purchase_return
+
     rows = frappe.db.sql(
-        """
+        f"""
         select pii.purchase_invoice_item, sum(abs(pii.qty)) as returned_qty
         from `tabPurchase Invoice Item` pii
         inner join `tabPurchase Invoice` pi on pi.name = pii.parent
-        where pi.return_against = %s
-          and pi.is_return = 1
-          and pi.docstatus < 2
-          and ifnull(pii.purchase_invoice_item, '') != ''
+        where {' and '.join(conditions)}
         group by pii.purchase_invoice_item
         """,
-        invoice_name,
+        values,
         as_dict=True,
     )
     return {row.purchase_invoice_item: flt(row.returned_qty) for row in rows}
+
+
+def _purchase_invoice_row_batch_no(row) -> str:
+    """Return the trusted batch number stored on an original invoice row."""
+    if row.meta.has_field("batch_no") and row.get("batch_no"):
+        return row.get("batch_no") or ""
+    if row.meta.has_field("custom_batch_number") and row.get("custom_batch_number"):
+        return row.get("custom_batch_number") or ""
+    return ""
+
+
+def _physical_stock_qty(
+    item_code: str,
+    warehouse: str | None,
+    batch_no: str | None = None,
+) -> float:
+    """Return current sellable physical stock for an invoice-return source row.
+
+    Batch stock must be checked at batch + warehouse level. For non-batched
+    stock items, Bin.actual_qty is the authoritative current warehouse stock.
+    Non-stock items are not constrained by warehouse stock.
+    """
+    if not item_code:
+        return 0.0
+
+    is_stock_item = cint(frappe.db.get_value("Item", item_code, "is_stock_item"))
+    if not is_stock_item:
+        return float("inf")
+    if not warehouse:
+        return 0.0
+
+    if batch_no:
+        from erpnext.stock.doctype.batch.batch import get_batch_qty
+
+        qty = get_batch_qty(
+            batch_no=batch_no,
+            warehouse=warehouse,
+            item_code=item_code,
+            for_stock_levels=True,
+            consider_negative_batches=True,
+            ignore_reserved_stock=True,
+        )
+        return max(0.0, flt(qty))
+
+    qty = frappe.db.get_value(
+        "Bin",
+        {"item_code": item_code, "warehouse": warehouse},
+        "actual_qty",
+    )
+    return max(0.0, flt(qty))
+
+
+def _invoice_return_stock_limits(original_row, already_returned_qty: float) -> dict:
+    original_qty = abs(flt(original_row.qty))
+    invoice_returnable_qty = max(0.0, original_qty - flt(already_returned_qty))
+    warehouse = original_row.warehouse
+    batch_no = _purchase_invoice_row_batch_no(original_row)
+    physical_stock_qty = _physical_stock_qty(
+        original_row.item_code,
+        warehouse,
+        batch_no,
+    )
+    if physical_stock_qty == float("inf"):
+        physical_stock_qty = invoice_returnable_qty
+    available_to_return_qty = max(
+        0.0,
+        min(invoice_returnable_qty, physical_stock_qty),
+    )
+    return {
+        "original_qty": original_qty,
+        "invoice_returnable_qty": invoice_returnable_qty,
+        "physical_stock_qty": physical_stock_qty,
+        "available_to_return_qty": available_to_return_qty,
+        "warehouse": warehouse,
+        "batch_no": batch_no,
+    }
+
+
+def _vat_from_item_tax_template(template_name: str | None, company: str | None = None) -> dict:
+    if not template_name or not frappe.db.exists("Item Tax Template", template_name):
+        return {
+            "is_vat_taxable": 0,
+            "vat_rate": 0.0,
+            "vat_account": None,
+            "item_tax_template": template_name,
+            "vat_source": "Not Taxable",
+        }
+
+    template = frappe.get_doc("Item Tax Template", template_name)
+    positive = []
+    for tax in template.get("taxes") or []:
+        account = tax.get("tax_type")
+        rate = flt(tax.get("tax_rate"))
+        if rate <= 0:
+            continue
+        if company and account:
+            account_company = frappe.db.get_value("Account", account, "company")
+            if account_company and account_company != company:
+                continue
+        positive.append((account, rate))
+
+    vat_rows = [row for row in positive if _looks_like_vat(row[0])]
+    selected = vat_rows or (positive if len(positive) == 1 else [])
+    if not selected:
+        return {
+            "is_vat_taxable": 0,
+            "vat_rate": 0.0,
+            "vat_account": None,
+            "item_tax_template": template_name,
+            "vat_source": "Item Tax Template - No VAT",
+        }
+
+    account, rate = selected[0]
+    return {
+        "is_vat_taxable": 1,
+        "vat_rate": max(0.0, flt(rate)),
+        "vat_account": account,
+        "item_tax_template": template_name,
+        "vat_source": f"Item Tax Template: {template_name}",
+    }
+
+
+def _item_default_vat_info(item_code: str, company: str | None = None) -> dict:
+    if not item_code or not frappe.db.exists("Item", item_code):
+        return _vat_from_item_tax_template(None, company)
+
+    item_meta = frappe.get_meta("Item")
+    if not item_meta.has_field("taxes"):
+        return _vat_from_item_tax_template(None, company)
+
+    rows = frappe.get_all(
+        "Item Tax",
+        filters={"parent": item_code, "parenttype": "Item"},
+        fields=["item_tax_template", "tax_category", "valid_from", "idx"],
+        order_by="valid_from desc, idx asc",
+        limit_page_length=20,
+    )
+    for row in rows:
+        if not row.item_tax_template:
+            continue
+        info = _vat_from_item_tax_template(row.item_tax_template, company)
+        if info["is_vat_taxable"]:
+            return info
+    return _vat_from_item_tax_template(None, company)
+
+
+def _purchase_invoice_item_vat_info(invoice, item_row) -> dict:
+    net_amount = abs(flt(item_row.get("net_amount") or item_row.get("amount")))
+    item_tax_amount = abs(flt(item_row.get("item_tax_amount")))
+    item_tax_template = item_row.get("item_tax_template") or None
+
+    rate_map = _safe_json_dict(item_row.get("item_tax_rate"))
+    positive_rates = [
+        (account, flt(rate))
+        for account, rate in rate_map.items()
+        if flt(rate) > 0
+    ]
+    vat_rates = [row for row in positive_rates if _looks_like_vat(row[0])]
+    selected = vat_rates or (positive_rates if len(positive_rates) == 1 else [])
+    if selected:
+        account, rate = selected[0]
+        return {
+            "is_vat_taxable": 1,
+            "vat_rate": max(0.0, flt(rate)),
+            "vat_account": account,
+            "item_tax_template": item_tax_template,
+            "vat_source": f"Original Purchase Invoice: {invoice.name}",
+        }
+
+    detail_candidates = []
+    for tax in invoice.get("taxes") or []:
+        details = _safe_json_dict(tax.get("item_wise_tax_detail"))
+        detail = details.get(item_row.item_code)
+        if not detail:
+            continue
+        if isinstance(detail, (list, tuple)):
+            rate = flt(detail[0]) if len(detail) > 0 else 0.0
+            amount = abs(flt(detail[1])) if len(detail) > 1 else 0.0
+        elif isinstance(detail, dict):
+            rate = flt(detail.get("tax_rate") or detail.get("rate"))
+            amount = abs(flt(detail.get("tax_amount") or detail.get("amount")))
+        else:
+            rate = 0.0
+            amount = 0.0
+        account = tax.get("account_head")
+        if rate > 0 or amount > 0:
+            detail_candidates.append((account, rate, amount))
+
+    vat_details = [row for row in detail_candidates if _looks_like_vat(row[0])]
+    selected_detail = vat_details or (
+        detail_candidates if len(detail_candidates) == 1 else []
+    )
+    if selected_detail:
+        account, rate, amount = selected_detail[0]
+        if rate <= 0 and amount > 0 and net_amount > 0:
+            rate = amount * 100.0 / net_amount
+        return {
+            "is_vat_taxable": 1,
+            "vat_rate": max(0.0, flt(rate)),
+            "vat_account": account,
+            "item_tax_template": item_tax_template,
+            "vat_source": f"Original Purchase Invoice: {invoice.name}",
+        }
+
+    if item_tax_amount > 0 and net_amount > 0:
+        return {
+            "is_vat_taxable": 1,
+            "vat_rate": item_tax_amount * 100.0 / net_amount,
+            "vat_account": None,
+            "item_tax_template": item_tax_template,
+            "vat_source": f"Original Purchase Invoice: {invoice.name}",
+        }
+
+    if item_tax_template:
+        template_info = _vat_from_item_tax_template(
+            item_tax_template,
+            invoice.company,
+        )
+        if template_info["is_vat_taxable"]:
+            template_info["vat_source"] = f"Original Purchase Invoice: {invoice.name}"
+            return template_info
+
+    return {
+        "is_vat_taxable": 0,
+        "vat_rate": 0.0,
+        "vat_account": None,
+        "item_tax_template": item_tax_template,
+        "vat_source": f"Original Purchase Invoice: {invoice.name} - Not Taxable",
+    }
+
+
+def _pricing_from_purchase_invoice_row(invoice, item_row) -> dict:
+    base_rate = abs(flt(item_row.get("price_list_rate") or item_row.get("rate")))
+    net_rate = abs(flt(item_row.get("net_rate") or item_row.get("rate")))
+    if base_rate <= 0:
+        base_rate = net_rate
+    discount_percentage = (
+        _clamp_discount((base_rate - net_rate) * 100.0 / base_rate)
+        if base_rate > 0
+        else 0.0
+    )
+    vat = _purchase_invoice_item_vat_info(invoice, item_row)
+    return {
+        "base_rate": base_rate,
+        "discount_percentage": discount_percentage,
+        "pricing_input_mode": "Net Unit Value",
+        "rate": net_rate,
+        **vat,
+    }
+
+
+def _latest_purchase_pricing(
+    item_code: str,
+    batch_no: str,
+    company: str,
+    supplier: str | None = None,
+) -> dict:
+    meta = frappe.get_meta("Purchase Invoice Item")
+    fields = {df.fieldname for df in meta.fields if df.fieldname}
+    batch_field = (
+        "batch_no"
+        if "batch_no" in fields
+        else "custom_batch_number"
+        if "custom_batch_number" in fields
+        else None
+    )
+    batch_condition = ""
+    supplier_condition = ""
+    values: list[Any] = [company, item_code]
+    if supplier:
+        supplier_condition = " and pi.supplier = %s"
+        values.append(supplier)
+    if batch_field and batch_no:
+        batch_condition = f" and pii.`{batch_field}` = %s"
+        values.append(batch_no)
+    rows = frappe.db.sql(
+        f"""
+        select pii.name, pii.parent
+        from `tabPurchase Invoice Item` pii
+        inner join `tabPurchase Invoice` pi on pi.name = pii.parent
+        where pi.docstatus = 1 and ifnull(pi.is_return, 0) = 0
+          and pi.company = %s and pii.item_code = %s
+          {supplier_condition}
+          {batch_condition}
+        order by pi.posting_date desc, pi.posting_time desc, pi.creation desc
+        limit 1
+        """,
+        values,
+        as_dict=True,
+    )
+    if rows:
+        invoice = frappe.get_doc("Purchase Invoice", rows[0].parent)
+        item_row = next((row for row in invoice.items if row.name == rows[0].name), None)
+        if item_row:
+            result = _pricing_from_purchase_invoice_row(invoice, item_row)
+            result["source_purchase_invoice"] = invoice.name
+            return result
+
+    vat = _item_default_vat_info(item_code, company)
+    return {
+        "base_rate": 0.0,
+        "discount_percentage": 0.0,
+        "pricing_input_mode": "Discount Percentage",
+        "rate": 0.0,
+        "source_purchase_invoice": None,
+        **vat,
+    }
+
+
+def _trusted_row_vat(
+    item_code: str,
+    batch_no: str | None,
+    company: str,
+    supplier: str | None = None,
+) -> dict:
+    pricing = _latest_purchase_pricing(
+        item_code, batch_no or "", company, supplier
+    )
+    return {
+        key: pricing.get(key)
+        for key in (
+            "is_vat_taxable",
+            "vat_rate",
+            "vat_account",
+            "item_tax_template",
+            "vat_source",
+        )
+    }
 
 
 @frappe.whitelist()
@@ -731,30 +1304,37 @@ def get_invoice_for_return(name: str):
     item_fields = {df.fieldname for df in item_meta.fields if df.fieldname}
     result_items = []
     for row in doc.items:
-        original_qty = abs(flt(row.qty))
         already = flt(returned.get(row.name))
-        available = max(0.0, original_qty - already)
-        batch_no = ""
-        if "batch_no" in item_fields:
-            batch_no = row.get("batch_no") or ""
-        if not batch_no and "custom_batch_number" in item_fields:
-            batch_no = row.get("custom_batch_number") or ""
+        limits = _invoice_return_stock_limits(row, already)
+        batch_no = limits["batch_no"]
         expiry_date = row.get("custom_expiry_date") if "custom_expiry_date" in item_fields else None
+        pricing = _pricing_from_purchase_invoice_row(doc, row)
         result_items.append({
             "original_purchase_invoice_item": row.name,
             "item_code": row.item_code,
             "item_name": row.item_name,
             "description": row.description,
-            "warehouse": row.warehouse,
+            "warehouse": limits["warehouse"],
             "batch_no": batch_no,
             "expiry_date": expiry_date,
             "stock_uom": row.stock_uom or row.uom,
-            "original_qty": original_qty,
+            "original_qty": limits["original_qty"],
             "already_returned_qty": already,
-            "available_to_return_qty": available,
+            "invoice_returnable_qty": limits["invoice_returnable_qty"],
+            "physical_stock_qty": limits["physical_stock_qty"],
+            "available_to_return_qty": limits["available_to_return_qty"],
             "return_qty": 0,
-            "rate": abs(flt(row.rate)),
-            "tax_amount": abs(flt(row.get("item_tax_amount"))),
+            "base_rate": pricing["base_rate"],
+            "discount_percentage": pricing["discount_percentage"],
+            "pricing_input_mode": pricing["pricing_input_mode"],
+            "rate": pricing["rate"],
+            "is_vat_taxable": pricing["is_vat_taxable"],
+            "vat_rate": pricing["vat_rate"],
+            "vat_account": pricing["vat_account"],
+            "item_tax_template": pricing["item_tax_template"],
+            "vat_source": pricing["vat_source"],
+            "net_return_amount": 0,
+            "tax_amount": 0,
             "return_amount": 0,
             "return_reason": "Normal Return",
             "notes": "",
@@ -772,32 +1352,6 @@ def get_invoice_for_return(name: str):
         "update_stock": cint(doc.update_stock),
         "items": result_items,
     }
-
-
-def _latest_purchase_rate(item_code: str, batch_no: str, company: str) -> float:
-    meta = frappe.get_meta("Purchase Invoice Item")
-    fields = {df.fieldname for df in meta.fields if df.fieldname}
-    batch_field = "batch_no" if "batch_no" in fields else "custom_batch_number" if "custom_batch_number" in fields else None
-    batch_condition = ""
-    values: list[Any] = [company, item_code]
-    if batch_field and batch_no:
-        batch_condition = f" and pii.`{batch_field}` = %s"
-        values.append(batch_no)
-    row = frappe.db.sql(
-        f"""
-        select abs(ifnull(pii.net_rate, pii.rate)) as rate
-        from `tabPurchase Invoice Item` pii
-        inner join `tabPurchase Invoice` pi on pi.name = pii.parent
-        where pi.docstatus = 1 and ifnull(pi.is_return, 0) = 0
-          and pi.company = %s and pii.item_code = %s
-          {batch_condition}
-        order by pi.posting_date desc, pi.posting_time desc, pi.creation desc
-        limit 1
-        """,
-        values,
-        as_dict=True,
-    )
-    return flt(row[0].rate) if row else 0.0
 
 
 def _stock_valuation_rate(item_code: str, warehouse: str, batch_no: str | None = None) -> float:
@@ -1006,6 +1560,7 @@ def get_batch_stock_for_recall(
     company: str | None = None,
     item_code: str | None = None,
     source_warehouse: str | None = None,
+    supplier: str | None = None,
 ):
     _require_read()
     company = company or _default_company()
@@ -1046,7 +1601,10 @@ def get_batch_stock_for_recall(
         consider_negative_batches=True,
         ignore_reserved_stock=True,
     ) or []
-    expected_rate = _latest_purchase_rate(batch.item, batch_no, company)
+    pricing = _latest_purchase_pricing(
+        batch.item, batch_no, company, supplier
+    )
+    expected_rate = flt(pricing.get("rate"))
     rows = []
     for balance in balances:
         warehouse_name = balance.get("warehouse")
@@ -1072,9 +1630,24 @@ def get_batch_stock_for_recall(
             "return_qty": qty,
             "stock_valuation_rate": valuation_rate,
             "stock_value": qty * valuation_rate,
+            "base_rate": flt(pricing.get("base_rate")),
+            "discount_percentage": flt(pricing.get("discount_percentage")),
+            "pricing_input_mode": pricing.get("pricing_input_mode") or "Discount Percentage",
             "rate": expected_rate,
-            "tax_amount": 0,
-            "return_amount": qty * expected_rate,
+            "is_vat_taxable": cint(pricing.get("is_vat_taxable")),
+            "vat_rate": flt(pricing.get("vat_rate")),
+            "vat_account": pricing.get("vat_account"),
+            "item_tax_template": pricing.get("item_tax_template"),
+            "vat_source": pricing.get("vat_source"),
+            "net_return_amount": qty * expected_rate,
+            "tax_amount": qty * expected_rate * flt(pricing.get("vat_rate")) / 100.0 if cint(pricing.get("is_vat_taxable")) else 0,
+            "return_amount": qty * expected_rate * (1.0 + flt(pricing.get("vat_rate")) / 100.0) if cint(pricing.get("is_vat_taxable")) else qty * expected_rate,
+            "approved_discount_percentage": 0,
+            "approved_pricing_input_mode": "Discount Percentage",
+            "approved_rate": 0,
+            "approved_net_amount": 0,
+            "approved_tax_amount": 0,
+            "approved_total_credit": 0,
             "return_reason": "Health Authority Recall",
             "notes": "",
         })
@@ -1087,11 +1660,15 @@ def get_batch_stock_for_recall(
         "expiry_date": batch.expiry_date,
         "disabled": cint(batch.disabled),
         "estimated_rate": expected_rate,
+        "pricing": pricing,
         "rows": rows,
     }
 
 
-def _validate_invoice_case_payload(payload: dict) -> None:
+def _validate_invoice_case_payload(
+    payload: dict,
+    exclude_purchase_return: str | None = None,
+) -> None:
     if payload.get("return_type") != "Return Against Invoice":
         return
     if not payload.get("original_purchase_invoice"):
@@ -1105,42 +1682,177 @@ def _validate_invoice_case_payload(payload: dict) -> None:
     if not selected:
         frappe.throw(_("Enter a return quantity for at least one item."))
     source = {row.name: row for row in invoice.items}
-    already = _returned_qty_by_original_item(invoice.name)
+    already = _returned_qty_by_original_item(
+        invoice.name,
+        exclude_purchase_return=exclude_purchase_return,
+    )
     for row in selected:
         original = source.get(row.original_purchase_invoice_item)
         if not original:
             frappe.throw(_("Invalid original invoice item in return rows."))
-        available = max(0.0, abs(flt(original.qty)) - flt(already.get(original.name)))
-        if flt(row.return_qty) > available + 0.000001:
-            frappe.throw(_("Return quantity for {0} cannot exceed the available quantity {1}.").format(frappe.bold(original.item_code), available))
+
+        limits = _invoice_return_stock_limits(
+            original,
+            flt(already.get(original.name)),
+        )
+        requested_qty = flt(row.return_qty)
+        if requested_qty > limits["invoice_returnable_qty"] + 0.000001:
+            frappe.throw(
+                _("Return quantity for {0} cannot exceed the invoice-returnable quantity {1}.").format(
+                    frappe.bold(original.item_code),
+                    limits["invoice_returnable_qty"],
+                )
+            )
+        if requested_qty > limits["physical_stock_qty"] + 0.000001:
+            stock_reference = (
+                _("batch {0} in warehouse {1}").format(
+                    frappe.bold(limits["batch_no"]),
+                    frappe.bold(limits["warehouse"]),
+                )
+                if limits["batch_no"]
+                else _("warehouse {0}").format(frappe.bold(limits["warehouse"]))
+            )
+            frappe.throw(
+                _(
+                    "Return quantity for item {0} cannot exceed the current physical stock {1} in {2}. "
+                    "Choose stock that is physically available, use the warehouse that actually holds it, "
+                    "or correct the stock ledger before creating the Purchase Return."
+                ).format(
+                    frappe.bold(original.item_code),
+                    limits["physical_stock_qty"],
+                    stock_reference,
+                )
+            )
         if not row.get("return_reason"):
             frappe.throw(_("Select a return reason for item {0}.").format(frappe.bold(original.item_code)))
 
 
+def _normalize_payload_row_pricing(
+    payload: dict,
+    row: frappe._dict,
+    invoice=None,
+    invoice_row=None,
+) -> frappe._dict:
+    return_type = payload.get("return_type") or "Return Against Invoice"
+
+    if return_type == "Return Against Invoice":
+        if not invoice or not invoice_row:
+            frappe.throw(_("Original Purchase Invoice pricing could not be resolved."))
+        source = _pricing_from_purchase_invoice_row(invoice, invoice_row)
+        base_rate = source["base_rate"]
+        discount_percentage = source["discount_percentage"]
+        pricing_input_mode = source["pricing_input_mode"]
+        net_rate = source["rate"]
+        vat = {
+            key: source.get(key)
+            for key in (
+                "is_vat_taxable",
+                "vat_rate",
+                "vat_account",
+                "item_tax_template",
+                "vat_source",
+            )
+        }
+    else:
+        base_rate, discount_percentage, net_rate, pricing_input_mode = _pricing_pair(
+            row.get("base_rate"),
+            row.get("discount_percentage"),
+            row.get("rate"),
+            row.get("pricing_input_mode"),
+        )
+        vat = _trusted_row_vat(
+            row.get("item_code"),
+            row.get("batch_no"),
+            payload.get("company"),
+            payload.get("supplier"),
+        )
+
+    return_qty = max(0.0, flt(row.get("return_qty")))
+    vat_rate = flt(vat.get("vat_rate")) if cint(vat.get("is_vat_taxable")) else 0.0
+    net_return_amount = return_qty * net_rate
+    tax_amount = net_return_amount * vat_rate / 100.0
+    return_amount = net_return_amount + tax_amount
+
+    accepted_qty = max(0.0, flt(row.get("accepted_qty")))
+    approved_input_present = (
+        accepted_qty > 0
+        or flt(row.get("approved_rate")) > 0
+        or flt(row.get("approved_discount_percentage")) > 0
+    )
+    if approved_input_present:
+        approved_rate_input = flt(row.get("approved_rate"))
+        approved_discount_input = flt(row.get("approved_discount_percentage"))
+        approved_mode_input = row.get("approved_pricing_input_mode")
+        if accepted_qty > 0 and approved_rate_input <= 0 and approved_discount_input <= 0:
+            approved_rate_input = net_rate
+            approved_discount_input = discount_percentage
+            approved_mode_input = "Net Unit Value"
+        _, approved_discount, approved_rate, approved_mode = _pricing_pair(
+            base_rate,
+            approved_discount_input,
+            approved_rate_input,
+            approved_mode_input,
+        )
+    else:
+        approved_discount = 0.0
+        approved_rate = 0.0
+        approved_mode = "Discount Percentage"
+    approved_net_amount = accepted_qty * approved_rate
+    approved_tax_amount = approved_net_amount * vat_rate / 100.0
+    approved_total_credit = approved_net_amount + approved_tax_amount
+
+    row.update(
+        {
+            "base_rate": base_rate,
+            "discount_percentage": discount_percentage,
+            "pricing_input_mode": pricing_input_mode,
+            "rate": net_rate,
+            "is_vat_taxable": cint(vat.get("is_vat_taxable")),
+            "vat_rate": vat_rate,
+            "vat_account": vat.get("vat_account"),
+            "item_tax_template": vat.get("item_tax_template"),
+            "vat_source": vat.get("vat_source"),
+            "net_return_amount": net_return_amount,
+            "tax_amount": tax_amount,
+            "return_amount": return_amount,
+            "approved_discount_percentage": approved_discount,
+            "approved_pricing_input_mode": approved_mode,
+            "approved_rate": approved_rate,
+            "approved_net_amount": approved_net_amount,
+            "approved_tax_amount": approved_tax_amount,
+            "approved_total_credit": approved_total_credit,
+            "accepted_amount": approved_total_credit,
+        }
+    )
+    return row
+
+
 def _validate_regulatory_case_payload(payload: dict, validate_source_stock: bool = True) -> None:
-    if payload.get("return_type") != "Regulatory Batch Recall":
+    if not _is_progressive_return_type(payload.get("return_type")):
         return
-    if not payload.get("authority_notification_no"):
-        frappe.throw(_("Enter the Authority Notification Number."))
-    if not payload.get("authority_notification_date"):
-        frappe.throw(_("Enter the Authority Notification Date."))
+    is_regulatory = payload.get("return_type") == "Regulatory Batch Recall"
+    if is_regulatory:
+        if not payload.get("authority_notification_no"):
+            frappe.throw(_("Enter the Authority Notification Number."))
+        if not payload.get("authority_notification_date"):
+            frappe.throw(_("Enter the Authority Notification Date."))
     if not payload.get("recall_source_warehouse"):
         frappe.throw(_("Select the Source Warehouse."))
     quarantine = payload.get("recall_quarantine_warehouse")
     if not quarantine:
-        frappe.throw(_("Select the Recall Quarantine Warehouse."))
+        frappe.throw(_("Select the Quarantine / Expired Drugs Warehouse."))
     warehouse = frappe.db.get_value("Warehouse", quarantine, ["company", "is_group", "disabled"], as_dict=True)
     if not warehouse or warehouse.company != payload.get("company") or warehouse.is_group or warehouse.disabled:
         frappe.throw(_("Select an active quarantine warehouse for the same company."))
     selected = [frappe._dict(row) for row in (payload.get("items") or []) if flt(row.get("return_qty")) > 0]
     if not selected:
-        frappe.throw(_("Enter a recall quantity for at least one warehouse row."))
+        frappe.throw(_("Enter a return quantity for at least one warehouse row."))
 
     from erpnext.stock.doctype.batch.batch import get_batch_qty
 
     for row in selected:
         if row.warehouse != payload.get("recall_source_warehouse"):
-            frappe.throw(_("Recall row warehouse must match the selected Source Warehouse."))
+            frappe.throw(_("Return row warehouse must match the selected Source Warehouse."))
         if not row.batch_no or not frappe.db.exists("Batch", row.batch_no):
             frappe.throw(_("Select a valid Batch No for item {0}.").format(frappe.bold(row.item_code)))
         batch_item = frappe.db.get_value("Batch", row.batch_no, "item")
@@ -1157,7 +1869,7 @@ def _validate_regulatory_case_payload(payload: dict, validate_source_stock: bool
             ))
             if flt(row.return_qty) > current + 0.000001:
                 frappe.throw(
-                    _("Recall quantity for batch {0} in {1} cannot exceed current stock {2}.").format(
+                    _("Return quantity for batch {0} in {1} cannot exceed current stock {2}.").format(
                         frappe.bold(row.batch_no),
                         frappe.bold(row.warehouse),
                         current,
@@ -1177,6 +1889,20 @@ def _validate_regulatory_case_payload(payload: dict, validate_source_stock: bool
         accepted = flt(row.get("accepted_qty"))
         rejected = flt(row.get("rejected_qty"))
         approved_rate = flt(row.get("approved_rate"))
+        base_rate = flt(row.get("base_rate"))
+        discount_percentage = flt(row.get("discount_percentage"))
+        approved_discount = flt(row.get("approved_discount_percentage"))
+        net_rate = flt(row.get("rate"))
+        if base_rate < 0 or net_rate < 0:
+            frappe.throw(_("Return pricing cannot be negative."))
+        if discount_percentage < 0 or discount_percentage > 100:
+            frappe.throw(_("Discount Percentage must be between 0 and 100."))
+        if approved_discount < 0 or approved_discount > 100:
+            frappe.throw(_("Approved Discount Percentage must be between 0 and 100."))
+        if base_rate > 0 and net_rate > base_rate + 0.000001:
+            frappe.throw(_("Net Unit Value cannot exceed Base Price."))
+        if base_rate > 0 and approved_rate > base_rate + 0.000001:
+            frappe.throw(_("Approved Net Unit Value cannot exceed Base Price."))
         if accepted < 0 or rejected < 0 or approved_rate < 0:
             frappe.throw(_("Supplier response quantities and rate cannot be negative."))
         if accepted + rejected > delivered + 0.000001:
@@ -1200,7 +1926,7 @@ def _validate_regulatory_case_payload(payload: dict, validate_source_stock: bool
 
 
 def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
-    if doc.return_type != "Regulatory Batch Recall":
+    if not _is_progressive_return_type(doc.return_type):
         return
 
     quarantine_status = (
@@ -1224,10 +1950,10 @@ def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
 
     if quarantine_status == 1:
         if set(incoming) != set(existing):
-            frappe.throw(_("Recalled lines cannot be added or removed after the quarantine transfer is submitted."))
+            frappe.throw(_("Return lines cannot be added or removed after the quarantine transfer is submitted."))
         for key, old_row in existing.items():
             if abs(flt(incoming[key].return_qty) - flt(old_row.return_qty)) > 0.000001:
-                frappe.throw(_("Recall quantities cannot be changed after the quarantine transfer is submitted."))
+                frappe.throw(_("Return quantities cannot be changed after the quarantine transfer is submitted."))
 
     if handover_status == 1:
         for key, old_row in existing.items():
@@ -1249,7 +1975,16 @@ def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
             new_row = incoming.get(key)
             if not new_row:
                 frappe.throw(_("Supplier response lines cannot be removed while the Approved Debit Note exists."))
-            for fieldname in ("accepted_qty", "rejected_qty", "approved_rate", "rejection_reason"):
+            for fieldname in (
+                "accepted_qty",
+                "rejected_qty",
+                "approved_discount_percentage",
+                "approved_rate",
+                "approved_net_amount",
+                "approved_tax_amount",
+                "approved_total_credit",
+                "rejection_reason",
+            ):
                 old_value = old_row.get(fieldname) or ""
                 new_value = new_row.get(fieldname) or ""
                 if fieldname == "rejection_reason":
@@ -1276,10 +2011,12 @@ def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
             new_row = incoming.get(key)
             if not new_row:
                 frappe.throw(_("Supplier response lines cannot be removed after rejected stock is returned."))
+            # Once rejected stock has physically returned to quarantine, the supplier
+            # decision itself is final, but the next workflow stage (approved pricing)
+            # must remain editable until an Approved Debit Note exists.
             locked_fields = (
                 "accepted_qty",
                 "rejected_qty",
-                "approved_rate",
                 "rejection_reason",
             )
             for fieldname in locked_fields:
@@ -1310,7 +2047,17 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.authority_notification_attachment = payload.get("authority_notification_attachment") or None
     doc.recall_source_warehouse = payload.get("recall_source_warehouse") or None
     doc.recall_item_code = None
-    doc.recall_quarantine_warehouse = payload.get("recall_quarantine_warehouse") or None
+    default_quarantine_warehouse = (
+        _special_warehouses(doc.company).get(_progressive_quarantine_key(return_type))
+        if _is_progressive_return_type(return_type)
+        else None
+    )
+    doc.recall_quarantine_warehouse = (
+        payload.get("recall_quarantine_warehouse")
+        or doc.get("recall_quarantine_warehouse")
+        or default_quarantine_warehouse
+        or None
+    )
     doc.returns_with_supplier_warehouse = (
         payload.get("returns_with_supplier_warehouse")
         or doc.get("returns_with_supplier_warehouse")
@@ -1325,17 +2072,60 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.supplier_response_attachment = payload.get("supplier_response_attachment") or None
     doc.supplier_response_notes = payload.get("supplier_response_notes") or None
     doc.supplier_claim = payload.get("supplier_claim") or doc.get("supplier_claim") or None
+    doc.refund_posting_date = payload.get("refund_posting_date") or doc.get("refund_posting_date") or nowdate()
+    doc.refund_mode_of_payment = payload.get("refund_mode_of_payment") or doc.get("refund_mode_of_payment") or None
+    doc.refund_account = payload.get("refund_account") or doc.get("refund_account") or None
+    doc.refund_request_amount = flt(payload.get("refund_request_amount"))
+    doc.refund_reference_no = payload.get("refund_reference_no") or None
+    doc.refund_reference_date = payload.get("refund_reference_date") or None
+    doc.refund_notes = payload.get("refund_notes") or None
     doc.approved_debit_note_posting_date = (
         payload.get("approved_debit_note_posting_date")
         or doc.get("approved_debit_note_posting_date")
         or payload.get("supplier_response_date")
         or None
     )
+    invoice_doc = None
+    invoice_rows = {}
+    returned_by_original_item = {}
+    if return_type == "Return Against Invoice" and doc.original_purchase_invoice:
+        invoice_doc = frappe.get_doc("Purchase Invoice", doc.original_purchase_invoice)
+        invoice_rows = {row.name: row for row in invoice_doc.items}
+        returned_by_original_item = _returned_qty_by_original_item(
+            doc.original_purchase_invoice,
+            exclude_purchase_return=doc.get("purchase_return"),
+        )
+
     doc.set("items", [])
     for source in payload.get("items") or []:
         row = frappe._dict(source)
         if flt(row.return_qty) <= 0:
             continue
+        invoice_row = (
+            invoice_rows.get(row.get("original_purchase_invoice_item"))
+            if invoice_rows
+            else None
+        )
+        row = _normalize_payload_row_pricing(
+            payload,
+            row,
+            invoice=invoice_doc,
+            invoice_row=invoice_row,
+        )
+        if invoice_row:
+            limits = _invoice_return_stock_limits(
+                invoice_row,
+                flt(returned_by_original_item.get(invoice_row.name)),
+            )
+            row.warehouse = limits["warehouse"]
+            row.batch_no = limits["batch_no"]
+            row.original_qty = limits["original_qty"]
+            row.already_returned_qty = flt(
+                returned_by_original_item.get(invoice_row.name)
+            )
+            row.invoice_returnable_qty = limits["invoice_returnable_qty"]
+            row.physical_stock_qty = limits["physical_stock_qty"]
+            row.available_to_return_qty = limits["available_to_return_qty"]
         doc.append("items", {
             "original_purchase_invoice_item": row.get("original_purchase_invoice_item"),
             "item_code": row.item_code,
@@ -1346,26 +2136,46 @@ def _set_case_values(doc, payload: dict) -> None:
             "stock_uom": row.stock_uom,
             "original_qty": flt(row.original_qty),
             "already_returned_qty": flt(row.already_returned_qty),
+            "invoice_returnable_qty": flt(row.get("invoice_returnable_qty")),
+            "physical_stock_qty": flt(row.get("physical_stock_qty")),
             "available_to_return_qty": flt(row.available_to_return_qty),
-            "quarantine_warehouse": payload.get("recall_quarantine_warehouse") if return_type == "Regulatory Batch Recall" else row.get("quarantine_warehouse"),
+            "quarantine_warehouse": (
+                payload.get("recall_quarantine_warehouse")
+                if _is_progressive_return_type(return_type)
+                else row.get("quarantine_warehouse")
+            ),
             "return_qty": flt(row.return_qty),
             "stock_valuation_rate": flt(row.get("stock_valuation_rate")),
             "stock_value": flt(row.return_qty) * flt(row.get("stock_valuation_rate")),
+            "base_rate": flt(row.get("base_rate")),
+            "discount_percentage": flt(row.get("discount_percentage")),
+            "pricing_input_mode": row.get("pricing_input_mode") or "Discount Percentage",
             "rate": flt(row.rate),
+            "is_vat_taxable": cint(row.get("is_vat_taxable")),
+            "vat_rate": flt(row.get("vat_rate")),
+            "vat_account": row.get("vat_account"),
+            "item_tax_template": row.get("item_tax_template"),
+            "vat_source": row.get("vat_source"),
+            "net_return_amount": flt(row.get("net_return_amount")),
             "tax_amount": flt(row.tax_amount),
-            "return_amount": flt(row.return_qty) * flt(row.rate),
-            "return_reason": "Health Authority Recall" if return_type == "Regulatory Batch Recall" else (row.return_reason or "Normal Return"),
+            "return_amount": flt(row.get("return_amount")),
+            "return_reason": _default_progressive_reason(return_type) if _is_progressive_return_type(return_type) else (row.return_reason or "Normal Return"),
             "delivered_qty": flt(row.get("delivered_qty")),
             "accepted_qty": flt(row.get("accepted_qty")),
             "rejected_qty": flt(row.get("rejected_qty")),
+            "approved_discount_percentage": flt(row.get("approved_discount_percentage")),
+            "approved_pricing_input_mode": row.get("approved_pricing_input_mode") or "Discount Percentage",
             "approved_rate": flt(row.get("approved_rate")),
-            "accepted_amount": flt(row.get("accepted_qty")) * flt(row.get("approved_rate")),
+            "approved_net_amount": flt(row.get("approved_net_amount")),
+            "approved_tax_amount": flt(row.get("approved_tax_amount")),
+            "approved_total_credit": flt(row.get("approved_total_credit")),
+            "accepted_amount": flt(row.get("approved_total_credit")),
             "rejection_reason": row.get("rejection_reason") or "",
             "rejected_returned_qty": flt(row.get("rejected_returned_qty")),
             "notes": row.notes or "",
         })
 
-    if return_type == "Regulatory Batch Recall":
+    if _is_progressive_return_type(return_type):
         unique_items = sorted({row.item_code for row in doc.items if row.item_code})
         doc.recall_item_code = unique_items[0] if len(unique_items) == 1 else None
 
@@ -1408,7 +2218,10 @@ def save_case(payload):
         if not payload.get("supplier_response_reference"):
             frappe.throw(_("Enter the Supplier Response Reference."))
 
-    _validate_invoice_case_payload(payload)
+    _validate_invoice_case_payload(
+        payload,
+        exclude_purchase_return=(doc.purchase_return if doc else None),
+    )
     _validate_regulatory_case_payload(
         payload,
         validate_source_stock=not quarantine_submitted,
@@ -1447,12 +2260,38 @@ def _supplier_handover_schema_requirements():
             "settlement_status",
             "planned_claim_deduction_amount",
             "settled_amount",
+            "refund_posting_date",
+            "refund_mode_of_payment",
+            "refund_account",
+            "refund_request_amount",
+            "refund_reference_no",
+            "refund_reference_date",
+            "refund_payment_entry",
+            "refund_payment_entry_status",
+            "refund_entries_count",
+            "refund_notes",
         ),
         "Pharmacy Return Item": (
             "delivered_qty",
             "accepted_qty",
             "rejected_qty",
+            "invoice_returnable_qty",
+            "physical_stock_qty",
+            "base_rate",
+            "discount_percentage",
+            "pricing_input_mode",
+            "is_vat_taxable",
+            "vat_rate",
+            "vat_source",
+            "vat_account",
+            "item_tax_template",
+            "net_return_amount",
+            "approved_discount_percentage",
+            "approved_pricing_input_mode",
             "approved_rate",
+            "approved_net_amount",
+            "approved_tax_amount",
+            "approved_total_credit",
             "rejection_reason",
             "rejected_returned_qty",
         ),
@@ -1573,6 +2412,23 @@ def verify_supplier_handover_schema():
 def get_case(name: str):
     _require_read()
     doc = frappe.get_doc("Pharmacy Return Case", name)
+    if doc.get("purchase_return") and not frappe.db.exists(
+        "Purchase Invoice", doc.get("purchase_return")
+    ):
+        doc.db_set("purchase_return", None, update_modified=False)
+        doc.purchase_return = None
+        if doc.operational_status == "Purchase Return Draft Created":
+            doc.db_set("operational_status", "Under Review", update_modified=False)
+            doc.operational_status = "Under Review"
+    purchase_return_details = (
+        frappe.db.get_value(
+            "Purchase Invoice",
+            doc.get("purchase_return"),
+            ["docstatus", "status", "is_return"],
+            as_dict=True,
+        )
+        if doc.get("purchase_return") else None
+    )
     _sync_case_operational_status(doc)
     _sync_supplier_claim_settlement(doc)
     quarantine_docstatus = (
@@ -1591,6 +2447,8 @@ def get_case(name: str):
         )
         if doc.get("rejection_return_stock_entry") else None
     )
+    refund_payments = _get_case_refund_payment_entries(doc.name)
+    latest_refund_payment = refund_payments[-1] if refund_payments else None
     debit_note_details = (
         frappe.db.get_value(
             "Purchase Invoice",
@@ -1607,11 +2465,63 @@ def get_case(name: str):
         )
         if doc.get("approved_debit_note") else None
     )
+    returned_by_original_item = (
+        _returned_qty_by_original_item(doc.original_purchase_invoice)
+        if doc.return_type == "Return Against Invoice" and doc.original_purchase_invoice
+        else {}
+    )
+    source_invoice = (
+        frappe.get_doc("Purchase Invoice", doc.original_purchase_invoice)
+        if doc.return_type == "Return Against Invoice" and doc.original_purchase_invoice
+        else None
+    )
+    source_invoice_rows = (
+        {row.name: row for row in source_invoice.items}
+        if source_invoice
+        else {}
+    )
     item_rows = []
     for row in doc.items:
         values = row.as_dict()
+        if doc.return_type == "Return Against Invoice":
+            original_item = values.get("original_purchase_invoice_item")
+            original_row = source_invoice_rows.get(original_item)
+            already_returned = flt(
+                returned_by_original_item.get(
+                    original_item,
+                    values.get("already_returned_qty"),
+                )
+            )
+            if original_row:
+                limits = _invoice_return_stock_limits(
+                    original_row,
+                    already_returned,
+                )
+                values["warehouse"] = limits["warehouse"]
+                values["batch_no"] = limits["batch_no"]
+                values["original_qty"] = limits["original_qty"]
+                values["already_returned_qty"] = already_returned
+                values["invoice_returnable_qty"] = limits["invoice_returnable_qty"]
+                values["physical_stock_qty"] = limits["physical_stock_qty"]
+                values["available_to_return_qty"] = limits["available_to_return_qty"]
+                if not doc.purchase_return:
+                    values["return_qty"] = min(
+                        flt(values.get("return_qty")),
+                        limits["available_to_return_qty"],
+                    )
+        values = _normalize_payload_row_pricing(
+            {
+                "return_type": doc.return_type,
+                "company": doc.company,
+            },
+            frappe._dict(values),
+            invoice=source_invoice,
+            invoice_row=source_invoice_rows.get(
+                values.get("original_purchase_invoice_item")
+            ),
+        )
         if (
-            doc.return_type == "Regulatory Batch Recall"
+            _is_progressive_return_type(doc.return_type)
             and quarantine_docstatus == 1
             and handover_docstatus != 1
             and flt(values.get("delivered_qty")) <= 0
@@ -1627,6 +2537,8 @@ def get_case(name: str):
         "supplier": doc.supplier,
         "original_purchase_invoice": doc.original_purchase_invoice,
         "purchase_return": doc.purchase_return,
+        "purchase_return_docstatus": purchase_return_details.docstatus if purchase_return_details else None,
+        "purchase_return_status": purchase_return_details.status if purchase_return_details else None,
         "quarantine_stock_entry": doc.quarantine_stock_entry,
         "handover_stock_entry": doc.get("handover_stock_entry"),
         "rejection_return_stock_entry": doc.get("rejection_return_stock_entry"),
@@ -1638,7 +2550,21 @@ def get_case(name: str):
         "approved_debit_note_outstanding": abs(flt(debit_note_details.outstanding_amount)) if debit_note_details else flt(doc.get("approved_debit_note_outstanding")),
         "approved_debit_note_update_stock": debit_note_details.update_stock if debit_note_details else None,
         "supplier_claim": doc.get("supplier_claim"),
+        "refund_posting_date": doc.get("refund_posting_date"),
+        "refund_mode_of_payment": doc.get("refund_mode_of_payment"),
+        "refund_account": doc.get("refund_account"),
+        "refund_request_amount": flt(doc.get("refund_request_amount")),
+        "refund_reference_no": doc.get("refund_reference_no"),
+        "refund_reference_date": doc.get("refund_reference_date"),
+        "refund_payment_entry": doc.get("refund_payment_entry"),
+        "refund_payment_entry_status": doc.get("refund_payment_entry_status"),
+        "refund_entries_count": cint(doc.get("refund_entries_count")),
+        "refund_notes": doc.get("refund_notes"),
+        "refund_payments": refund_payments,
+        "has_open_refund_draft": any(row.docstatus == 0 for row in refund_payments),
         "settlement_status": doc.get("settlement_status"),
+        "claim_utilization_status": doc.get("claim_utilization_status") or "Not Applied",
+        "claim_settlement_date": doc.get("claim_settlement_date"),
         "planned_claim_deduction_amount": flt(doc.get("planned_claim_deduction_amount")),
         "claim_deduction_amount": flt(doc.claim_deduction_amount),
         "refund_amount": flt(doc.refund_amount),
@@ -1689,6 +2615,74 @@ def _match_mapped_item(mapped, case_row):
             return row
     candidates = [row for row in mapped.items if row.item_code == case_row.item_code and (not case_row.warehouse or row.warehouse == case_row.warehouse)]
     return candidates[0] if len(candidates) == 1 else None
+
+
+@frappe.whitelist()
+def delete_purchase_return_draft(case_name: str):
+    """Safely unlink and delete a draft Purchase Return created by this page.
+
+    Frappe correctly blocks deleting a Purchase Invoice while a Pharmacy Return
+    Case still links to it. This method validates both documents, clears the
+    case link inside the same transaction, then deletes only a Draft return.
+    Submitted or cancelled accounting documents are never deleted here.
+    """
+    _require_read()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    if not frappe.has_permission("Pharmacy Return Case", "write", doc=case):
+        frappe.throw(
+            _("You are not permitted to update Pharmacy Return Case {0}.").format(
+                frappe.bold(case.name)
+            ),
+            frappe.PermissionError,
+        )
+
+    purchase_return = case.get("purchase_return")
+    if not purchase_return:
+        return {"case": case.name, "deleted": 0, "purchase_return": None}
+
+    if not frappe.db.exists("Purchase Invoice", purchase_return):
+        case.db_set("purchase_return", None, update_modified=False)
+        if case.operational_status == "Purchase Return Draft Created":
+            case.db_set("operational_status", "Under Review", update_modified=False)
+        return {"case": case.name, "deleted": 0, "purchase_return": purchase_return}
+
+    return_doc = frappe.get_doc("Purchase Invoice", purchase_return)
+    if return_doc.docstatus != 0:
+        frappe.throw(
+            _("Only a Draft Purchase Return can be deleted. {0} has status {1}.").format(
+                frappe.bold(return_doc.name),
+                frappe.bold(return_doc.status or return_doc.docstatus),
+            )
+        )
+    if not cint(return_doc.get("is_return")):
+        frappe.throw(_("Linked Purchase Invoice {0} is not a return document.").format(frappe.bold(return_doc.name)))
+    if return_doc.get("return_against") and return_doc.get("return_against") != case.original_purchase_invoice:
+        frappe.throw(_("Purchase Return {0} is linked to a different original invoice.").format(frappe.bold(return_doc.name)))
+    if return_doc.meta.has_field("custom_pharmacy_return_case"):
+        linked_case = return_doc.get("custom_pharmacy_return_case")
+        if linked_case and linked_case != case.name:
+            frappe.throw(_("Purchase Return {0} belongs to another Pharmacy Return Case.").format(frappe.bold(return_doc.name)))
+    if not frappe.has_permission("Purchase Invoice", "delete", doc=return_doc):
+        frappe.throw(
+            _("You are not permitted to delete Draft Purchase Return {0}.").format(
+                frappe.bold(return_doc.name)
+            ),
+            frappe.PermissionError,
+        )
+
+    # Clear the incoming Link first; otherwise Frappe's link protection blocks
+    # deletion. Both operations are part of one request/transaction.
+    case.db_set("purchase_return", None, update_modified=False)
+    if case.operational_status == "Purchase Return Draft Created":
+        case.db_set("operational_status", "Under Review", update_modified=False)
+    frappe.delete_doc("Purchase Invoice", return_doc.name)
+
+    return {
+        "case": case.name,
+        "deleted": 1,
+        "purchase_return": return_doc.name,
+        "operational_status": "Under Review",
+    }
 
 
 @frappe.whitelist()
@@ -1746,6 +2740,36 @@ def create_purchase_return_draft(case_name: str):
             mapped_row.serial_and_batch_bundle = None
         if mapped_row.meta.has_field("use_serial_batch_fields") and case_row.batch_no:
             mapped_row.use_serial_batch_fields = 1
+
+        # Do not copy malformed historical Select values such as
+        # ``Auto by VAT %/%`` into the new Purchase Return. The return-case
+        # row contains the trusted VAT classification resolved from the
+        # original Purchase Invoice / item tax setup.
+        taxable = bool(
+            cint(case_row.get("is_vat_taxable"))
+            and flt(case_row.get("vat_rate")) > 0
+        )
+        if mapped_row.meta.has_field("custom_tax_entry_mode"):
+            mapped_row.custom_tax_entry_mode = (
+                _normalize_purchase_invoice_vat_entry_mode(
+                    mapped_row.get("custom_tax_entry_mode"),
+                    taxable=taxable,
+                )
+                if taxable
+                else "No VAT"
+            )
+        if mapped_row.meta.has_field("custom_vat_rate"):
+            mapped_row.custom_vat_rate = (
+                max(0.0, flt(case_row.get("vat_rate"))) if taxable else 0.0
+            )
+        if mapped_row.meta.has_field("custom_vat_per_unit"):
+            mapped_row.custom_vat_per_unit = (
+                abs(flt(case_row.get("tax_amount")))
+                / max(abs(flt(case_row.get("return_qty"))), 0.000001)
+                if taxable
+                else 0.0
+            )
+
         new_items.append(mapped_row)
     mapped.set("items", new_items)
 
@@ -1765,8 +2789,8 @@ def create_quarantine_transfer_draft(case_name: str):
     if not frappe.has_permission("Stock Entry", "create"):
         frappe.throw(_("You are not permitted to create Stock Entries."), frappe.PermissionError)
     case = frappe.get_doc("Pharmacy Return Case", case_name)
-    if case.return_type != "Regulatory Batch Recall":
-        frappe.throw(_("This action is only for Regulatory Batch Recall cases."))
+    if not _is_progressive_return_type(case.return_type):
+        frappe.throw(_("This action is only for progressive Recall / Expired return cases."))
     _sync_case_operational_status(case)
     if case.quarantine_stock_entry:
         if frappe.db.exists("Stock Entry", case.quarantine_stock_entry):
@@ -1792,7 +2816,8 @@ def create_quarantine_transfer_draft(case_name: str):
     stock_entry.posting_date = case.posting_date or nowdate()
     stock_entry.set_posting_time = 0
     stock_entry.to_warehouse = case.recall_quarantine_warehouse
-    stock_entry.remarks = _("Regulatory batch recall quarantine transfer for Pharmacy Return Case {0}. Authority notice: {1}").format(case.name, case.authority_notification_no)
+    reference = case.authority_notification_no if case.return_type == "Regulatory Batch Recall" else case.name
+    stock_entry.remarks = _("{0} quarantine transfer for Pharmacy Return Case {1}. Reference: {2}").format(case.return_type, case.name, reference)
 
     for row in case.items:
         qty = flt(row.return_qty)
@@ -1829,8 +2854,8 @@ def create_supplier_handover_draft(case_name: str):
         frappe.throw(_("You are not permitted to create Stock Entries."), frappe.PermissionError)
 
     case = frappe.get_doc("Pharmacy Return Case", case_name)
-    if case.return_type != "Regulatory Batch Recall":
-        frappe.throw(_("Supplier handover is only available for Regulatory Batch Recall cases."))
+    if not _is_progressive_return_type(case.return_type):
+        frappe.throw(_("Supplier handover is only available for progressive Recall / Expired return cases."))
 
     _sync_case_operational_status(case)
 
@@ -1889,8 +2914,8 @@ def create_supplier_handover_draft(case_name: str):
     stock_entry.to_warehouse = case.get("returns_with_supplier_warehouse")
     stock_entry.remarks = _(
         "Supplier handover for Pharmacy Return Case {0}. "
-        "Authority notice: {1}. Receipt: {2}"
-    ).format(case.name, case.authority_notification_no, case.handover_reference)
+        "Case type: {1}. Receipt: {2}"
+    ).format(case.name, case.return_type, case.handover_reference)
 
     total_delivered = 0.0
     for row in selected:
@@ -1958,7 +2983,7 @@ def create_rejected_quantity_return_draft(case_name: str):
         frappe.throw(_("You are not permitted to create Stock Entries."), frappe.PermissionError)
 
     case = frappe.get_doc("Pharmacy Return Case", case_name)
-    if case.return_type != "Regulatory Batch Recall":
+    if not _is_progressive_return_type(case.return_type):
         frappe.throw(_("Rejected quantity return is only available for Regulatory Batch Recall cases."))
 
     _sync_case_operational_status(case)
@@ -2099,8 +3124,8 @@ def create_approved_debit_note_draft(case_name: str):
         frappe.throw(_("You are not permitted to create Purchase Debit Notes."), frappe.PermissionError)
 
     case = frappe.get_doc("Pharmacy Return Case", case_name)
-    if case.return_type != "Regulatory Batch Recall":
-        frappe.throw(_("Approved Debit Note is only available for Regulatory Batch Recall cases."))
+    if not _is_progressive_return_type(case.return_type):
+        frappe.throw(_("Approved Debit Note is only available for progressive Recall / Expired return cases."))
 
     _sync_case_operational_status(case)
 
@@ -2217,11 +3242,11 @@ def create_approved_debit_note_draft(case_name: str):
     debit_note.return_against = None
     debit_note.remarks = _(
         "Approved supplier debit note for Pharmacy Return Case {0}. "
-        "Authority notice: {1}. Supplier response: {2}. "
+        "Case type: {1}. Supplier response: {2}. "
         "Accepted stock is issued from {3}."
     ).format(
         case.name,
-        case.authority_notification_no or "-",
+        case.return_type,
         case.get("supplier_response_reference") or "-",
         source_warehouse,
     )
@@ -2238,6 +3263,8 @@ def create_approved_debit_note_draft(case_name: str):
                 "received_qty": qty,
                 "stock_qty": qty,
                 "rate": flt(case_row.approved_rate),
+                "price_list_rate": flt(case_row.base_rate) or flt(case_row.approved_rate),
+                "discount_percentage": flt(case_row.approved_discount_percentage),
                 "uom": case_row.stock_uom,
                 "stock_uom": case_row.stock_uom,
                 "conversion_factor": 1,
@@ -2250,12 +3277,51 @@ def create_approved_debit_note_draft(case_name: str):
 
     debit_note.run_method("set_missing_values")
 
-    # The supplier-approved rates are final values for this workflow.
-    # Do not load supplier tax templates or pricing rules on top of them.
+    # Supplier-approved prices are final. VAT is added only for rows that the
+    # item/original purchasing setup identifies as VAT taxable.
     debit_note.taxes_and_charges = None
     debit_note.set("taxes", [])
     debit_note.apply_tds = 0
     debit_note.tax_withholding_category = None
+
+    vat_accounts = {}
+    resolved_row_vat_accounts = {}
+    for case_row in selected_rows:
+        if not cint(case_row.get("is_vat_taxable")) or flt(case_row.get("vat_rate")) <= 0:
+            continue
+        account = case_row.get("vat_account")
+        if not account and case_row.get("item_tax_template"):
+            template_vat = _vat_from_item_tax_template(
+                case_row.get("item_tax_template"),
+                case.company,
+            )
+            account = template_vat.get("vat_account")
+        if not account:
+            frappe.throw(
+                _(
+                    "VAT Account could not be resolved for taxable item {0}. "
+                    "Set an Item Tax Template or use a prior Purchase Invoice with VAT."
+                ).format(frappe.bold(case_row.item_code))
+            )
+        resolved_row_vat_accounts[case_row.name] = account
+        vat_accounts[account] = max(
+            flt(vat_accounts.get(account)),
+            flt(case_row.get("vat_rate")),
+        )
+
+    for account, default_rate in vat_accounts.items():
+        debit_note.append(
+            "taxes",
+            {
+                "charge_type": "On Net Total",
+                "account_head": account,
+                "description": account,
+                "rate": default_rate,
+                "category": "Total",
+                "add_deduct_tax": "Add",
+                "included_in_print_rate": 0,
+            },
+        )
 
     for invoice_row, case_row in zip(debit_note.items, selected_rows):
         qty = -abs(flt(case_row.accepted_qty))
@@ -2264,8 +3330,8 @@ def create_approved_debit_note_draft(case_name: str):
         invoice_row.conversion_factor = 1
         invoice_row.stock_qty = qty
         invoice_row.rate = flt(case_row.approved_rate)
-        invoice_row.price_list_rate = flt(case_row.approved_rate)
-        invoice_row.discount_percentage = 0
+        invoice_row.price_list_rate = flt(case_row.base_rate) or flt(case_row.approved_rate)
+        invoice_row.discount_percentage = flt(case_row.approved_discount_percentage)
         invoice_row.discount_amount = 0
         invoice_row.warehouse = source_warehouse
         invoice_row.batch_no = case_row.batch_no
@@ -2273,13 +3339,22 @@ def create_approved_debit_note_draft(case_name: str):
             invoice_row.serial_and_batch_bundle = None
         if invoice_row.meta.has_field("use_serial_batch_fields"):
             invoice_row.use_serial_batch_fields = 1
+        if invoice_row.meta.has_field("item_tax_template"):
+            invoice_row.item_tax_template = case_row.get("item_tax_template") or None
+        if invoice_row.meta.has_field("item_tax_rate") and vat_accounts:
+            item_rates = {}
+            for account in vat_accounts:
+                item_rates[account] = (
+                    flt(case_row.get("vat_rate"))
+                    if cint(case_row.get("is_vat_taxable"))
+                    and account == resolved_row_vat_accounts.get(case_row.name)
+                    else 0.0
+                )
+            invoice_row.item_tax_rate = frappe.as_json(item_rates)
 
     debit_note.run_method("calculate_taxes_and_totals")
 
-    expected_value = sum(
-        flt(row.accepted_qty) * flt(row.approved_rate)
-        for row in accepted_rows
-    )
+    expected_value = sum(flt(row.get("approved_total_credit")) for row in accepted_rows)
     actual_value = abs(flt(debit_note.grand_total))
     if abs(actual_value - expected_value) > 0.01:
         frappe.throw(
@@ -2321,8 +3396,8 @@ def create_or_link_supplier_claim_deduction(case_name: str, supplier_claim: str 
     if not frappe.has_permission("Supplier Claim", "create"):
         frappe.throw(_("You are not permitted to create Supplier Claims."), frappe.PermissionError)
     case=frappe.get_doc("Pharmacy Return Case",case_name)
-    if case.return_type != "Regulatory Batch Recall":
-        frappe.throw(_("Supplier Claim deduction is only available for Regulatory Batch Recall cases."))
+    if not _is_progressive_return_type(case.return_type):
+        frappe.throw(_("Supplier Claim deduction is only available for progressive Recall / Expired return cases."))
     _sync_case_operational_status(case); _sync_supplier_claim_settlement(case)
     debit_note=case.get("approved_debit_note")
     if not debit_note:
@@ -2367,6 +3442,238 @@ def create_or_link_supplier_claim_deduction(case_name: str, supplier_claim: str 
     case.operational_status="Claim Deduction Draft Created"
     case.save(ignore_permissions=True)
     return {"case":case.name,"supplier_claim":claim.name,"planned_deduction":deduction,"system_claim_total":flt(claim.system_claim_total),"already_exists":0,"docstatus":claim.docstatus}
+
+
+@frappe.whitelist()
+def create_supplier_refund_payment_draft(
+    case_name: str,
+    amount,
+    posting_date,
+    mode_of_payment,
+    refund_account,
+    reference_no: str | None = None,
+    reference_date: str | None = None,
+    notes: str | None = None,
+):
+    _require_create()
+    verify_supplier_handover_schema()
+
+    if not frappe.has_permission("Payment Entry", "create"):
+        frappe.throw(
+            _("You are not permitted to create Payment Entries."),
+            frappe.PermissionError,
+        )
+
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    _sync_supplier_claim_settlement(case)
+
+    settlement_document = _case_settlement_document(case)
+    if not settlement_document:
+        frappe.throw(
+            _("A submitted Purchase Return / Approved Debit Note is required.")
+        )
+
+    note = frappe.db.get_value(
+        "Purchase Invoice",
+        settlement_document,
+        [
+            "docstatus",
+            "is_return",
+            "company",
+            "supplier",
+            "outstanding_amount",
+            "grand_total",
+        ],
+        as_dict=True,
+    )
+    if not note or note.docstatus != 1 or not note.is_return:
+        frappe.throw(
+            _("Submit the Purchase Return / Approved Debit Note first.")
+        )
+    if note.company != case.company or note.supplier != case.supplier:
+        frappe.throw(
+            _("The settlement document belongs to another company or supplier.")
+        )
+
+    amount = flt(amount)
+    remaining = flt(case.remaining_settlement_amount)
+    if remaining <= 0.01:
+        frappe.throw(_("This return case is already fully settled."))
+    if amount <= 0:
+        frappe.throw(_("Refund Amount to Receive must be greater than zero."))
+    if amount > remaining + 0.01:
+        frappe.throw(
+            _("Refund amount {0} cannot exceed remaining settlement {1}.").format(
+                amount,
+                remaining,
+            )
+        )
+
+    existing_drafts = [
+        row
+        for row in _get_case_refund_payment_entries(case.name)
+        if row.docstatus == 0
+    ]
+    if existing_drafts:
+        return {
+            "case": case.name,
+            "payment_entry": existing_drafts[-1].name,
+            "already_exists": 1,
+            "amount": _refund_entry_amount(existing_drafts[-1]),
+        }
+
+    account = frappe.db.get_value(
+        "Account",
+        refund_account,
+        [
+            "company",
+            "is_group",
+            "disabled",
+            "account_type",
+            "account_currency",
+        ],
+        as_dict=True,
+    )
+    if (
+        not account
+        or account.company != case.company
+        or account.is_group
+        or account.disabled
+        or account.account_type not in ("Bank", "Cash")
+    ):
+        frappe.throw(
+            _("Select an active Bank or Cash account for the same company.")
+        )
+
+    if not mode_of_payment or not frappe.db.exists(
+        "Mode of Payment",
+        mode_of_payment,
+    ):
+        frappe.throw(_("Select a valid Refund Mode of Payment."))
+
+    if account.account_type == "Bank":
+        if not reference_no:
+            frappe.throw(
+                _("Transaction Reference is required for a Bank refund.")
+            )
+        if not reference_date:
+            frappe.throw(
+                _("Reference Date is required for a Bank refund.")
+            )
+
+    from erpnext.accounts.doctype.payment_entry.payment_entry import (
+        get_payment_entry,
+    )
+
+    payment_entry = get_payment_entry(
+        "Purchase Invoice",
+        settlement_document,
+        party_amount=-abs(amount),
+        bank_account=refund_account,
+        payment_type="Receive",
+        reference_date=reference_date or posting_date,
+    )
+
+    payment_entry.payment_type = "Receive"
+    payment_entry.posting_date = posting_date or nowdate()
+    payment_entry.mode_of_payment = mode_of_payment
+    payment_entry.paid_to = refund_account
+    payment_entry.reference_no = reference_no or case.name
+    payment_entry.reference_date = reference_date or posting_date or nowdate()
+    payment_entry.remarks = _(
+        "Supplier refund for Pharmacy Return Case {0} against {1}. {2}"
+    ).format(
+        case.name,
+        settlement_document,
+        notes or "",
+    )
+
+    payment_entry.paid_amount = abs(amount)
+    payment_entry.received_amount = abs(amount)
+    for row in payment_entry.references:
+        if (
+            row.reference_doctype == "Purchase Invoice"
+            and row.reference_name == settlement_document
+        ):
+            row.total_amount = -abs(flt(note.grand_total))
+            row.outstanding_amount = -abs(
+                flt(note.outstanding_amount) or flt(note.grand_total)
+            )
+            row.allocated_amount = -abs(amount)
+
+    payment_entry.custom_pharmacy_return_case = case.name
+    payment_entry.custom_supplier_refund_method = (
+        "Bank Refund"
+        if account.account_type == "Bank"
+        else "Cash Refund"
+    )
+    payment_entry.custom_supplier_refund_notes = notes or None
+    payment_entry.insert()
+
+    case.refund_posting_date = payment_entry.posting_date
+    case.refund_mode_of_payment = mode_of_payment
+    case.refund_account = refund_account
+    case.refund_reference_no = payment_entry.reference_no
+    case.refund_reference_date = payment_entry.reference_date
+    case.refund_payment_entry = payment_entry.name
+    case.refund_payment_entry_status = "Draft"
+    case.refund_request_amount = amount
+    case.refund_notes = notes or None
+    case.operational_status = "Refund Payment Draft Created"
+    case.settlement_status = (
+        "Mixed Settlement Draft"
+        if flt(case.claim_deduction_amount)
+        or flt(case.planned_claim_deduction_amount)
+        else "Refund Draft"
+    )
+    case.settlement_method = (
+        "Mixed Settlement"
+        if flt(case.claim_deduction_amount)
+        or flt(case.planned_claim_deduction_amount)
+        else "Cash / Bank Refund"
+    )
+    case.save(ignore_permissions=True)
+
+    return {
+        "case": case.name,
+        "payment_entry": payment_entry.name,
+        "amount": amount,
+        "payment_type": payment_entry.payment_type,
+        "paid_from": payment_entry.paid_from,
+        "paid_to": payment_entry.paid_to,
+        "settlement_document": settlement_document,
+        "already_exists": 0,
+    }
+
+
+@frappe.whitelist()
+def repair_all_return_case_refund_settlements():
+    repaired = []
+    cases = frappe.get_all(
+        "Pharmacy Return Case",
+        fields=["name"],
+        limit_page_length=0,
+    )
+    for row in cases:
+        doc = frappe.get_doc("Pharmacy Return Case", row.name)
+        if _case_settlement_base(doc) <= 0:
+            continue
+        _sync_supplier_claim_settlement(doc)
+        repaired.append(
+            {
+                "case": doc.name,
+                "refund_amount": flt(doc.refund_amount),
+                "claim_deduction": flt(doc.claim_deduction_amount),
+                "remaining": flt(doc.remaining_settlement_amount),
+                "settlement_status": doc.settlement_status,
+            }
+        )
+
+    frappe.db.commit()
+    return {
+        "repaired_count": len(repaired),
+        "repaired": repaired,
+    }
 
 
 @frappe.whitelist()

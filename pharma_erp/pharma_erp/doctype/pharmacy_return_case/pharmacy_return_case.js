@@ -35,6 +35,11 @@ frappe.ui.form.on("Pharmacy Return Case", {
                 frappe.set_route("Form", "Supplier Claim", frm.doc.supplier_claim);
             }, __("View"));
         }
+        if (frm.doc.refund_payment_entry) {
+            frm.add_custom_button(__("Supplier Refund Payment"), () => {
+                frappe.set_route("Form", "Payment Entry", frm.doc.refund_payment_entry);
+            }, __("View"));
+        }
         frm.add_custom_button(__("Returns Management"), () => frappe.set_route("purchase-returns-management"));
     },
     approved_return_value: calculate_settlement,

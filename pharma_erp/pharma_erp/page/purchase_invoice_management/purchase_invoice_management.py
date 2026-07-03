@@ -1608,6 +1608,12 @@ def save_draft(payload):
 
 
 def _validate_purchase_risk_before_submit(doc) -> None:
+    # Purchase-risk confirmation applies only when receiving/purchasing stock.
+    # A Purchase Return / Debit Note removes stock and must not be blocked by
+    # expiry or purchase-risk confirmation rules from the original purchase.
+    if cint(doc.get("is_return")):
+        return
+
     settings=get_purchase_settings()
     if not cint(settings.get("enable_purchase_risk_alerts")) or not cint(settings.get("require_risk_confirmation")):
         return

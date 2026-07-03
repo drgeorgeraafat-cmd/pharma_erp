@@ -16,12 +16,23 @@
   "qty_section",
   "original_qty",
   "already_returned_qty",
+  "invoice_returnable_qty",
+  "physical_stock_qty",
   "available_to_return_qty",
   "column_break_qty",
   "return_qty",
   "stock_valuation_rate",
   "stock_value",
+  "base_rate",
+  "discount_percentage",
+  "pricing_input_mode",
   "rate",
+  "is_vat_taxable",
+  "vat_rate",
+  "vat_source",
+  "vat_account",
+  "item_tax_template",
+  "net_return_amount",
   "tax_amount",
   "return_amount",
   "reason_section",
@@ -30,9 +41,14 @@
   "acceptance_section",
   "delivered_qty",
   "rejected_qty",
+  "approved_discount_percentage",
+  "approved_pricing_input_mode",
   "approved_rate",
-  "accepted_qty",
+  "approved_net_amount",
+  "approved_tax_amount",
+  "approved_total_credit",
   "accepted_amount",
+  "accepted_qty",
   "rejection_reason",
   "rejected_returned_qty"
  ],
@@ -107,6 +123,18 @@
    "read_only": 1
   },
   {
+   "fieldname": "invoice_returnable_qty",
+   "fieldtype": "Float",
+   "label": "Invoice Returnable Quantity",
+   "read_only": 1
+  },
+  {
+   "fieldname": "physical_stock_qty",
+   "fieldtype": "Float",
+   "label": "Physical Stock Quantity",
+   "read_only": 1
+  },
+  {
    "fieldname": "available_to_return_qty",
    "fieldtype": "Float",
    "label": "Available to Return",
@@ -151,19 +179,19 @@
   {
    "fieldname": "rate",
    "fieldtype": "Currency",
-   "label": "Rate",
+   "label": "Net Unit Value",
    "read_only": 1
   },
   {
    "fieldname": "tax_amount",
    "fieldtype": "Currency",
-   "label": "Original Tax Amount",
+   "label": "Requested VAT Amount",
    "read_only": 1
   },
   {
    "fieldname": "return_amount",
    "fieldtype": "Currency",
-   "label": "Return Value",
+   "label": "Requested Total Credit",
    "read_only": 1,
    "in_list_view": 1,
    "columns": 1
@@ -200,7 +228,7 @@
   {
    "fieldname": "accepted_amount",
    "fieldtype": "Currency",
-   "label": "Accepted Amount",
+   "label": "Accepted Total Credit",
    "read_only": 1
   },
   {
@@ -223,13 +251,107 @@
   {
    "fieldname": "approved_rate",
    "fieldtype": "Currency",
-   "label": "Approved Settlement Rate",
+   "label": "Approved Net Unit Value",
    "options": "Company:company:default_currency"
   },
   {
    "fieldname": "rejected_returned_qty",
    "fieldtype": "Float",
    "label": "Rejected Quantity Returned",
+   "read_only": 1
+  },
+  {
+   "fieldname": "base_rate",
+   "fieldtype": "Currency",
+   "label": "Base Price",
+   "read_only": 1,
+   "options": "Company:company:default_currency"
+  },
+  {
+   "fieldname": "discount_percentage",
+   "fieldtype": "Percent",
+   "label": "Discount %",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pricing_input_mode",
+   "fieldtype": "Select",
+   "label": "Pricing Input Mode",
+   "options": "Discount Percentage\nNet Unit Value",
+   "default": "Discount Percentage",
+   "hidden": 1
+  },
+  {
+   "fieldname": "is_vat_taxable",
+   "fieldtype": "Check",
+   "label": "VAT Taxable",
+   "read_only": 1,
+   "default": "0"
+  },
+  {
+   "fieldname": "vat_rate",
+   "fieldtype": "Percent",
+   "label": "VAT %",
+   "read_only": 1
+  },
+  {
+   "fieldname": "vat_source",
+   "fieldtype": "Data",
+   "label": "VAT Source",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "vat_account",
+   "fieldtype": "Link",
+   "label": "VAT Account",
+   "options": "Account",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "item_tax_template",
+   "fieldtype": "Link",
+   "label": "Item Tax Template",
+   "options": "Item Tax Template",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "net_return_amount",
+   "fieldtype": "Currency",
+   "label": "Requested Net Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_discount_percentage",
+   "fieldtype": "Percent",
+   "label": "Approved Discount %"
+  },
+  {
+   "fieldname": "approved_pricing_input_mode",
+   "fieldtype": "Select",
+   "label": "Approved Pricing Input Mode",
+   "options": "Discount Percentage\nNet Unit Value",
+   "default": "Discount Percentage",
+   "hidden": 1
+  },
+  {
+   "fieldname": "approved_net_amount",
+   "fieldtype": "Currency",
+   "label": "Approved Net Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_tax_amount",
+   "fieldtype": "Currency",
+   "label": "Approved VAT Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_total_credit",
+   "fieldtype": "Currency",
+   "label": "Approved Total Credit",
    "read_only": 1
   }
  ],

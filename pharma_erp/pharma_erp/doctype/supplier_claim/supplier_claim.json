@@ -26,8 +26,15 @@
   "net_amount_to_pay",
   "settlement_discount_amount",
   "settlement_discount_percentage",
+  "settlement_discount_account",
+  "settlement_discount_journal_entry",
   "payment_due_date",
   "payment_entry",
+  "accounting_settlement_section",
+  "accounting_settlement_status",
+  "accounting_settlement_date",
+  "accounting_reconciliation_journal_entries",
+  "accounting_settlement_details",
   "notes"
  ],
  "fields": [
@@ -162,6 +169,23 @@
    "read_only": 1
   },
   {
+   "fieldname": "settlement_discount_account",
+   "fieldtype": "Link",
+   "label": "Settlement Discount Account",
+   "options": "Account",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "settlement_discount_journal_entry",
+   "fieldtype": "Link",
+   "label": "Settlement Discount Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
+  },
+  {
    "fieldname": "payment_due_date",
    "fieldtype": "Date",
    "label": "Payment Due Date"
@@ -173,6 +197,43 @@
    "options": "Payment Entry",
    "read_only": 1,
    "allow_on_submit": 1
+  },
+  {
+   "fieldname": "accounting_settlement_section",
+   "fieldtype": "Section Break",
+   "label": "Accounting Settlement"
+  },
+  {
+   "fieldname": "accounting_settlement_status",
+   "fieldtype": "Select",
+   "label": "Accounting Settlement Status",
+   "options": "Pending\nNeeds Reconciliation\nReconciled\nReversal Required\nCancelled",
+   "default": "Pending",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "accounting_settlement_date",
+   "fieldtype": "Date",
+   "label": "Accounting Settlement Date",
+   "read_only": 1,
+   "allow_on_submit": 1
+  },
+  {
+   "fieldname": "accounting_reconciliation_journal_entries",
+   "fieldtype": "Small Text",
+   "label": "Return Reconciliation Journal Entries",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "accounting_settlement_details",
+   "fieldtype": "Small Text",
+   "label": "Accounting Settlement Verification",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "no_copy": 1
   },
   {
    "fieldname": "notes",
