@@ -265,6 +265,8 @@ def _sync_case_operational_status(doc) -> None:
                 "docstatus",
                 "status",
                 "grand_total",
+                "rounded_total",
+                "disable_rounded_total",
                 "outstanding_amount",
                 "is_return",
                 "update_stock",
@@ -319,8 +321,7 @@ def _sync_case_operational_status(doc) -> None:
             setattr(doc, fieldname, value)
 
     if debit_note:
-        note_amount = abs(flt(debit_note.grand_total))
-        note_outstanding = abs(flt(debit_note.outstanding_amount))
+        note_amount, note_outstanding = _return_invoice_total_and_outstanding(debit_note)
         note_status = debit_note.status or (
             "Draft" if debit_note.docstatus == 0
             else "Submitted" if debit_note.docstatus == 1
@@ -902,7 +903,7 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
                 frappe.db.get_value(
                     "Purchase Invoice",
                     row.get("approved_debit_note"),
-                    ["docstatus", "status", "grand_total", "outstanding_amount"],
+                    ["docstatus", "status", "grand_total", "rounded_total", "disable_rounded_total", "outstanding_amount"],
                     as_dict=True,
                 )
                 if row.get("approved_debit_note") else None
@@ -921,13 +922,15 @@ def _recent_cases(company: str | None, limit: int = 20) -> list[dict]:
             )
             if debit_note and debit_note.docstatus == 0:
                 row.operational_status = "Approved Debit Note Draft Created"
-                row.approved_debit_note_amount = abs(flt(debit_note.grand_total))
-                row.approved_debit_note_outstanding = abs(flt(debit_note.outstanding_amount))
+                note_amount, note_outstanding = _return_invoice_total_and_outstanding(debit_note)
+                row.approved_debit_note_amount = note_amount
+                row.approved_debit_note_outstanding = note_outstanding
                 row.approved_debit_note_status = debit_note.status or "Draft"
             elif debit_note and debit_note.docstatus == 1:
                 row.operational_status = "Approved Debit Note Submitted"
-                row.approved_debit_note_amount = abs(flt(debit_note.grand_total))
-                row.approved_debit_note_outstanding = abs(flt(debit_note.outstanding_amount))
+                note_amount, note_outstanding = _return_invoice_total_and_outstanding(debit_note)
+                row.approved_debit_note_amount = note_amount
+                row.approved_debit_note_outstanding = note_outstanding
                 row.approved_debit_note_status = debit_note.status or "Return"
             elif rejection_status == 0:
                 row.operational_status = "Rejection Return Draft Created"
@@ -2502,6 +2505,8 @@ def get_case(name: str):
                 "docstatus",
                 "status",
                 "grand_total",
+                "rounded_total",
+                "disable_rounded_total",
                 "outstanding_amount",
                 "is_return",
                 "update_stock",
@@ -2591,8 +2596,8 @@ def get_case(name: str):
         "approved_debit_note_posting_date": doc.get("approved_debit_note_posting_date"),
         "approved_debit_note_docstatus": debit_note_details.docstatus if debit_note_details else None,
         "approved_debit_note_status": debit_note_details.status if debit_note_details else doc.get("approved_debit_note_status"),
-        "approved_debit_note_amount": abs(flt(debit_note_details.grand_total)) if debit_note_details else flt(doc.get("approved_debit_note_amount")),
-        "approved_debit_note_outstanding": abs(flt(debit_note_details.outstanding_amount)) if debit_note_details else flt(doc.get("approved_debit_note_outstanding")),
+        "approved_debit_note_amount": _return_invoice_total_and_outstanding(debit_note_details)[0] if debit_note_details else flt(doc.get("approved_debit_note_amount")),
+        "approved_debit_note_outstanding": _return_invoice_total_and_outstanding(debit_note_details)[1] if debit_note_details else flt(doc.get("approved_debit_note_outstanding")),
         "approved_debit_note_update_stock": debit_note_details.update_stock if debit_note_details else None,
         "supplier_claim": doc.get("supplier_claim"),
         "refund_posting_date": doc.get("refund_posting_date"),
@@ -3421,7 +3426,7 @@ def create_approved_debit_note_draft(case_name: str):
     debit_note.run_method("calculate_taxes_and_totals")
 
     expected_value = sum(flt(row.get("approved_total_credit")) for row in accepted_rows)
-    actual_value = abs(flt(debit_note.grand_total))
+    actual_value, actual_outstanding = _return_invoice_total_and_outstanding(debit_note)
 
     # ERPNext may round VAT-inclusive discounted rates at invoice line precision,
     # causing a small 0.01 currency difference, e.g. expected 160.00 vs actual 160.01.
@@ -3443,6 +3448,11 @@ def create_approved_debit_note_draft(case_name: str):
     case.approved_debit_note = debit_note.name
     case.approved_debit_note_posting_date = debit_note.posting_date
     case.approved_debit_note_amount = actual_value
+    case.approved_debit_note_outstanding = actual_outstanding
+    case.remaining_settlement_amount = actual_outstanding or actual_value
+    case.approved_debit_note_outstanding = actual_outstanding
+    case.remaining_settlement_amount = actual_outstanding or actual_value
+    case.remaining_settlement_amount = actual_outstanding or actual_value
     case.approved_debit_note_outstanding = actual_value
     case.approved_debit_note_status = "Draft"
     case.accepted_stock_finalized_quantity = 0
@@ -3473,10 +3483,10 @@ def create_or_link_supplier_claim_deduction(case_name: str, supplier_claim: str 
     debit_note=case.get("approved_debit_note")
     if not debit_note:
         frappe.throw(_("Create and submit the Approved Supplier Debit Note first."))
-    note=frappe.db.get_value("Purchase Invoice",debit_note,["docstatus","company","supplier","posting_date","bill_no","bill_date","grand_total","outstanding_amount","is_return","status"],as_dict=True)
+    note=frappe.db.get_value("Purchase Invoice",debit_note,["docstatus","company","supplier","posting_date","bill_no","bill_date","grand_total","rounded_total","disable_rounded_total","outstanding_amount","is_return","status"],as_dict=True)
     if not note or note.docstatus != 1 or not note.is_return:
         frappe.throw(_("Submit the Approved Supplier Debit Note first."))
-    approved=flt(case.approved_return_value); deduction=abs(flt(note.grand_total))
+    approved=flt(case.approved_return_value); deduction, note_outstanding = _return_invoice_total_and_outstanding(note)
     if abs(deduction-approved)>0.01:
         frappe.throw(_("Debit Note amount {0} does not match Approved Return Value {1}.").format(deduction,approved))
     meta=frappe.get_meta("Purchase Invoice")
@@ -3770,3 +3780,27 @@ def repair_all_return_case_refund_settlements():
 def list_recent_cases(company: str | None = None, limit: int = 30):
     _require_read()
     return _recent_cases(company or _default_company(), limit)
+
+
+def _return_invoice_total_and_outstanding(note):
+    """Return accounting total and supplier outstanding using ERPNext rounding rules."""
+    from frappe.utils import cint as _cint
+
+    if isinstance(note, str):
+        note = frappe.db.get_value(
+            "Purchase Invoice",
+            note,
+            ["grand_total", "rounded_total", "disable_rounded_total", "outstanding_amount"],
+            as_dict=True,
+        ) or {}
+
+    grand_total = flt(note.get("grand_total"))
+    rounded_total = flt(note.get("rounded_total"))
+    disable_rounded_total = _cint(note.get("disable_rounded_total"))
+    outstanding_amount = flt(note.get("outstanding_amount"))
+
+    accounting_total = abs(grand_total) if disable_rounded_total else (abs(rounded_total) or abs(grand_total))
+    outstanding = abs(outstanding_amount)
+
+    return accounting_total, outstanding
+
