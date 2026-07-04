@@ -472,6 +472,28 @@ class PharmacyPurchaseReturnsManagement {
         return {base,discount,net,mode:inputMode};
     }
 
+    pricingPairVatAware(baseValue,discountValue,netValue,mode,vatRate,isVatTaxable){
+        let base=this.roundNumber(Math.max(0,flt(baseValue)),6);
+        let discount=this.clampDiscount(discountValue);
+        let net=this.roundNumber(Math.max(0,flt(netValue)),6);
+        const inputMode=["Discount Percentage","Net Unit Value"].includes(mode)?mode:"Discount Percentage";
+        const vat=this.roundNumber(Math.max(0,flt(vatRate)),6);
+        const vatFactor=cint(isVatTaxable)&&vat>0?this.roundNumber(1+(vat/100),6):1;
+        if(base<=0&&net>0)base=this.roundNumber(net*vatFactor,6);
+        if(inputMode==="Net Unit Value"){
+            if(base>0){
+                const maxNet=this.roundNumber(base/vatFactor,6);
+                net=this.roundNumber(Math.min(net,maxNet),6);
+                const grossEquivalent=this.roundNumber(net*vatFactor,6);
+                discount=this.clampDiscount(((base-grossEquivalent)/base)*100);
+            }else discount=0;
+        }else{
+            const grossAfterDiscount=this.roundNumber(base*(1-discount/100),6);
+            net=this.roundNumber(grossAfterDiscount/vatFactor,6);
+        }
+        return {base,discount,net,mode:inputMode};
+    }
+
     recalculateRow(row){
         const requested=this.pricingPair(row.base_rate,row.discount_percentage,row.rate,row.pricing_input_mode);
         row.base_rate=requested.base;
@@ -486,7 +508,7 @@ class PharmacyPurchaseReturnsManagement {
 
         const approvedEntered=flt(row.accepted_qty)>0||flt(row.approved_rate)>0||flt(row.approved_discount_percentage)>0;
         if(approvedEntered){
-            const approved=this.pricingPair(row.base_rate,row.approved_discount_percentage,row.approved_rate,row.approved_pricing_input_mode);
+            const approved=this.pricingPairVatAware(row.base_rate,row.approved_discount_percentage,row.approved_rate,row.approved_pricing_input_mode,row.vat_rate,row.is_vat_taxable);
             row.approved_discount_percentage=approved.discount;
             row.approved_rate=approved.net;
             row.approved_pricing_input_mode=approved.mode;
