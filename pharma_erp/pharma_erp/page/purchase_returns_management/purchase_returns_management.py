@@ -3450,9 +3450,6 @@ def create_approved_debit_note_draft(case_name: str):
     case.approved_debit_note_amount = actual_value
     case.approved_debit_note_outstanding = actual_outstanding
     case.remaining_settlement_amount = actual_outstanding or actual_value
-    case.approved_debit_note_outstanding = actual_outstanding
-    case.remaining_settlement_amount = actual_outstanding or actual_value
-    case.remaining_settlement_amount = actual_outstanding or actual_value
     case.approved_debit_note_outstanding = actual_value
     case.approved_debit_note_status = "Draft"
     case.accepted_stock_finalized_quantity = 0
