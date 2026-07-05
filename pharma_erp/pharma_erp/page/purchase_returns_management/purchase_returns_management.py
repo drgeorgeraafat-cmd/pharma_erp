@@ -14,11 +14,22 @@ READ_ROLES = {
     "Stock User", "Stock Manager", "System Manager",
 }
 SPECIAL_WAREHOUSE_NAMES = {
-    "recall": "Recall Quarantine",
-    "expired": "Expired Drugs",
-    "supplier": "Returns With Supplier",
+    "recall": ("Recall Quarantine",),
+    "expired": ("Expired Drugs",),
+    "supplier": ("Returns With Supplier",),
+    "disposal": ("Expired Disposal Warehouse", "Expired Disposal", "Destruction Warehouse"),
 }
 PROGRESSIVE_RETURN_TYPES = {"Regulatory Batch Recall", "Expired Drugs Return"}
+REJECTED_QTY_DESTINATIONS = (
+    "Return to Saleable Warehouse",
+    "Move to Expired Disposal Warehouse",
+    "Destruction / Documented Destruction",
+)
+REJECTED_QTY_DESTRUCTION_DESTINATION = "Destruction / Documented Destruction"
+REJECTED_QTY_WAREHOUSE_DESTINATIONS = {
+    "Return to Saleable Warehouse",
+    "Move to Expired Disposal Warehouse",
+}
 
 
 def _is_progressive_return_type(return_type: str | None) -> bool:
@@ -228,13 +239,68 @@ def _special_warehouses(company: str | None) -> dict[str, str | None]:
     if not company:
         return {key: None for key in SPECIAL_WAREHOUSE_NAMES}
     result = {}
-    for key, warehouse_name in SPECIAL_WAREHOUSE_NAMES.items():
-        result[key] = frappe.db.get_value(
-            "Warehouse",
-            {"company": company, "warehouse_name": warehouse_name, "is_group": 0},
-            "name",
-        )
+    for key, warehouse_names in SPECIAL_WAREHOUSE_NAMES.items():
+        result[key] = None
+        for warehouse_name in warehouse_names:
+            match = frappe.db.get_value(
+                "Warehouse",
+                {"company": company, "warehouse_name": warehouse_name, "is_group": 0},
+                "name",
+            )
+            if match:
+                result[key] = match
+                break
     return result
+
+
+def _normalize_rejected_qty_destination(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    lowered = text.lower()
+    if text in REJECTED_QTY_DESTINATIONS:
+        return text
+    if "saleable" in lowered or "sellable" in lowered:
+        return "Return to Saleable Warehouse"
+    if "disposal" in lowered or "expired" in lowered:
+        return "Move to Expired Disposal Warehouse"
+    if "destruction" in lowered or "destroy" in lowered or "إعدام" in lowered:
+        return REJECTED_QTY_DESTRUCTION_DESTINATION
+    return ""
+
+
+def _rejected_qty_destination_requires_warehouse(destination: str | None) -> bool:
+    return _normalize_rejected_qty_destination(destination) in REJECTED_QTY_WAREHOUSE_DESTINATIONS
+
+
+def _validate_active_company_warehouse(warehouse: str | None, company: str | None, label: str) -> None:
+    if not warehouse:
+        frappe.throw(_("Select {0}.").format(label))
+    row = frappe.db.get_value(
+        "Warehouse",
+        warehouse,
+        ["company", "is_group", "disabled"],
+        as_dict=True,
+    )
+    if not row or row.company != company or row.is_group or row.disabled:
+        frappe.throw(_("Select an active {0} for the same company.").format(label))
+
+
+def _default_stock_expense_account(company: str | None) -> str | None:
+    if not company:
+        return None
+    company_meta = frappe.get_meta("Company")
+    for fieldname in ("stock_adjustment_account", "default_expense_account"):
+        if company_meta.has_field(fieldname):
+            account = frappe.db.get_value("Company", company, fieldname)
+            if account:
+                return account
+    return frappe.db.get_value(
+        "Account",
+        {"company": company, "root_type": "Expense", "is_group": 0, "disabled": 0},
+        "name",
+        order_by="lft asc",
+    )
 
 
 def _sync_case_operational_status(doc) -> None:
@@ -945,7 +1011,9 @@ def _recent_cases(company: str | None, limit: int = 50, search_text: str | None 
             "operational_status",
             "requested_return_value", "approved_return_value", "settlement_method",
             "handed_over_quantity", "accepted_quantity", "rejected_quantity",
-            "pending_response_quantity", "modified",
+            "pending_response_quantity", "rejected_qty_destination",
+            "rejected_destination_warehouse", "rejected_destruction_date",
+            "rejected_destruction_reference", "rejected_destruction_notes", "modified",
         ],
         order_by="modified desc",
         limit_page_length=max(1, min(cint(limit) or 20, 300)),
@@ -2181,12 +2249,30 @@ def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
         )
         if doc.get("rejection_return_stock_entry") else None
     )
+    if rejection_status in (0, 1):
+        locked_destination_fields = (
+            "rejected_qty_destination",
+            "rejected_destination_warehouse",
+            "rejected_destruction_date",
+            "rejected_destruction_reference",
+            "rejected_destruction_attachment",
+            "rejected_destruction_notes",
+        )
+        for fieldname in locked_destination_fields:
+            old_value = doc.get(fieldname) or ""
+            new_value = payload.get(fieldname) or ""
+            if fieldname == "rejected_qty_destination":
+                old_value = _normalize_rejected_qty_destination(old_value)
+                new_value = _normalize_rejected_qty_destination(new_value)
+            if str(old_value).strip() != str(new_value).strip():
+                frappe.throw(_("Rejected quantity destination cannot be changed while the rejected-stock document exists."))
+
     if rejection_status == 1:
         for key, old_row in existing.items():
             new_row = incoming.get(key)
             if not new_row:
-                frappe.throw(_("Supplier response lines cannot be removed after rejected stock is returned."))
-            # Once rejected stock has physically returned to quarantine, the supplier
+                frappe.throw(_("Supplier response lines cannot be removed after rejected stock is processed."))
+            # Once rejected stock has been processed to its final destination, the supplier
             # decision itself is final, but the next workflow stage (approved pricing)
             # must remain editable until an Approved Debit Note exists.
             locked_fields = (
@@ -2203,7 +2289,7 @@ def _validate_locked_regulatory_rows(doc, payload: dict) -> None:
                     changed = str(new_value).strip() != str(old_value).strip()
                 if changed:
                     frappe.throw(
-                        _("Supplier response cannot be changed after rejected stock is returned to quarantine.")
+                        _("Supplier response cannot be changed after rejected stock is processed.")
                     )
 
 
@@ -2246,6 +2332,14 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.supplier_response_reference = payload.get("supplier_response_reference") or None
     doc.supplier_response_attachment = payload.get("supplier_response_attachment") or None
     doc.supplier_response_notes = payload.get("supplier_response_notes") or None
+    doc.rejected_qty_destination = _normalize_rejected_qty_destination(
+        payload.get("rejected_qty_destination")
+    ) or None
+    doc.rejected_destination_warehouse = payload.get("rejected_destination_warehouse") or None
+    doc.rejected_destruction_date = payload.get("rejected_destruction_date") or None
+    doc.rejected_destruction_reference = payload.get("rejected_destruction_reference") or None
+    doc.rejected_destruction_attachment = payload.get("rejected_destruction_attachment") or None
+    doc.rejected_destruction_notes = payload.get("rejected_destruction_notes") or None
     doc.supplier_claim = payload.get("supplier_claim") or doc.get("supplier_claim") or None
     doc.refund_posting_date = payload.get("refund_posting_date") or doc.get("refund_posting_date") or nowdate()
     doc.refund_mode_of_payment = payload.get("refund_mode_of_payment") or doc.get("refund_mode_of_payment") or None
@@ -2426,6 +2520,12 @@ def _supplier_handover_schema_requirements():
             "pending_response_quantity",
             "rejection_return_stock_entry",
             "rejected_return_quantity",
+            "rejected_qty_destination",
+            "rejected_destination_warehouse",
+            "rejected_destruction_date",
+            "rejected_destruction_reference",
+            "rejected_destruction_attachment",
+            "rejected_destruction_notes",
             "approved_debit_note_posting_date",
             "approved_debit_note",
             "approved_debit_note_status",
@@ -2763,6 +2863,12 @@ def get_case(name: str):
         "supplier_response_reference": doc.get("supplier_response_reference"),
         "supplier_response_attachment": doc.get("supplier_response_attachment"),
         "supplier_response_notes": doc.get("supplier_response_notes"),
+        "rejected_qty_destination": doc.get("rejected_qty_destination"),
+        "rejected_destination_warehouse": doc.get("rejected_destination_warehouse"),
+        "rejected_destruction_date": doc.get("rejected_destruction_date"),
+        "rejected_destruction_reference": doc.get("rejected_destruction_reference"),
+        "rejected_destruction_attachment": doc.get("rejected_destruction_attachment"),
+        "rejected_destruction_notes": doc.get("rejected_destruction_notes"),
         "authority_notification_no": doc.authority_notification_no,
         "authority_notification_date": doc.authority_notification_date,
         "authority_notification_attachment": doc.authority_notification_attachment,
@@ -3257,6 +3363,50 @@ def create_and_submit_supplier_handover(case_name: str):
     }
 
 
+def _rejected_quantity_destination_details(case, rejected: float) -> dict[str, Any]:
+    destination = _normalize_rejected_qty_destination(case.get("rejected_qty_destination"))
+    if rejected <= 0:
+        return {"destination": destination, "purpose": "Material Transfer", "target_warehouse": None}
+
+    if not destination:
+        frappe.throw(_("Select the Rejected Qty Destination before processing rejected stock."))
+
+    source = case.get("returns_with_supplier_warehouse")
+    _validate_active_company_warehouse(source, case.company, _("Returns With Supplier Warehouse"))
+
+    if _rejected_qty_destination_requires_warehouse(destination):
+        target = case.get("rejected_destination_warehouse")
+        if destination == "Return to Saleable Warehouse" and not target:
+            target = case.get("recall_source_warehouse") or _default_warehouse(case.company)
+        elif destination == "Move to Expired Disposal Warehouse" and not target:
+            target = _special_warehouses(case.company).get("disposal")
+        _validate_active_company_warehouse(target, case.company, _("Rejected Destination Warehouse"))
+        if source == target:
+            frappe.throw(_("Rejected quantity source and destination warehouses must be different."))
+        return {
+            "destination": destination,
+            "purpose": "Material Transfer",
+            "source_warehouse": source,
+            "target_warehouse": target,
+            "posting_date": case.get("supplier_response_date") or nowdate(),
+        }
+
+    if destination == REJECTED_QTY_DESTRUCTION_DESTINATION:
+        if not case.get("rejected_destruction_date"):
+            frappe.throw(_("Enter the Destruction Date."))
+        if not (case.get("rejected_destruction_notes") or "").strip():
+            frappe.throw(_("Enter the destruction reason/details in Destruction / Destination Notes."))
+        return {
+            "destination": destination,
+            "purpose": "Material Issue",
+            "source_warehouse": source,
+            "target_warehouse": None,
+            "posting_date": case.get("rejected_destruction_date") or nowdate(),
+        }
+
+    frappe.throw(_("Unsupported Rejected Qty Destination: {0}").format(destination))
+
+
 @frappe.whitelist()
 def create_rejected_quantity_return_draft(case_name: str):
     _require_create()
@@ -3267,7 +3417,7 @@ def create_rejected_quantity_return_draft(case_name: str):
 
     case = frappe.get_doc("Pharmacy Return Case", case_name)
     if not _is_progressive_return_type(case.return_type):
-        frappe.throw(_("Rejected quantity return is only available for Regulatory Batch Recall cases."))
+        frappe.throw(_("Rejected quantity destination is only available for progressive Recall / Expired return cases."))
 
     _sync_case_operational_status(case)
 
@@ -3286,6 +3436,8 @@ def create_rejected_quantity_return_draft(case_name: str):
             return {
                 "case": case.name,
                 "stock_entry": case.get("rejection_return_stock_entry"),
+                "destination": case.get("rejected_qty_destination"),
+                "target_warehouse": case.get("rejected_destination_warehouse"),
                 "already_exists": 1,
             }
         case.rejection_return_stock_entry = None
@@ -3302,35 +3454,43 @@ def create_rejected_quantity_return_draft(case_name: str):
 
     if pending > 0.000001:
         frappe.throw(
-            _("Complete the supplier response for all handed-over quantities before returning rejected stock. Pending quantity: {0}.").format(
+            _("Complete the supplier response for all handed-over quantities before processing rejected stock. Pending quantity: {0}.").format(
                 pending
             )
         )
 
     selected = [row for row in case.items if flt(row.rejected_qty) > 0]
     if not selected:
-        frappe.throw(_("There is no rejected quantity to return to quarantine."))
+        frappe.throw(_("There is no rejected quantity to process."))
 
-    source = case.get("returns_with_supplier_warehouse")
-    target = case.recall_quarantine_warehouse
-    if not source or not target:
-        frappe.throw(_("Returns With Supplier Warehouse and Recall Quarantine Warehouse are required."))
-    if source == target:
-        frappe.throw(_("Rejected quantity source and target warehouses must be different."))
+    destination_details = _rejected_quantity_destination_details(case, rejected)
+    source = destination_details.get("source_warehouse") or case.get("returns_with_supplier_warehouse")
+    target = destination_details.get("target_warehouse")
+    purpose = destination_details.get("purpose") or "Material Transfer"
 
     from erpnext.stock.doctype.batch.batch import get_batch_qty
 
     stock_entry = frappe.new_doc("Stock Entry")
     stock_entry.company = case.company
-    stock_entry.purpose = "Material Transfer"
-    stock_entry.posting_date = case.get("supplier_response_date")
+    stock_entry.purpose = purpose
+    stock_entry.posting_date = destination_details.get("posting_date") or nowdate()
     stock_entry.set_posting_time = 0
     stock_entry.from_warehouse = source
-    stock_entry.to_warehouse = target
+    if purpose == "Material Transfer":
+        stock_entry.to_warehouse = target
     stock_entry.remarks = _(
-        "Supplier-rejected quantity returned to recall quarantine for Pharmacy Return Case {0}. "
-        "Supplier response reference: {1}"
-    ).format(case.name, case.get("supplier_response_reference"))
+        "Supplier-rejected quantity processed for Pharmacy Return Case {0}. "
+        "Destination: {1}. Supplier response reference: {2}. Destruction reference: {3}. Notes: {4}"
+    ).format(
+        case.name,
+        destination_details.get("destination") or "",
+        case.get("supplier_response_reference") or "",
+        case.get("rejected_destruction_reference") or "",
+        case.get("rejected_destruction_notes") or "",
+    )
+
+    expense_account = _default_stock_expense_account(case.company) if purpose == "Material Issue" else None
+    detail_has_expense_account = frappe.get_meta("Stock Entry Detail").has_field("expense_account")
 
     total_rejected = 0.0
     for row in selected:
@@ -3368,17 +3528,20 @@ def create_rejected_quantity_return_draft(case_name: str):
                 )
             )
 
-        stock_entry.append("items", {
+        item_row = {
             "item_code": row.item_code,
             "qty": qty,
             "uom": row.stock_uom,
             "stock_uom": row.stock_uom,
             "conversion_factor": 1,
             "s_warehouse": source,
-            "t_warehouse": target,
+            "t_warehouse": target if purpose == "Material Transfer" else None,
             "batch_no": row.batch_no,
             "use_serial_batch_fields": 1 if row.batch_no else 0,
-        })
+        }
+        if purpose == "Material Issue" and expense_account and detail_has_expense_account:
+            item_row["expense_account"] = expense_account
+        stock_entry.append("items", item_row)
         total_rejected += qty
 
     if hasattr(stock_entry, "set_stock_entry_type"):
@@ -3387,6 +3550,8 @@ def create_rejected_quantity_return_draft(case_name: str):
 
     case.rejection_return_stock_entry = stock_entry.name
     case.rejected_return_quantity = 0
+    case.rejected_qty_destination = destination_details.get("destination")
+    case.rejected_destination_warehouse = target
     case.operational_status = "Rejection Return Draft Created"
     case.save(ignore_permissions=True)
 
@@ -3394,6 +3559,9 @@ def create_rejected_quantity_return_draft(case_name: str):
         "case": case.name,
         "stock_entry": stock_entry.name,
         "rejected_quantity": total_rejected,
+        "destination": destination_details.get("destination"),
+        "target_warehouse": target,
+        "stock_entry_purpose": purpose,
         "already_exists": 0,
     }
 
@@ -3411,6 +3579,9 @@ def create_and_submit_rejected_quantity_return(case_name: str):
         "stock_entry": stock_entry.name,
         "docstatus": stock_entry.docstatus,
         "rejected_quantity": flt(result.get("rejected_quantity")),
+        "destination": result.get("destination"),
+        "target_warehouse": result.get("target_warehouse"),
+        "stock_entry_purpose": result.get("stock_entry_purpose"),
         "already_exists": cint(result.get("already_exists")),
         "already_submitted": cint(already_submitted),
         "operational_status": case.operational_status,
@@ -3480,7 +3651,7 @@ def create_approved_debit_note_draft(case_name: str):
         )
         if rejection_status != 1:
             frappe.throw(
-                _("Submit the Rejected Quantity Return Stock Entry before creating the Approved Debit Note.")
+                _("Submit the Rejected Qty Destination Stock Entry before creating the Approved Debit Note.")
             )
 
     source_warehouse = case.get("returns_with_supplier_warehouse")

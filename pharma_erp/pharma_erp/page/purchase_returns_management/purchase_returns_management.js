@@ -1,4 +1,4 @@
-/* Purchase Returns Management v0.7.19 - force inline native date filters */
+/* Purchase Returns Management v0.7.24 - rejected destination warehouse value sync hotfix */
 frappe.pages["purchase-returns-management"].on_page_load = function (wrapper) {
     frappe.purchase_returns_management = new PharmacyPurchaseReturnsManagement(wrapper);
 };
@@ -29,6 +29,8 @@ class PharmacyPurchaseReturnsManagement {
         this.quarantineStockEntry = null;
         this.handoverStockEntry = null;
         this.rejectionReturnStockEntry = null;
+        this.rejectedQtyDestination = "";
+        this.rejectedDestinationWarehouse = "";
         this.approvedDebitNote = null;
         this.approvedDebitNoteDocstatus = null;
         this.approvedDebitNoteStatus = null;
@@ -64,7 +66,7 @@ class PharmacyPurchaseReturnsManagement {
     render() {
         this.$main = $(this.page.main).html(`
             <style>
-                .prm-shell{padding:16px;max-width:1700px;margin:0 auto}.prm-hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;background:linear-gradient(135deg,var(--blue-50),var(--bg-color));border:1px solid var(--border-color);border-radius:14px;padding:18px;margin-bottom:14px}.prm-hero h3{margin:0 0 5px}.prm-muted{color:var(--text-muted)}.prm-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.prm-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0}.prm-type{border:1px solid var(--border-color);border-radius:12px;padding:13px;background:var(--card-bg);cursor:pointer}.prm-type.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-type.disabled{opacity:.62;cursor:default}.prm-type strong{display:block;margin-bottom:4px}.prm-panel{border:1px solid var(--border-color);background:var(--card-bg);border-radius:12px;padding:14px;margin-bottom:14px}.prm-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.prm-control .control-label{font-weight:600}.prm-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}.prm-status{border-radius:999px;padding:7px 11px;background:var(--gray-100);font-weight:700}.prm-table-wrap{overflow:auto}.prm-table{width:100%;border-collapse:collapse;min-width:2200px}.prm-table th,.prm-table td{border-bottom:1px solid var(--border-color);padding:8px;vertical-align:middle;white-space:nowrap}.prm-table th{font-size:12px;color:var(--text-muted);background:var(--subtle-fg)}.prm-table input,.prm-table select{min-width:90px}.prm-total{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}.prm-total>div{padding:11px;border:1px solid var(--border-color);border-radius:10px}.prm-total strong{display:block;font-size:18px}.prm-empty{text-align:center;padding:28px;color:var(--text-muted)}.prm-recent{width:100%;border-collapse:collapse}.prm-recent th,.prm-recent td{padding:8px;border-bottom:1px solid var(--border-color);vertical-align:top}.prm-recent-header{display:block}.prm-recent-title h4{margin:0 0 4px}.prm-recent-filters{width:100%;display:flex;flex-direction:column;gap:8px;margin-top:10px}.prm-filter-counts{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-filter-row{display:grid;grid-template-columns:minmax(180px,240px) minmax(260px,1fr);gap:8px;align-items:center}.prm-date-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) auto;gap:8px;align-items:end}.prm-filter-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-recent-filters .form-control{width:100%;min-width:0}.prm-recent-filters .prm-date-filter{min-width:0}.prm-recent-filters .prm-date-filter .form-group{margin-bottom:0}.prm-recent-filters .prm-date-filter .control-label{display:none}.prm-recent-filters .prm-date-filter .frappe-control{margin-bottom:0}.prm-recent-filters .prm-date-filter input{width:100%;min-width:0}.prm-recent-filters .input-with-feedback{width:100%}.prm-date-row .btn{white-space:nowrap}.prm-date-row{display:grid !important;grid-template-columns:minmax(160px,1fr) minmax(160px,1fr) !important;gap:8px !important;align-items:end !important;width:100% !important}.prm-date-row .prm-date-filter{min-width:0 !important;width:100% !important}.prm-date-row .control-input-wrapper,.prm-date-row .frappe-control,.prm-date-row .form-group{width:100% !important}.prm-date-row input{width:100% !important;min-width:0 !important}.prm-recent-filters{width:100% !important}.prm-native-date-wrap{position:relative;display:flex !important;gap:6px;align-items:center;width:100%;min-width:0}.prm-native-date-wrap .prm-date-text{flex:1 1 auto;min-width:0;width:100%}.prm-date-picker-btn{flex:0 0 auto;padding:3px 7px}.prm-native-date-input{position:absolute;right:0;bottom:0;width:1px;height:1px;opacity:.01;pointer-events:none}.prm-date-row{display:grid !important;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) !important;gap:8px !important;align-items:center !important}.prm-print-note{padding:8px 10px;border:1px solid var(--yellow-200);background:var(--yellow-50);border-radius:8px;margin-bottom:8px}.prm-print-summary{font-family:Arial, sans-serif;color:#111}.prm-print-summary h2,.prm-print-summary h3{margin:0 0 8px}.prm-print-summary table{width:100%;border-collapse:collapse;margin-top:8px}.prm-print-summary th,.prm-print-summary td{border:1px solid #ddd;padding:6px;text-align:left}.prm-print-summary .muted{color:#666}.prm-print-summary .section{margin-top:12px}.prm-counter{border:1px solid var(--border-color);border-radius:999px;padding:6px 10px;background:var(--subtle-fg);font-weight:700;white-space:nowrap}.prm-counter.open{border-color:var(--yellow-300);background:var(--yellow-50)}.prm-counter.closed{border-color:var(--green-300);background:var(--green-50)}.prm-recent-body{display:none;margin-top:12px}.prm-recent-body.expanded{display:block}.prm-supplier-invoice{font-size:12px;color:var(--text-muted);margin-top:3px}.prm-print-dropdown{position:relative;display:inline-block}.prm-print-menu{display:none;position:absolute;right:0;top:100%;min-width:230px;background:var(--card-bg);border:1px solid var(--border-color);border-radius:8px;box-shadow:var(--shadow-md);z-index:50;padding:6px}.prm-print-dropdown.open .prm-print-menu{display:block}.prm-print-menu a{display:block;padding:6px 8px;border-radius:6px;color:var(--text-color);text-decoration:none;cursor:pointer;white-space:nowrap}.prm-print-menu a:hover{background:var(--subtle-fg)}.prm-print-menu .disabled{color:var(--text-muted);cursor:not-allowed;pointer-events:none}.prm-link{color:var(--primary);cursor:pointer;font-weight:600}.prm-note{padding:11px;border-radius:10px;background:var(--yellow-50);border:1px solid var(--yellow-200)}.prm-vat-yes{font-weight:700}.prm-vat-no{color:var(--text-muted)}.prm-workflow{display:none;margin-bottom:12px;padding:12px;border:1px solid var(--border-color);border-radius:12px;background:var(--subtle-fg)}.prm-workflow-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.prm-workflow-step{padding:9px 10px;border:1px solid var(--border-color);border-radius:9px;background:var(--card-bg);font-size:12px}.prm-workflow-step strong{display:block;font-size:13px}.prm-workflow-step.done{border-color:var(--green-300);background:var(--green-50)}.prm-workflow-step.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-next-step{margin-top:10px;font-weight:700}.prm-stage-table{min-width:900px}.prm-stage-table.prm-stage-pricing{min-width:1250px}
+                .prm-shell{padding:16px;max-width:1700px;margin:0 auto}.prm-hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;background:linear-gradient(135deg,var(--blue-50),var(--bg-color));border:1px solid var(--border-color);border-radius:14px;padding:18px;margin-bottom:14px}.prm-hero h3{margin:0 0 5px}.prm-muted{color:var(--text-muted)}.prm-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.prm-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0}.prm-type{border:1px solid var(--border-color);border-radius:12px;padding:13px;background:var(--card-bg);cursor:pointer}.prm-type.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-type.disabled{opacity:.62;cursor:default}.prm-type strong{display:block;margin-bottom:4px}.prm-panel{border:1px solid var(--border-color);background:var(--card-bg);border-radius:12px;padding:14px;margin-bottom:14px}.prm-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.prm-control .control-label{font-weight:600}.prm-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}.prm-status{border-radius:999px;padding:7px 11px;background:var(--gray-100);font-weight:700}.prm-table-wrap{overflow:auto}.prm-table{width:100%;border-collapse:collapse;min-width:2200px}.prm-table th,.prm-table td{border-bottom:1px solid var(--border-color);padding:8px;vertical-align:middle;white-space:nowrap}.prm-table th{font-size:12px;color:var(--text-muted);background:var(--subtle-fg)}.prm-table input,.prm-table select{min-width:90px}.prm-total{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}.prm-total>div{padding:11px;border:1px solid var(--border-color);border-radius:10px}.prm-total strong{display:block;font-size:18px}.prm-empty{text-align:center;padding:28px;color:var(--text-muted)}.prm-recent{width:100%;border-collapse:collapse}.prm-recent th,.prm-recent td{padding:8px;border-bottom:1px solid var(--border-color);vertical-align:top}.prm-recent-header{display:block}.prm-recent-title h4{margin:0 0 4px}.prm-recent-filters{width:100%;display:flex;flex-direction:column;gap:8px;margin-top:10px}.prm-filter-counts{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-filter-row{display:grid;grid-template-columns:minmax(180px,240px) minmax(260px,1fr);gap:8px;align-items:center}.prm-date-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) auto;gap:8px;align-items:end}.prm-filter-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-recent-filters .form-control{width:100%;min-width:0}.prm-recent-filters .prm-date-filter{min-width:0}.prm-recent-filters .prm-date-filter .form-group{margin-bottom:0}.prm-recent-filters .prm-date-filter .control-label{display:none}.prm-recent-filters .prm-date-filter .frappe-control{margin-bottom:0}.prm-recent-filters .prm-date-filter input{width:100%;min-width:0}.prm-recent-filters .input-with-feedback{width:100%}.prm-date-row .btn{white-space:nowrap}.prm-date-row{display:grid !important;grid-template-columns:minmax(160px,1fr) minmax(160px,1fr) !important;gap:8px !important;align-items:end !important;width:100% !important}.prm-date-row .prm-date-filter{min-width:0 !important;width:100% !important}.prm-date-row .control-input-wrapper,.prm-date-row .frappe-control,.prm-date-row .form-group{width:100% !important}.prm-date-row input{width:100% !important;min-width:0 !important}.prm-recent-filters{width:100% !important}.prm-native-date-wrap{position:relative;display:flex !important;gap:6px;align-items:center;width:100%;min-width:0}.prm-native-date-wrap .prm-date-text{flex:1 1 auto;min-width:0;width:100%}.prm-date-picker-btn{flex:0 0 auto;padding:3px 7px}.prm-native-date-input{position:absolute;right:0;bottom:0;width:1px;height:1px;opacity:.01;pointer-events:none}.prm-date-row{display:grid !important;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) !important;gap:8px !important;align-items:center !important}.prm-print-note{padding:8px 10px;border:1px solid var(--yellow-200);background:var(--yellow-50);border-radius:8px;margin-bottom:8px}.prm-print-summary{font-family:Arial, sans-serif;color:#111}.prm-print-summary h2,.prm-print-summary h3{margin:0 0 8px}.prm-print-summary table{width:100%;border-collapse:collapse;margin-top:8px}.prm-print-summary th,.prm-print-summary td{border:1px solid #ddd;padding:6px;text-align:left}.prm-print-summary .muted{color:#666}.prm-print-summary .section{margin-top:12px}.prm-counter{border:1px solid var(--border-color);border-radius:999px;padding:6px 10px;background:var(--subtle-fg);font-weight:700;white-space:nowrap}.prm-counter.open{border-color:var(--yellow-300);background:var(--yellow-50)}.prm-counter.closed{border-color:var(--green-300);background:var(--green-50)}.prm-recent-body{display:none;margin-top:12px}.prm-recent-body.expanded{display:block}.prm-supplier-invoice{font-size:12px;color:var(--text-muted);margin-top:3px}.prm-print-dropdown{position:relative;display:inline-block}.prm-print-menu{display:none;position:absolute;right:0;top:100%;min-width:230px;background:var(--card-bg);border:1px solid var(--border-color);border-radius:8px;box-shadow:var(--shadow-md);z-index:50;padding:6px}.prm-print-dropdown.open .prm-print-menu{display:block}.prm-print-menu a{display:block;padding:6px 8px;border-radius:6px;color:var(--text-color);text-decoration:none;cursor:pointer;white-space:nowrap}.prm-print-menu a:hover{background:var(--subtle-fg)}.prm-print-menu .disabled{color:var(--text-muted);cursor:not-allowed;pointer-events:none}.prm-link{color:var(--primary);cursor:pointer;font-weight:600}.prm-note{padding:11px;border-radius:10px;background:var(--yellow-50);border:1px solid var(--yellow-200)}.prm-toolbar .btn[data-not-ready="1"]{opacity:.72}.prm-vat-yes{font-weight:700}.prm-vat-no{color:var(--text-muted)}.prm-workflow{display:none;margin-bottom:12px;padding:12px;border:1px solid var(--border-color);border-radius:12px;background:var(--subtle-fg)}.prm-workflow-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.prm-workflow-step{padding:9px 10px;border:1px solid var(--border-color);border-radius:9px;background:var(--card-bg);font-size:12px}.prm-workflow-step strong{display:block;font-size:13px}.prm-workflow-step.done{border-color:var(--green-300);background:var(--green-50)}.prm-workflow-step.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-next-step{margin-top:10px;font-weight:700}.prm-stage-table{min-width:900px}.prm-stage-table.prm-stage-pricing{min-width:1250px}
                 @media(max-width:900px){.prm-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.prm-types{grid-template-columns:1fr}.prm-hero{flex-direction:column}.prm-actions{justify-content:flex-start}.prm-workflow-steps{grid-template-columns:1fr 1fr}.prm-filter-row{grid-template-columns:1fr}.prm-date-row{grid-template-columns:1fr 1fr}}@media(max-width:560px){.prm-grid,.prm-total{grid-template-columns:1fr}.prm-date-row{grid-template-columns:1fr}}
             </style>
             <div class="prm-shell">
@@ -105,9 +107,9 @@ class PharmacyPurchaseReturnsManagement {
                         <button class="btn btn-default btn-sm" data-action="attach-handover">${__("Attach Handover Receipt")}</button>
                         <button class="btn btn-default btn-sm" data-action="attach-response">${__("Attach Supplier Response")}</button>
                         <button class="btn btn-success btn-sm" data-action="save-response">${__("Save Supplier Response")}</button>
-                        <button class="btn btn-danger btn-sm" data-action="create-rejection-return">${__("Create Rejected Qty Return Draft")}</button>
-                        <button class="btn btn-success btn-sm" data-action="submit-rejection-return">${__("Create & Submit Rejected Qty Return")}</button>
-                        <button class="btn btn-default btn-sm" data-action="open-rejection-return" disabled>${__("Open Rejected Qty Return")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="create-rejection-return">${__("Create Rejected Qty Destination Draft")}</button>
+                        <button type="button" class="btn btn-success btn-sm" data-action="submit-rejection-return">${__("Create & Submit Rejected Qty Destination")}</button>
+                        <button type="button" class="btn btn-default btn-sm" data-action="open-rejection-return" disabled>${__("Open Rejected Qty Document")}</button>
                         <button class="btn btn-primary btn-sm" data-action="create-approved-debit-note">${__("Create Approved Debit Note Draft")}</button>
                         <button class="btn btn-success btn-sm" data-action="submit-approved-debit-note">${__("Create & Submit Approved Debit Note")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-approved-debit-note" disabled>${__("Open Approved Debit Note")}</button>
@@ -354,6 +356,12 @@ class PharmacyPurchaseReturnsManagement {
         this.makeControl("supplier_response_reference", {label:__("Supplier Response Reference"), fieldtype:"Data"});
         this.makeControl("supplier_response_attachment", {label:__("Supplier Response Attachment"), fieldtype:"Attach", description:__("Attach the supplier response document image or PDF.")});
         this.makeControl("supplier_response_notes", {label:__("Supplier Response Notes"), fieldtype:"Small Text"});
+        this.makeControl("rejected_qty_destination", {label:__("Rejected Qty Destination"), fieldtype:"Select", options:"\nReturn to Saleable Warehouse\nMove to Expired Disposal Warehouse\nDestruction / Documented Destruction"});
+        this.makeControl("rejected_destination_warehouse", {label:__("Rejected Destination Warehouse"), fieldtype:"Link", options:"Warehouse", get_query:()=>({filters:{company:this.value("company")||undefined,is_group:0,disabled:0}})});
+        this.makeControl("rejected_destruction_date", {label:__("Destruction Date"), fieldtype:"Date"});
+        this.makeControl("rejected_destruction_reference", {label:__("Destruction Reference"), fieldtype:"Data"});
+        this.makeControl("rejected_destruction_attachment", {label:__("Destruction Attachment"), fieldtype:"Attach", description:__("Attach destruction certificate or disposal document if available.")});
+        this.makeControl("rejected_destruction_notes", {label:__("Destruction / Destination Notes"), fieldtype:"Small Text"});
         this.makeControl("approved_debit_note_posting_date", {label:__("Approved Debit Note Posting Date"), fieldtype:"Date"});
         this.makeControl("supplier_claim", {label:__("Supplier Claim"), fieldtype:"Link", options:"Supplier Claim", get_query:()=>({filters:{company:this.value("company")||undefined,supplier:this.value("supplier")||undefined,docstatus:0}})});
         this.makeControl("refund_posting_date", {label:__("Refund Posting Date"), fieldtype:"Date"});
@@ -390,9 +398,45 @@ class PharmacyPurchaseReturnsManagement {
         };
         this.controls.recall_batch_no.df.onchange = () => this.syncButtons();
         this.controls.recall_quarantine_warehouse.df.onchange = () => this.syncButtons();
+        this.controls.rejected_qty_destination.df.onchange = async () => {
+            await this.applyRejectedDestinationDefault();
+            this.refreshProgressiveUI();
+            this.syncButtons();
+        };
+        this.controls.rejected_destination_warehouse.df.onchange = () => this.syncButtons();
+        this.controls.rejected_destruction_date.df.onchange = () => this.syncButtons();
+        this.controls.rejected_destruction_notes.df.onchange = () => this.syncButtons();
     }
 
-    value(name){return this.controls[name] ? this.controls[name].get_value() : "";}
+    controlValue(name){
+        const control=this.controls[name];
+        if(!control) return "";
+        let value = control.get_value ? control.get_value() : (control.value || "");
+        if(value) return value;
+        const candidates = [];
+        try{ candidates.push(control.$input?.val?.()); }catch(e){}
+        try{ candidates.push(control.$input_area?.find?.("input").val?.()); }catch(e){}
+        try{ candidates.push(control.$wrapper?.find?.("input").val?.()); }catch(e){}
+        const domValue = candidates.find(v=>String(v||"").trim());
+        return domValue || "";
+    }
+
+    value(name){
+        if(name==="rejected_qty_destination"){
+            return this.controlValue(name) || this.rejectedQtyDestination || "";
+        }
+        if(name==="rejected_destination_warehouse"){
+            let value = this.controlValue(name) || this.rejectedDestinationWarehouse || "";
+            const destination = this.controlValue("rejected_qty_destination") || this.rejectedQtyDestination || "";
+            if(!value && destination==="Move to Expired Disposal Warehouse"){
+                value = this.bootstrap?.special_warehouses?.disposal || "";
+            }else if(!value && destination==="Return to Saleable Warehouse"){
+                value = this.controlValue("recall_source_warehouse") || this.bootstrap?.default_warehouse || "";
+            }
+            return value;
+        }
+        return this.controlValue(name);
+    }
     async setValue(name,value){if(this.controls[name]) await this.controls[name].set_value(value||"");}
     money(value){return format_currency(flt(value), this.currency);}
     esc(value){return frappe.utils.escape_html(String(value??""));}
@@ -415,6 +459,70 @@ class PharmacyPurchaseReturnsManagement {
 
     getProgressiveLabel(){
         return this.value("return_type")==="Expired Drugs Return" ? __("expired return") : __("recall");
+    }
+
+    isRejectedDestructionDestination(destination=this.value("rejected_qty_destination")){
+        return destination==="Destruction / Documented Destruction";
+    }
+
+    rejectedDestinationNeedsWarehouse(destination=this.value("rejected_qty_destination")){
+        return ["Return to Saleable Warehouse","Move to Expired Disposal Warehouse"].includes(destination);
+    }
+
+    rejectedDestinationControls(){
+        const destination=this.value("rejected_qty_destination");
+        const controls=["rejected_qty_destination"];
+        if(this.rejectedDestinationNeedsWarehouse(destination)) controls.push("rejected_destination_warehouse");
+        if(this.isRejectedDestructionDestination(destination)){
+            controls.push("rejected_destruction_date","rejected_destruction_reference","rejected_destruction_attachment","rejected_destruction_notes");
+        }
+        return controls;
+    }
+
+    async applyRejectedDestinationDefault(){
+        const destination=this.value("rejected_qty_destination");
+        if(destination==="Return to Saleable Warehouse"){
+            if(!this.value("rejected_destination_warehouse")){
+                await this.setValue("rejected_destination_warehouse", this.value("recall_source_warehouse") || this.bootstrap?.default_warehouse || "");
+            }
+        }else if(destination==="Move to Expired Disposal Warehouse"){
+            if(!this.value("rejected_destination_warehouse")){
+                await this.setValue("rejected_destination_warehouse", this.bootstrap?.special_warehouses?.disposal || "");
+            }
+        }else if(destination==="Destruction / Documented Destruction"){
+            await this.setValue("rejected_destination_warehouse", "");
+            if(!this.value("rejected_destruction_date")) await this.setValue("rejected_destruction_date", frappe.datetime.get_today());
+        }
+    }
+
+    rejectedDestinationSummary(){
+        const destination=this.value("rejected_qty_destination")||__("not selected");
+        if(this.rejectedDestinationNeedsWarehouse()) return `${destination} → ${this.value("rejected_destination_warehouse")||__("warehouse not selected")}`;
+        if(this.isRejectedDestructionDestination()) return `${destination} • ${this.value("rejected_destruction_date")||__("date not selected")}`;
+        return destination;
+    }
+
+    rejectedDestinationBlockedReason(totalRejected=null, totalPending=null, rejectedDestinationIncomplete=null){
+        const rejected = totalRejected===null ? this.rows.reduce((total,row)=>total+flt(row.rejected_qty),0) : flt(totalRejected);
+        const pending = totalPending===null ? this.rows.reduce((total,row)=>total+Math.max(0,flt(row.delivered_qty)-flt(row.accepted_qty)-flt(row.rejected_qty)),0) : flt(totalPending);
+        const incomplete = rejectedDestinationIncomplete===null
+            ? (rejected>0 && (
+                !this.value("rejected_qty_destination")
+                || (this.rejectedDestinationNeedsWarehouse() && !this.value("rejected_destination_warehouse"))
+                || (this.isRejectedDestructionDestination() && !this.value("rejected_destruction_notes"))
+            ))
+            : Boolean(rejectedDestinationIncomplete);
+        if(this.handoverDocstatus!==1) return __("Submit the Supplier Handover Stock Entry first.");
+        if(rejected<=0) return __("There is no rejected quantity to process.");
+        if(pending>0.000001) return __("Complete Accepted and Rejected quantities first. Pending quantity: {0}.",[pending]);
+        if(incomplete){
+            if(!this.value("rejected_qty_destination")) return __("Select the Rejected Qty Destination first.");
+            if(this.rejectedDestinationNeedsWarehouse()&&!this.value("rejected_destination_warehouse")) return __("Select the Rejected Destination Warehouse first.");
+            if(this.isRejectedDestructionDestination()&&!this.value("rejected_destruction_notes")) return __("Enter destruction notes/details first.");
+            return __("Complete the rejected quantity destination details first.");
+        }
+        if(this.rejectionReturnDocstatus===1) return __("The rejected quantity destination document is already submitted.");
+        return "";
     }
 
     getRecallWorkflowStage(){
@@ -471,7 +579,7 @@ class PharmacyPurchaseReturnsManagement {
             handover:__("Next step: enter the handover details, then create a draft or Create & Submit the Supplier Handover transfer."),
             handover_draft:__("Current step: open the Supplier Handover for review or submit it directly from this page."),
             response:__("Next step: record the supplier accepted and rejected quantities."),
-            rejection:__("Next step: create a draft or Create & Submit the rejected quantity return before financial approval."),
+            rejection:__("Next step: select the rejected quantity destination, then Create & Submit the rejected-stock movement before financial approval."),
             pricing:__("Next step: enter either the approved Discount % or approved Net Unit Value, then create a draft or Create & Submit the Approved Debit Note."),
             debit_note_draft:__("Current step: open the Approved Debit Note for review or submit it directly from this page."),
             settlement:__("Final step: choose the financial settlement method and complete the supplier account settlement."),
@@ -508,6 +616,8 @@ class PharmacyPurchaseReturnsManagement {
             "authority_notification_no","authority_notification_date","authority_notification_attachment",
             "returns_with_supplier_warehouse","handover_date","handover_reference","handover_attachment",
             "supplier_response_date","supplier_response_reference","supplier_response_attachment","supplier_response_notes",
+            "rejected_qty_destination","rejected_destination_warehouse","rejected_destruction_date",
+            "rejected_destruction_reference","rejected_destruction_attachment","rejected_destruction_notes",
             "approved_debit_note_posting_date","supplier_claim","settlement_method",
             "refund_posting_date","refund_mode_of_payment","refund_account","refund_request_amount",
             "refund_reference_no","refund_reference_date","refund_notes"
@@ -557,6 +667,7 @@ class PharmacyPurchaseReturnsManagement {
             showActions(["open-handover","attach-response","save-response"]);
         }else if(stage==="rejection"){
             showControls(responseControls,true);
+            showControls(this.rejectedDestinationControls(), this.rejectionReturnDocstatus===1);
             showActions(["open-handover","submit-rejection-return"]);
             if(this.rejectionReturnStockEntry)showActions(["open-rejection-return"]);
         }else if(stage==="pricing"){
@@ -607,7 +718,7 @@ class PharmacyPurchaseReturnsManagement {
             handover:__("Only supplier handover fields are shown. Supplier response fields will appear after the handover transfer is submitted."),
             handover_draft:__("Submit the Supplier Handover transfer. Supplier decision fields will appear afterwards."),
             response:__("Enter the supplier response only: accepted quantity, rejected quantity and rejection reason. Accepted + Rejected must equal Handed Over."),
-            rejection:__("The supplier response is recorded. Process the rejected quantity before approving any financial credit."),
+            rejection:__("The supplier response is recorded. Select the rejected quantity destination: saleable warehouse, expired disposal warehouse, or documented destruction."),
             pricing:__("Enter either Approved Discount % or Approved Net Unit Value. The other value is calculated automatically. VAT is included only for VAT-taxable items."),
             debit_note_draft:__("Submit the Approved Debit Note. Financial settlement options will appear only after submission."),
             settlement:__("Choose how the approved supplier credit will be settled. Cash / Bank Refund remains available as an exceptional option."),
@@ -723,6 +834,52 @@ class PharmacyPurchaseReturnsManagement {
         this.renderItems();
     }
 
+    runPageAction(e, actionName, fn){
+        if(e){
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        const $button = e ? $(e.currentTarget) : $();
+        const notReadyReason = $button.length ? ($button.attr("data-not-ready-reason") || "") : "";
+        if($button.length && $button.attr("data-not-ready")==="1"){
+            frappe.show_alert({message:notReadyReason || __("This action is not ready yet. Complete the required fields first."), indicator:"orange"}, 6);
+            return;
+        }
+        if($button.length && $button.prop("disabled")){
+            frappe.show_alert({message:notReadyReason || __("This action is not ready yet. Complete the required fields first."), indicator:"orange"}, 6);
+            return;
+        }
+        if(this._runningAction){
+            frappe.show_alert({message:__("Please wait until the current action finishes."), indicator:"orange"}, 5);
+            return;
+        }
+        this._runningAction = actionName || "action";
+        if($button.length) $button.prop("disabled", true).attr("aria-busy","true");
+        Promise.resolve()
+            .then(fn)
+            .catch(error => {
+                console.error(`[Purchase Returns Management] ${actionName || "Action"} failed`, error);
+                let message = error?.message || error?.exc || error || __("Unknown error");
+                if(error?._server_messages){
+                    try{
+                        message = JSON.parse(error._server_messages).map(row => JSON.parse(row).message).join("<br>");
+                    }catch(parseError){
+                        message = error._server_messages;
+                    }
+                }
+                frappe.msgprint({
+                    title:__("Action Failed"),
+                    message: message,
+                    indicator:"red"
+                });
+            })
+            .finally(() => {
+                this._runningAction = null;
+                if($button.length) $button.prop("disabled", false).removeAttr("aria-busy");
+                this.syncButtons();
+            });
+    }
+
     bindEvents() {
         this.$main.on("click", "[data-action='purchase-page']", ()=>frappe.set_route("purchase-invoice-management"));
         this.$main.on("click", "[data-action='new-case']", ()=>this.newCase());
@@ -735,8 +892,8 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.on("click", "[data-action='create-handover']", ()=>this.createSupplierHandoverDraft());
         this.$main.on("click", "[data-action='submit-quarantine']", ()=>this.createAndSubmitQuarantineTransfer());
         this.$main.on("click", "[data-action='submit-handover']", ()=>this.createAndSubmitSupplierHandover());
-        this.$main.on("click", "[data-action='create-rejection-return']", ()=>this.createRejectedQuantityReturnDraft());
-        this.$main.on("click", "[data-action='submit-rejection-return']", ()=>this.createAndSubmitRejectedQuantityReturn());
+        this.$main.on("click", "[data-action='create-rejection-return']", e=>this.runPageAction(e, "create-rejection-return", ()=>this.createRejectedQuantityReturnDraft()));
+        this.$main.on("click", "[data-action='submit-rejection-return']", e=>this.runPageAction(e, "submit-rejection-return", ()=>this.createAndSubmitRejectedQuantityReturn()));
         this.$main.on("click", "[data-action='create-approved-debit-note']", ()=>this.createApprovedDebitNoteDraft());
         this.$main.on("click", "[data-action='submit-approved-debit-note']", ()=>this.createAndSubmitApprovedDebitNote());
         this.$main.on("click", "[data-action='create-claim-deduction']", ()=>this.createOrLinkSupplierClaimDeduction());
@@ -800,6 +957,7 @@ class PharmacyPurchaseReturnsManagement {
             const quarantineDefault=this.value("return_type")==="Expired Drugs Return" ? this.bootstrap.special_warehouses.expired : this.bootstrap.special_warehouses.recall;
             if(!this.value("recall_quarantine_warehouse") && quarantineDefault) await this.setValue("recall_quarantine_warehouse",quarantineDefault);
             if(!this.value("returns_with_supplier_warehouse")) await this.setValue("returns_with_supplier_warehouse",this.bootstrap.special_warehouses.supplier);
+            await this.applyRejectedDestinationDefault();
             return;
         }
         const r=await frappe.call({method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.get_bootstrap",args:{company}});
@@ -808,6 +966,10 @@ class PharmacyPurchaseReturnsManagement {
         const quarantineDefault=this.value("return_type")==="Expired Drugs Return" ? data.special_warehouses?.expired : data.special_warehouses?.recall;
         if(quarantineDefault) await this.setValue("recall_quarantine_warehouse",quarantineDefault);
         if(data.special_warehouses?.supplier) await this.setValue("returns_with_supplier_warehouse",data.special_warehouses.supplier);
+        if(!this.bootstrap) this.bootstrap={};
+        if(data.default_warehouse) this.bootstrap.default_warehouse=data.default_warehouse;
+        if(data.special_warehouses) this.bootstrap.special_warehouses=data.special_warehouses;
+        await this.applyRejectedDestinationDefault();
     }
 
     async applyRouteOptions(){
@@ -841,7 +1003,7 @@ class PharmacyPurchaseReturnsManagement {
         const recallMode=this.isProgressiveReturnType(type);
         const expiredMode=type==="Expired Drugs Return";
         ["original_purchase_invoice"].forEach(name=>this.showControl(name,invoiceMode));
-        ["recall_source_warehouse","recall_item_code","recall_batch_no","recall_quarantine_warehouse","authority_notification_no","authority_notification_date","authority_notification_attachment","returns_with_supplier_warehouse","handover_date","handover_reference","handover_attachment","supplier_response_date","supplier_response_reference","supplier_response_attachment","supplier_response_notes","approved_debit_note_posting_date","supplier_claim"].forEach(name=>this.showControl(name,false));
+        ["recall_source_warehouse","recall_item_code","recall_batch_no","recall_quarantine_warehouse","authority_notification_no","authority_notification_date","authority_notification_attachment","returns_with_supplier_warehouse","handover_date","handover_reference","handover_attachment","supplier_response_date","supplier_response_reference","supplier_response_attachment","supplier_response_notes","rejected_qty_destination","rejected_destination_warehouse","rejected_destruction_date","rejected_destruction_reference","rejected_destruction_attachment","rejected_destruction_notes","approved_debit_note_posting_date","supplier_claim"].forEach(name=>this.showControl(name,false));
         this.$main.find("[data-action='load-invoice']").toggle(invoiceMode);
         this.$main.find("[data-action='open-original'],[data-action='open-return'],[data-action='delete-return-draft']").toggle(invoiceMode);
         this.$main.find("[data-action='load-batch'],[data-action='attach-notice'],[data-action='open-quarantine'],[data-action='submit-quarantine'],[data-action='submit-handover'],[data-action='open-handover'],[data-action='attach-handover'],[data-action='attach-response'],[data-action='save-response'],[data-action='submit-rejection-return'],[data-action='open-rejection-return'],[data-action='submit-approved-debit-note'],[data-action='open-approved-debit-note'],[data-action='create-claim-deduction'],[data-action='open-supplier-claim']").toggle(recallMode);
@@ -1050,6 +1212,8 @@ class PharmacyPurchaseReturnsManagement {
         this.quarantineDocstatus=doc.quarantine_docstatus;
         this.handoverDocstatus=doc.handover_docstatus;
         this.rejectionReturnDocstatus=doc.rejection_return_docstatus;
+        this.rejectedQtyDestination=doc.rejected_qty_destination||"";
+        this.rejectedDestinationWarehouse=doc.rejected_destination_warehouse||"";
         await this.setReturnType(doc.return_type||"Return Against Invoice",false);
         await this.setValue("company",doc.company);
         await this.applyCompanyDefaults();
@@ -1080,6 +1244,13 @@ class PharmacyPurchaseReturnsManagement {
         await this.setValue("supplier_response_reference",doc.supplier_response_reference);
         await this.setValue("supplier_response_attachment",doc.supplier_response_attachment);
         await this.setValue("supplier_response_notes",doc.supplier_response_notes);
+        await this.setValue("rejected_qty_destination",doc.rejected_qty_destination);
+        await this.setValue("rejected_destination_warehouse",doc.rejected_destination_warehouse);
+        await this.setValue("rejected_destruction_date",doc.rejected_destruction_date);
+        await this.setValue("rejected_destruction_reference",doc.rejected_destruction_reference);
+        await this.setValue("rejected_destruction_attachment",doc.rejected_destruction_attachment);
+        await this.setValue("rejected_destruction_notes",doc.rejected_destruction_notes);
+        await this.applyRejectedDestinationDefault();
         await this.setValue(
             "approved_debit_note_posting_date",
             doc.approved_debit_note_posting_date || doc.supplier_response_date || frappe.datetime.get_today()
@@ -1269,12 +1440,12 @@ class PharmacyPurchaseReturnsManagement {
     }
 
     payload(){return {
-        name:this.caseName,return_type:this.value("return_type"),company:this.value("company"),posting_date:this.value("posting_date"),supplier:this.value("supplier"),original_purchase_invoice:this.value("original_purchase_invoice"),settlement_method:this.value("settlement_method"),authority_notification_no:this.value("authority_notification_no"),authority_notification_date:this.value("authority_notification_date"),authority_notification_attachment:this.value("authority_notification_attachment"),recall_source_warehouse:this.value("recall_source_warehouse"),recall_item_code:this.value("recall_item_code"),recall_quarantine_warehouse:this.value("recall_quarantine_warehouse"),returns_with_supplier_warehouse:this.value("returns_with_supplier_warehouse"),handover_date:this.value("handover_date"),handover_reference:this.value("handover_reference"),handover_attachment:this.value("handover_attachment"),supplier_response_date:this.value("supplier_response_date"),supplier_response_reference:this.value("supplier_response_reference"),supplier_response_attachment:this.value("supplier_response_attachment"),supplier_response_notes:this.value("supplier_response_notes"),approved_debit_note_posting_date:this.value("approved_debit_note_posting_date"),supplier_claim:this.value("supplier_claim"),refund_posting_date:this.value("refund_posting_date"),refund_mode_of_payment:this.value("refund_mode_of_payment"),refund_account:this.value("refund_account"),refund_request_amount:flt(this.value("refund_request_amount")),refund_reference_no:this.value("refund_reference_no"),refund_reference_date:this.value("refund_reference_date"),refund_notes:this.value("refund_notes"),remarks:this.value("remarks"),items:this.rows
+        name:this.caseName,return_type:this.value("return_type"),company:this.value("company"),posting_date:this.value("posting_date"),supplier:this.value("supplier"),original_purchase_invoice:this.value("original_purchase_invoice"),settlement_method:this.value("settlement_method"),authority_notification_no:this.value("authority_notification_no"),authority_notification_date:this.value("authority_notification_date"),authority_notification_attachment:this.value("authority_notification_attachment"),recall_source_warehouse:this.value("recall_source_warehouse"),recall_item_code:this.value("recall_item_code"),recall_quarantine_warehouse:this.value("recall_quarantine_warehouse"),returns_with_supplier_warehouse:this.value("returns_with_supplier_warehouse"),handover_date:this.value("handover_date"),handover_reference:this.value("handover_reference"),handover_attachment:this.value("handover_attachment"),supplier_response_date:this.value("supplier_response_date"),supplier_response_reference:this.value("supplier_response_reference"),supplier_response_attachment:this.value("supplier_response_attachment"),supplier_response_notes:this.value("supplier_response_notes"),rejected_qty_destination:this.value("rejected_qty_destination"),rejected_destination_warehouse:this.value("rejected_destination_warehouse"),rejected_destruction_date:this.value("rejected_destruction_date"),rejected_destruction_reference:this.value("rejected_destruction_reference"),rejected_destruction_attachment:this.value("rejected_destruction_attachment"),rejected_destruction_notes:this.value("rejected_destruction_notes"),approved_debit_note_posting_date:this.value("approved_debit_note_posting_date"),supplier_claim:this.value("supplier_claim"),refund_posting_date:this.value("refund_posting_date"),refund_mode_of_payment:this.value("refund_mode_of_payment"),refund_account:this.value("refund_account"),refund_request_amount:flt(this.value("refund_request_amount")),refund_reference_no:this.value("refund_reference_no"),refund_reference_date:this.value("refund_reference_date"),refund_notes:this.value("refund_notes"),remarks:this.value("remarks"),items:this.rows
     };}
 
     async saveCase(silent=false){
         const r=await frappe.call({method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.save_case",args:{payload:this.payload()},freeze:true,freeze_message:__("Saving return case...")});
-        const doc=r.message||{};this.caseName=doc.name;this.purchaseReturn=doc.purchase_return||null;this.purchaseReturnDocstatus=doc.purchase_return_docstatus;this.purchaseReturnStatus=doc.purchase_return_status||null;this.quarantineStockEntry=doc.quarantine_stock_entry||null;this.handoverStockEntry=doc.handover_stock_entry||null;this.rejectionReturnStockEntry=doc.rejection_return_stock_entry||null;this.approvedDebitNote=doc.approved_debit_note||null;this.approvedDebitNoteDocstatus=doc.approved_debit_note_docstatus;this.approvedDebitNoteStatus=doc.approved_debit_note_status||null;this.approvedDebitNoteAmount=flt(doc.approved_debit_note_amount);this.approvedDebitNoteOutstanding=flt(doc.approved_debit_note_outstanding);this.supplierClaim=doc.supplier_claim||null;this.settlementStatus=doc.settlement_status||"Pending Settlement";this.claimUtilizationStatus=doc.claim_utilization_status||"Not Applied";this.claimSettlementDate=doc.claim_settlement_date||null;this.plannedClaimDeduction=flt(doc.planned_claim_deduction_amount);this.claimDeductionAmount=flt(doc.claim_deduction_amount);this.settledAmount=flt(doc.settled_amount);this.remainingSettlementAmount=flt(doc.remaining_settlement_amount);this.approvedReturnValue=flt(doc.approved_return_value);this.refundPaymentEntry=doc.refund_payment_entry||null;this.refundPaymentEntryStatus=doc.refund_payment_entry_status||null;this.refundAmount=flt(doc.refund_amount);this.refundEntriesCount=cint(doc.refund_entries_count);this.hasOpenRefundDraft=Boolean(doc.has_open_refund_draft);this.refundPayments=doc.refund_payments||[];this.quarantineDocstatus=doc.quarantine_docstatus;this.handoverDocstatus=doc.handover_docstatus;this.rejectionReturnDocstatus=doc.rejection_return_docstatus;await this.setValue("case_reference",doc.name);this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${doc.operational_status||__("Draft")}`);this.refreshSettlementUI();this.renderItems();this.syncButtons();this.refreshProgressiveUI();if(!silent)frappe.show_alert({message:__("Return Case {0} saved.",[doc.name]),indicator:"green"},6);await this.refreshRecent();return doc;
+        const doc=r.message||{};this.caseName=doc.name;this.purchaseReturn=doc.purchase_return||null;this.purchaseReturnDocstatus=doc.purchase_return_docstatus;this.purchaseReturnStatus=doc.purchase_return_status||null;this.quarantineStockEntry=doc.quarantine_stock_entry||null;this.handoverStockEntry=doc.handover_stock_entry||null;this.rejectionReturnStockEntry=doc.rejection_return_stock_entry||null;this.approvedDebitNote=doc.approved_debit_note||null;this.approvedDebitNoteDocstatus=doc.approved_debit_note_docstatus;this.approvedDebitNoteStatus=doc.approved_debit_note_status||null;this.approvedDebitNoteAmount=flt(doc.approved_debit_note_amount);this.approvedDebitNoteOutstanding=flt(doc.approved_debit_note_outstanding);this.supplierClaim=doc.supplier_claim||null;this.settlementStatus=doc.settlement_status||"Pending Settlement";this.claimUtilizationStatus=doc.claim_utilization_status||"Not Applied";this.claimSettlementDate=doc.claim_settlement_date||null;this.plannedClaimDeduction=flt(doc.planned_claim_deduction_amount);this.claimDeductionAmount=flt(doc.claim_deduction_amount);this.settledAmount=flt(doc.settled_amount);this.remainingSettlementAmount=flt(doc.remaining_settlement_amount);this.approvedReturnValue=flt(doc.approved_return_value);this.refundPaymentEntry=doc.refund_payment_entry||null;this.refundPaymentEntryStatus=doc.refund_payment_entry_status||null;this.refundAmount=flt(doc.refund_amount);this.refundEntriesCount=cint(doc.refund_entries_count);this.hasOpenRefundDraft=Boolean(doc.has_open_refund_draft);this.refundPayments=doc.refund_payments||[];this.quarantineDocstatus=doc.quarantine_docstatus;this.handoverDocstatus=doc.handover_docstatus;this.rejectionReturnDocstatus=doc.rejection_return_docstatus;this.rejectedQtyDestination=doc.rejected_qty_destination||"";this.rejectedDestinationWarehouse=doc.rejected_destination_warehouse||"";await this.setValue("case_reference",doc.name);this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${doc.operational_status||__("Draft")}`);this.refreshSettlementUI();this.renderItems();this.syncButtons();this.refreshProgressiveUI();if(!silent)frappe.show_alert({message:__("Return Case {0} saved.",[doc.name]),indicator:"green"},6);await this.refreshRecent();return doc;
     }
 
     async createPrimaryDraft(){
@@ -1431,7 +1602,7 @@ class PharmacyPurchaseReturnsManagement {
         if(doc.handover_docstatus!==1){
             frappe.msgprint({
                 title:__("Submitted Supplier Handover Required"),
-                message:__("Submit the Supplier Handover Stock Entry before returning rejected quantity."),
+                message:__("Submit the Supplier Handover Stock Entry before processing rejected quantity."),
                 indicator:"orange"
             });
             return;
@@ -1452,8 +1623,20 @@ class PharmacyPurchaseReturnsManagement {
             });
             return;
         }
+        if(!this.value("rejected_qty_destination")){
+            frappe.msgprint({title:__("Rejected Destination Required"),message:__("Select where the rejected quantity will go before creating the stock document."),indicator:"orange"});
+            return;
+        }
+        if(this.rejectedDestinationNeedsWarehouse()&&!this.value("rejected_destination_warehouse")){
+            frappe.msgprint({title:__("Destination Warehouse Required"),message:__("Select the warehouse that will receive the rejected quantity."),indicator:"orange"});
+            return;
+        }
+        if(this.isRejectedDestructionDestination()&&!this.value("rejected_destruction_notes")){
+            frappe.msgprint({title:__("Destruction Details Required"),message:__("Enter the destruction reason/details before creating the destruction document."),indicator:"orange"});
+            return;
+        }
         const answer=await new Promise(resolve=>frappe.confirm(
-            __("Create a Material Transfer draft from Returns With Supplier back to Recall Quarantine for rejected quantities?"),
+            __("Create a rejected-stock draft for {0}?",[this.rejectedDestinationSummary()]),
             ()=>resolve(true),
             ()=>resolve(false)
         ));
@@ -1462,20 +1645,24 @@ class PharmacyPurchaseReturnsManagement {
             method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.create_rejected_quantity_return_draft",
             args:{case_name:doc.name},
             freeze:true,
-            freeze_message:__("Creating rejected quantity return draft...")
+            freeze_message:__("Creating rejected-stock destination draft...")
         });
         this.rejectionReturnStockEntry=r.message.stock_entry;
         this.rejectionReturnDocstatus=0;
         this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${__("Rejection Return Draft Created")}`);
         this.syncButtons();
-        frappe.show_alert({message:__("Rejected Quantity Return {0} created as Draft.",[this.rejectionReturnStockEntry]),indicator:"green"},8);
+        frappe.show_alert({message:__("Rejected-stock document {0} created as Draft.",[this.rejectionReturnStockEntry]),indicator:"green"},8);
         await this.refreshRecent();
     }
 
     async createAndSubmitRejectedQuantityReturn(){
+        frappe.show_alert({message:__("Preparing rejected-stock destination..."), indicator:"blue"}, 3);
         const doc=await this.saveCase(true);
+        const destination = doc.rejected_qty_destination || this.value("rejected_qty_destination");
+        const destinationWarehouse = doc.rejected_destination_warehouse || this.value("rejected_destination_warehouse");
+        const destructionNotes = doc.rejected_destruction_notes || this.value("rejected_destruction_notes");
         if(doc.handover_docstatus!==1){
-            frappe.msgprint({title:__("Submitted Supplier Handover Required"),message:__("Submit the Supplier Handover Stock Entry before returning rejected quantity."),indicator:"orange"});
+            frappe.msgprint({title:__("Submitted Supplier Handover Required"),message:__("Submit the Supplier Handover Stock Entry before processing rejected quantity."),indicator:"orange"});
             return;
         }
         if(flt(doc.pending_response_quantity)>0){
@@ -1486,8 +1673,23 @@ class PharmacyPurchaseReturnsManagement {
             frappe.msgprint({title:__("No Rejected Quantity"),message:__("All quantities are accepted; no rejected-stock movement is required."),indicator:"blue"});
             return;
         }
+        if(!destination){
+            frappe.msgprint({title:__("Rejected Destination Required"),message:__("Select where the rejected quantity will go before submitting the stock document."),indicator:"orange"});
+            return;
+        }
+        if(this.rejectedDestinationNeedsWarehouse(destination)&&!destinationWarehouse){
+            frappe.msgprint({title:__("Destination Warehouse Required"),message:__("Select the warehouse that will receive the rejected quantity."),indicator:"orange"});
+            return;
+        }
+        if(this.isRejectedDestructionDestination(destination)&&!destructionNotes){
+            frappe.msgprint({title:__("Destruction Details Required"),message:__("Enter the destruction reason/details before submitting the destruction document."),indicator:"orange"});
+            return;
+        }
+        const summary = this.rejectedDestinationNeedsWarehouse(destination)
+            ? `${destination} → ${destinationWarehouse || __("warehouse not selected")}`
+            : (this.isRejectedDestructionDestination(destination) ? `${destination} • ${doc.rejected_destruction_date || this.value("rejected_destruction_date") || __("date not selected")}` : destination);
         const answer=await new Promise(resolve=>frappe.confirm(
-            __("Create and submit the rejected quantity return now? Rejected stock will move back to quarantine immediately."),
+            __("Create and submit the rejected-stock document now for {0}?",[summary]),
             ()=>resolve(true),
             ()=>resolve(false)
         ));
@@ -1496,11 +1698,11 @@ class PharmacyPurchaseReturnsManagement {
             method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.create_and_submit_rejected_quantity_return",
             args:{case_name:doc.name},
             freeze:true,
-            freeze_message:__("Creating and submitting rejected quantity return...")
+            freeze_message:__("Creating and submitting rejected-stock destination...")
         });
         await this.loadCase(doc.name);
         await this.refreshRecent();
-        frappe.show_alert({message:__("Rejected Quantity Return {0} submitted successfully.",[r.message.stock_entry]),indicator:"green"},8);
+        frappe.show_alert({message:__("Rejected-stock document {0} submitted successfully.",[r.message.stock_entry]),indicator:"green"},8);
     }
 
     async createApprovedDebitNoteDraft(){
@@ -1531,8 +1733,8 @@ class PharmacyPurchaseReturnsManagement {
         }
         if(flt(doc.rejected_quantity)>0 && doc.rejection_return_docstatus!==1){
             frappe.msgprint({
-                title:__("Submitted Rejected Quantity Return Required"),
-                message:__("Submit the rejected quantity return before creating the Approved Debit Note."),
+                title:__("Submitted Rejected Qty Destination Required"),
+                message:__("Submit the rejected quantity destination document before creating the Approved Debit Note."),
                 indicator:"orange"
             });
             return;
@@ -1582,7 +1784,7 @@ class PharmacyPurchaseReturnsManagement {
             return;
         }
         if(flt(doc.rejected_quantity)>0 && doc.rejection_return_docstatus!==1){
-            frappe.msgprint({title:__("Submitted Rejected Quantity Return Required"),message:__("Submit the rejected quantity return before submitting the Approved Debit Note."),indicator:"orange"});
+            frappe.msgprint({title:__("Submitted Rejected Qty Destination Required"),message:__("Submit the rejected quantity destination document before submitting the Approved Debit Note."),indicator:"orange"});
             return;
         }
         const answer=await new Promise(resolve=>frappe.confirm(
@@ -1796,20 +1998,20 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.find('[data-action="save-response"]').prop("disabled",this.handoverDocstatus!==1||this.rejectionReturnDocstatus===1);
         const totalRejected=this.rows.reduce((total,row)=>total+flt(row.rejected_qty),0);
         const totalPending=this.rows.reduce((total,row)=>total+Math.max(0,flt(row.delivered_qty)-flt(row.accepted_qty)-flt(row.rejected_qty)),0);
-        this.$main.find('[data-action="create-rejection-return"]').prop(
-            "disabled",
-            this.handoverDocstatus!==1
-                || totalRejected<=0
-                || totalPending>0.000001
-                || this.rejectionReturnDocstatus===1
-        );
-        this.$main.find('[data-action="submit-rejection-return"]').prop(
-            "disabled",
-            this.handoverDocstatus!==1
-                || totalRejected<=0
-                || totalPending>0.000001
-                || this.rejectionReturnDocstatus===1
-        );
+        const missingRejectedDestination=totalRejected>0&&!this.value("rejected_qty_destination");
+        const missingRejectedWarehouse=totalRejected>0&&this.rejectedDestinationNeedsWarehouse()&&!this.value("rejected_destination_warehouse");
+        const missingDestructionDetails=totalRejected>0&&this.isRejectedDestructionDestination()&&!this.value("rejected_destruction_notes");
+        const rejectedDestinationIncomplete=missingRejectedDestination||missingRejectedWarehouse||missingDestructionDetails;
+        const rejectionBlockedReason = this.rejectedDestinationBlockedReason(totalRejected, totalPending, rejectedDestinationIncomplete);
+        ["create-rejection-return","submit-rejection-return"].forEach(action=>{
+            const $button=this.$main.find(`[data-action="${action}"]`);
+            const blocked=Boolean(rejectionBlockedReason);
+            // Keep these buttons clickable even when prerequisites are incomplete so the user gets a clear reason instead of a dead button.
+            $button.prop("disabled", false)
+                .attr("data-not-ready", blocked ? "1" : "0")
+                .attr("data-not-ready-reason", rejectionBlockedReason || "")
+                .attr("title", rejectionBlockedReason || "");
+        });
         const totalAccepted=this.rows.reduce((total,row)=>total+flt(row.accepted_qty),0);
         const rejectionReady=totalRejected<=0||this.rejectionReturnDocstatus===1;
         this.$main.find('[data-action="create-approved-debit-note"]').prop(
@@ -2051,7 +2253,10 @@ class PharmacyPurchaseReturnsManagement {
             handover_stock_entry:this.handoverStockEntry, rejection_return_stock_entry:this.rejectionReturnStockEntry, approved_debit_note:this.approvedDebitNote,
             supplier_claim:this.supplierClaim, refund_payment_entry:this.refundPaymentEntry, operational_status:this.$main.find('[data-role="case-status"]').text(),
             settlement_status:this.settlementStatus, approved_return_value:this.approvedReturnValue, claim_deduction_amount:this.claimDeductionAmount,
-            planned_claim_deduction_amount:this.plannedClaimDeduction, refund_amount:this.refundAmount, remaining_settlement_amount:this.remainingSettlementAmount
+            planned_claim_deduction_amount:this.plannedClaimDeduction, refund_amount:this.refundAmount, remaining_settlement_amount:this.remainingSettlementAmount,
+            rejected_qty_destination:this.value("rejected_qty_destination"), rejected_destination_warehouse:this.value("rejected_destination_warehouse"),
+            rejected_destruction_date:this.value("rejected_destruction_date"), rejected_destruction_reference:this.value("rejected_destruction_reference"),
+            rejected_destruction_notes:this.value("rejected_destruction_notes")
         };
     }
 
@@ -2096,7 +2301,7 @@ class PharmacyPurchaseReturnsManagement {
             [__("Purchase Return"),"Purchase Invoice",row.purchase_return],
             [__("Quarantine Transfer"),"Stock Entry",row.quarantine_stock_entry],
             [__("Supplier Handover"),"Stock Entry",row.handover_stock_entry],
-            [__("Rejected Qty Return"),"Stock Entry",row.rejection_return_stock_entry],
+            [__("Rejected Qty Destination"),"Stock Entry",row.rejection_return_stock_entry],
             [__("Approved Debit Note"),"Purchase Invoice",row.approved_debit_note],
             [__("Supplier Claim"),"Supplier Claim",row.supplier_claim],
             [__("Supplier Refund"),"Payment Entry",row.refund_payment_entry],
@@ -2123,6 +2328,10 @@ class PharmacyPurchaseReturnsManagement {
         const compactItems=items.map((r,i)=>`<tr><td>${i+1}</td><td>${this.esc(r.item_name||r.item_code)}<div class="muted">${this.esc(r.item_code||"")}</div></td><td>${this.esc(r.batch_no||"—")}</td><td>${this.esc(r.expiry_date||"—")}</td><td>${qtyOf(r)}</td></tr>`).join("");
         const decisionItems=items.map((r,i)=>`<tr><td>${i+1}</td><td>${this.esc(r.item_name||r.item_code)}<div class="muted">${this.esc(r.item_code||"")}</div></td><td>${this.esc(r.batch_no||"—")}</td><td>${flt(r.delivered_qty)||flt(r.return_qty)}</td><td>${flt(r.accepted_qty)}</td><td>${flt(r.rejected_qty)}</td><td>${this.money(r.approved_total_credit||0)}</td></tr>`).join("");
         const stages=this.caseStageDocuments(row).map(d=>`<tr><td>${this.esc(d[0])}</td><td>${this.esc(d[2])}</td></tr>`).join("");
+        const rejectedDestination=row.rejected_qty_destination||this.value("rejected_qty_destination")||"";
+        const rejectedDestinationWarehouse=row.rejected_destination_warehouse||this.value("rejected_destination_warehouse")||"";
+        const rejectedDestructionDate=row.rejected_destruction_date||this.value("rejected_destruction_date")||"";
+        const rejectedDestinationText=[rejectedDestination,rejectedDestinationWarehouse||rejectedDestructionDate].filter(Boolean).join(" → ");
         const title = mode==="Supplier Handover Receipt" ? __("Supplier Handover Receipt") : mode==="Supplier Decision Summary" ? __("Supplier Decision Summary") : mode==="Financial Summary" ? __("Financial Summary") : __("Purchase Return Case Summary");
         let body="";
         if(mode==="Supplier Handover Receipt"){
@@ -2131,6 +2340,7 @@ class PharmacyPurchaseReturnsManagement {
             <div class="signature"><div>${__("Receiver Name / Signature")}: __________________</div><div>${__("Pharmacy Signature")}: __________________</div></div>`;
         }else if(mode==="Supplier Decision Summary"){
             body=`<div class="meta"><div class="box"><b>${__("Case")}</b><br>${this.esc(row.name||"")}</div><div class="box"><b>${__("Supplier")}</b><br>${this.esc(row.supplier||"")}</div><div class="box"><b>${__("Status")}</b><br>${this.esc(row.operational_status||"")}</div></div>
+            ${rejectedDestinationText?`<div class="section"><h3>${__("Rejected Qty Destination")}</h3><table><tr><th>${__("Destination")}</th><th>${__("Reference / Notes")}</th></tr><tr><td>${this.esc(rejectedDestinationText)}</td><td>${this.esc(row.rejected_destruction_reference||this.value("rejected_destruction_reference")||row.rejected_destruction_notes||this.value("rejected_destruction_notes")||"—")}</td></tr></table></div>`:""}
             <div class="section"><h3>${__("Supplier Decision")}</h3><table><tr><th>#</th><th>${__("Item")}</th><th>${__("Batch")}</th><th>${__("Handover")}</th><th>${__("Accepted")}</th><th>${__("Rejected")}</th><th>${__("Approved")}</th></tr>${decisionItems||`<tr><td colspan="7">${__("No loaded item rows on this page.")}</td></tr>`}</table></div>`;
         }else if(mode==="Financial Summary"){
             body=`<div class="meta"><div class="box"><b>${__("Case")}</b><br>${this.esc(row.name||"")}</div><div class="box"><b>${__("Supplier")}</b><br>${this.esc(row.supplier||"")}</div><div class="box"><b>${__("Settlement")}</b><br>${this.esc(row.settlement_status||"")}</div></div>
@@ -2199,9 +2409,9 @@ class PharmacyPurchaseReturnsManagement {
     }
 
     async newCase(){
-        this.caseName=null;this.purchaseReturn=null;this.purchaseReturnDocstatus=null;this.purchaseReturnStatus=null;this.quarantineStockEntry=null;this.handoverStockEntry=null;this.rejectionReturnStockEntry=null;this.approvedDebitNote=null;this.approvedDebitNoteDocstatus=null;this.approvedDebitNoteStatus=null;this.approvedDebitNoteAmount=0;this.approvedDebitNoteOutstanding=0;this.supplierClaim=null;this.settlementStatus="Pending Settlement";this.claimUtilizationStatus="Not Applied";this.claimSettlementDate=null;this.plannedClaimDeduction=0;this.claimDeductionAmount=0;this.settledAmount=0;this.remainingSettlementAmount=0;this.approvedReturnValue=0;this.refundPaymentEntry=null;this.refundPaymentEntryStatus=null;this.refundAmount=0;this.refundEntriesCount=0;this.hasOpenRefundDraft=false;this.refundPayments=[];this.quarantineDocstatus=null;this.handoverDocstatus=null;this.rejectionReturnDocstatus=null;this.rows=[];
+        this.caseName=null;this.purchaseReturn=null;this.purchaseReturnDocstatus=null;this.purchaseReturnStatus=null;this.quarantineStockEntry=null;this.handoverStockEntry=null;this.rejectionReturnStockEntry=null;this.rejectedQtyDestination="";this.rejectedDestinationWarehouse="";this.approvedDebitNote=null;this.approvedDebitNoteDocstatus=null;this.approvedDebitNoteStatus=null;this.approvedDebitNoteAmount=0;this.approvedDebitNoteOutstanding=0;this.supplierClaim=null;this.settlementStatus="Pending Settlement";this.claimUtilizationStatus="Not Applied";this.claimSettlementDate=null;this.plannedClaimDeduction=0;this.claimDeductionAmount=0;this.settledAmount=0;this.remainingSettlementAmount=0;this.approvedReturnValue=0;this.refundPaymentEntry=null;this.refundPaymentEntryStatus=null;this.refundAmount=0;this.refundEntriesCount=0;this.hasOpenRefundDraft=false;this.refundPayments=[];this.quarantineDocstatus=null;this.handoverDocstatus=null;this.rejectionReturnDocstatus=null;this.rows=[];
         await this.setReturnType("Return Against Invoice",false);
-        await this.setValue("supplier","");await this.setValue("original_purchase_invoice","");await this.setValue("settlement_method","Pending Settlement");await this.setValue("authority_notification_no","");await this.setValue("authority_notification_date","");await this.setValue("authority_notification_attachment","");await this.setValue("recall_item_code","");await this.setValue("recall_batch_no","");await this.setValue("recall_source_warehouse","");await this.applyCompanyDefaults();await this.setValue("remarks","");await this.setValue("supplier_claim","");await this.setValue("refund_posting_date",frappe.datetime.get_today());await this.setValue("refund_mode_of_payment","");await this.setValue("refund_account","");await this.setValue("refund_request_amount","");await this.setValue("refund_reference_no","");await this.setValue("refund_reference_date","");await this.setValue("refund_notes","");await this.setValue("case_reference","");
+        await this.setValue("supplier","");await this.setValue("original_purchase_invoice","");await this.setValue("settlement_method","Pending Settlement");await this.setValue("authority_notification_no","");await this.setValue("authority_notification_date","");await this.setValue("authority_notification_attachment","");await this.setValue("recall_item_code","");await this.setValue("recall_batch_no","");await this.setValue("recall_source_warehouse","");await this.applyCompanyDefaults();await this.setValue("remarks","");await this.setValue("supplier_claim","");await this.setValue("refund_posting_date",frappe.datetime.get_today());await this.setValue("refund_mode_of_payment","");await this.setValue("refund_account","");await this.setValue("refund_request_amount","");await this.setValue("refund_reference_no","");await this.setValue("refund_reference_date","");await this.setValue("refund_notes","");await this.setValue("rejected_qty_destination","");await this.setValue("rejected_destination_warehouse","");await this.setValue("rejected_destruction_date","");await this.setValue("rejected_destruction_reference","");await this.setValue("rejected_destruction_attachment","");await this.setValue("rejected_destruction_notes","");await this.setValue("case_reference","");
         this.$main.find('[data-role="case-status"]').text(__("New Case"));this.$main.find('[data-role="invoice-summary"]').text("");this.renderItems();this.syncButtons();this.refreshProgressiveUI();
     }
 }

@@ -421,8 +421,57 @@
   {
    "fieldname": "rejected_return_quantity",
    "fieldtype": "Float",
-   "label": "Rejected Quantity Returned to Quarantine",
+   "label": "Rejected Quantity Processed",
    "read_only": 1,
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_destination_section",
+   "fieldtype": "Section Break",
+   "label": "Rejected Quantity Destination",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_qty_destination",
+   "fieldtype": "Select",
+   "label": "Rejected Qty Destination",
+   "options": "\nReturn to Saleable Warehouse\nMove to Expired Disposal Warehouse\nDestruction / Documented Destruction",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_destination_warehouse",
+   "fieldtype": "Link",
+   "label": "Rejected Destination Warehouse",
+   "options": "Warehouse",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_destruction_date",
+   "fieldtype": "Date",
+   "label": "Destruction Date",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_destination_column",
+   "fieldtype": "Column Break",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_destruction_reference",
+   "fieldtype": "Data",
+   "label": "Destruction Reference",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_destruction_attachment",
+   "fieldtype": "Attach",
+   "label": "Destruction Attachment",
+   "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
+  },
+  {
+   "fieldname": "rejected_destruction_notes",
+   "fieldtype": "Small Text",
+   "label": "Destruction / Destination Notes",
    "depends_on": "eval:[\"Regulatory Batch Recall\",\"Expired Drugs Return\"].includes(doc.return_type)"
   },
   {
