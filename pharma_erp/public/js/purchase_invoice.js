@@ -173,6 +173,20 @@ frappe.ui.form.on("Purchase Invoice", {
             frappe.user.has_role("Accounts Manager") ||
             frappe.user.has_role("System Manager");
 
+        if (frm.doc.docstatus === 1 && !frm.doc.is_return) {
+            frm.add_custom_button(
+                __("Return Management"),
+                () => {
+                    frappe.route_options = {
+                        return_type: "Return Against Invoice",
+                        purchase_invoice: frm.doc.name,
+                    };
+                    frappe.set_route("purchase-returns-management");
+                },
+                __("Purchase Management")
+            );
+        }
+
         if (
             frm.doc.docstatus === 1 &&
             frm.doc.custom_retail_price_review_status === "Pending Review" &&
