@@ -718,6 +718,178 @@ def repair_supplier_claim_accounting(
     return settle_supplier_claim_accounting(claim_name, payment_entry, dry_run=dry_run)
 
 
+def _cancel_submitted_doc(doctype: str, name: str | None, claim_name: str, label: str):
+    if not name or not frappe.db.exists(doctype, name):
+        return None
+    doc = frappe.get_doc(doctype, name)
+    if doc.docstatus == 2:
+        return {"doctype": doctype, "name": name, "action": "already_cancelled"}
+    if doc.docstatus != 1:
+        return {"doctype": doctype, "name": name, "action": "not_submitted"}
+
+    if doc.meta.has_field("custom_supplier_claim") and doc.get("custom_supplier_claim") and doc.get("custom_supplier_claim") != claim_name:
+        frappe.throw(
+            _("{0} {1} is linked to another Supplier Claim {2}.").format(
+                label, frappe.bold(name), frappe.bold(doc.get("custom_supplier_claim"))
+            )
+        )
+
+    doc.cancel()
+    return {"doctype": doctype, "name": name, "action": "cancelled"}
+
+
+def _detach_supplier_claim_accounting_links(claim, journal_names: list[str], payment_entry: str | None) -> dict:
+    """Remove submitted Supplier Claim link fields before cancelling linked documents.
+
+    Frappe blocks cancellation of a submitted Journal Entry / Payment Entry when a
+    submitted Supplier Claim still has a Link field pointing to it.  The reversal
+    flow intentionally cancels those official accounting documents first, so the
+    blocking links are detached using db_set and the original references are kept
+    inside accounting_settlement_details.
+    """
+    original = {
+        "settlement_discount_journal_entry": claim.get("settlement_discount_journal_entry"),
+        "accounting_reconciliation_journal_entries": claim.get("accounting_reconciliation_journal_entries"),
+        "payment_entry": claim.get("payment_entry"),
+    }
+
+    # These are direct Link fields and can block the target document cancellation.
+    if claim.get("settlement_discount_journal_entry"):
+        claim.db_set("settlement_discount_journal_entry", None, update_modified=False)
+        claim.settlement_discount_journal_entry = None
+    if claim.get("payment_entry"):
+        claim.db_set("payment_entry", None, update_modified=False)
+        claim.payment_entry = None
+
+    # This is a text audit field, but clear it too so the claim visibly moves out
+    # of reconciled state while its linked documents are being reversed.
+    if claim.get("accounting_reconciliation_journal_entries"):
+        claim.db_set("accounting_reconciliation_journal_entries", None, update_modified=False)
+        claim.accounting_reconciliation_journal_entries = None
+
+    return original
+
+
+def _claim_journal_names(claim) -> list[str]:
+    names = []
+    if claim.get("settlement_discount_journal_entry"):
+        names.append(claim.get("settlement_discount_journal_entry"))
+    for line in (claim.get("accounting_reconciliation_journal_entries") or "").splitlines():
+        line = (line or "").strip()
+        if line:
+            names.append(line)
+    # Preserve order while removing duplicates.
+    seen = set()
+    result = []
+    for name in names:
+        if name not in seen:
+            result.append(name)
+            seen.add(name)
+    return result
+
+
+@frappe.whitelist()
+def reverse_supplier_claim_accounting(claim_name: str):
+    claim = frappe.get_doc("Supplier Claim", claim_name)
+    claim.check_permission("write")
+    if claim.docstatus != 1:
+        frappe.throw(_("Only submitted Supplier Claims can have accounting settlement reversed."))
+    if claim.get("accounting_settlement_status") != "Reconciled":
+        return {
+            "supplier_claim": claim.name,
+            "already_reversed": 1,
+            "accounting_settlement_status": claim.get("accounting_settlement_status"),
+        }
+
+    journal_names = _claim_journal_names(claim)
+    payment_entry = claim.get("payment_entry")
+    original_links = _detach_supplier_claim_accounting_links(claim, journal_names, payment_entry)
+    cancelled = []
+    frappe.flags.supplier_claim_accounting_reversal = True
+    try:
+        # Cancel journals first so debit-note/invoice reconciliation is opened again.
+        # This includes settlement discount and supplier claim reconciliation JEs.
+        for journal_name in journal_names:
+            cancelled.append(_cancel_submitted_doc("Journal Entry", journal_name, claim.name, _("Journal Entry")))
+
+        # Cancel the supplier payment entry only when it is explicitly linked to this claim.
+        # ERPNext cancellation reverses the GL impact, so cash/bank value returns to the
+        # same paid_from account that originally paid the supplier.
+        if payment_entry:
+            payment_meta = frappe.get_meta("Payment Entry")
+            if payment_meta.has_field("custom_supplier_claim"):
+                linked_claim = frappe.db.get_value("Payment Entry", payment_entry, "custom_supplier_claim")
+                if linked_claim and linked_claim != claim.name:
+                    frappe.throw(
+                        _("Payment Entry {0} is linked to another Supplier Claim {1}.").format(
+                            frappe.bold(payment_entry), frappe.bold(linked_claim)
+                        )
+                    )
+            cancelled.append(_cancel_submitted_doc("Payment Entry", payment_entry, claim.name, _("Payment Entry")))
+    except Exception:
+        # If reversal fails before any target document is cancelled, restore the visible links.
+        # If one or more accounting documents were already cancelled, keep the claim detached
+        # and mark it as needing review instead of re-linking to cancelled documents.
+        if not [entry for entry in cancelled if entry and entry.get("action") == "cancelled"]:
+            if original_links.get("settlement_discount_journal_entry"):
+                claim.db_set(
+                    "settlement_discount_journal_entry",
+                    original_links.get("settlement_discount_journal_entry"),
+                    update_modified=False,
+                )
+            if original_links.get("payment_entry"):
+                claim.db_set("payment_entry", original_links.get("payment_entry"), update_modified=False)
+            if original_links.get("accounting_reconciliation_journal_entries"):
+                claim.db_set(
+                    "accounting_reconciliation_journal_entries",
+                    original_links.get("accounting_reconciliation_journal_entries"),
+                    update_modified=False,
+                )
+        else:
+            frappe.db.set_value(
+                "Supplier Claim",
+                claim.name,
+                "accounting_settlement_status",
+                "Reversal Required",
+                update_modified=False,
+            )
+        raise
+    finally:
+        frappe.flags.supplier_claim_accounting_reversal = False
+
+    for row in claim.invoices:
+        row.accounting_allocated_amount = 0
+        row.accounting_outstanding_after = None
+        row.accounting_status = "Cancelled"
+
+    claim.status = "Approved"
+    claim.payment_entry = None
+    claim.settlement_discount_journal_entry = None
+    claim.accounting_reconciliation_journal_entries = None
+    claim.accounting_settlement_status = "Needs Reconciliation"
+    claim.accounting_settlement_date = None
+    claim.accounting_settlement_details = json.dumps(
+        {
+            "reversed_at": str(now_datetime()),
+            "v": "v0.7.28",
+            "cancelled_documents": [entry for entry in cancelled if entry],
+            "original_links": original_links,
+            "cash_bank_reversal_note": "Payment Entry cancellation reverses GL to the same paid_from cash/bank account.",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    claim.save(ignore_permissions=True)
+
+    return {
+        "supplier_claim": claim.name,
+        "status": claim.status,
+        "accounting_settlement_status": claim.accounting_settlement_status,
+        "cancelled_documents": [entry for entry in cancelled if entry],
+        "cash_bank_reversed_to_original_account": bool(payment_entry),
+    }
+
+
 def has_reconciled_accounting(claim_name: str) -> bool:
     return (
         frappe.db.get_value("Supplier Claim", claim_name, "accounting_settlement_status")

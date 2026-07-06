@@ -282,10 +282,78 @@ class SupplierClaim(Document):
                 return posting_date
         return nowdate()
 
+    def _row_linked_return_case_names(self):
+        meta = frappe.get_meta("Purchase Invoice")
+        if not meta.has_field("custom_pharmacy_return_case"):
+            return set()
+
+        case_names = set()
+        for row in self.invoices:
+            if not row.is_return or not row.purchase_invoice:
+                continue
+            case_name = frappe.db.get_value(
+                "Purchase Invoice", row.purchase_invoice, "custom_pharmacy_return_case"
+            )
+            if case_name:
+                case_names.add(case_name)
+        return case_names
+
+    def _case_field_linked_return_case_names(self):
+        if not frappe.get_meta("Pharmacy Return Case").has_field("supplier_claim"):
+            return set()
+        return set(
+            frappe.get_all(
+                "Pharmacy Return Case",
+                filters={"supplier_claim": self.name},
+                pluck="name",
+                limit_page_length=0,
+            )
+        )
+
+    def _reset_return_case_claim_deduction(self, case):
+        settlement_base = (
+            flt(case.get("approved_return_value"))
+            or flt(case.get("approved_debit_note_amount"))
+            or flt(case.get("requested_return_value"))
+        )
+        refund = flt(case.get("refund_amount"))
+        remaining = max(0.0, settlement_base - refund)
+
+        case.supplier_claim = None
+        case.planned_claim_deduction_amount = 0
+        case.claim_deduction_amount = 0
+        case.settled_amount = refund
+        case.remaining_settlement_amount = remaining
+        case.settlement_method = "Cash / Bank Refund" if refund > 0 else "Pending Settlement"
+        case.settlement_status = (
+            "Partially Settled"
+            if refund > 0 and remaining > 0.01
+            else "Settled"
+            if refund > 0
+            else "Credited to Supplier Account"
+        )
+        case.operational_status = self._status_before_claim(case)
+        if case.meta.has_field("claim_utilization_status"):
+            case.claim_utilization_status = "Not Applied"
+        if case.meta.has_field("claim_settlement_date"):
+            case.claim_settlement_date = None
+        case.save(ignore_permissions=True)
+
+    def _sync_stale_return_case_claim_links(self, active_case_names=None):
+        active_case_names = set(active_case_names or [])
+        stale_case_names = self._case_field_linked_return_case_names() - active_case_names
+        for case_name in stale_case_names:
+            if not frappe.db.exists("Pharmacy Return Case", case_name):
+                continue
+            case = frappe.get_doc("Pharmacy Return Case", case_name)
+            self._reset_return_case_claim_deduction(case)
+
     def _sync_return_cases(self, cancel=False):
         meta = frappe.get_meta("Purchase Invoice")
         if not meta.has_field("custom_pharmacy_return_case"):
             return
+
+        active_case_names = set()
 
         for row in self.invoices:
             if not row.is_return:
@@ -301,6 +369,7 @@ class SupplierClaim(Document):
             ):
                 continue
 
+            active_case_names.add(case_name)
             case = frappe.get_doc("Pharmacy Return Case", case_name)
             settlement_base = self._return_case_settlement_base(case, row)
             deduction = min(settlement_base, abs(flt(row.included_amount)))
@@ -312,24 +381,7 @@ class SupplierClaim(Document):
             )
 
             if cancel:
-                case.supplier_claim = None
-                case.planned_claim_deduction_amount = 0
-                case.claim_deduction_amount = 0
-                case.settled_amount = refund
-                case.remaining_settlement_amount = max(
-                    0.0, settlement_base - refund
-                )
-                case.settlement_status = (
-                    "Partially Settled"
-                    if refund > 0
-                    else "Credited to Supplier Account"
-                )
-                case.operational_status = self._status_before_claim(case)
-                if case.meta.has_field("claim_utilization_status"):
-                    case.claim_utilization_status = "Not Applied"
-                if case.meta.has_field("claim_settlement_date"):
-                    case.claim_settlement_date = None
-                case.save(ignore_permissions=True)
+                self._reset_return_case_claim_deduction(case)
                 continue
 
             case.supplier_claim = self.name
@@ -378,6 +430,13 @@ class SupplierClaim(Document):
                 case.claim_settlement_date = settlement_date
 
             case.save(ignore_permissions=True)
+
+        # Also clear Return Cases that still point to this Supplier Claim but no
+        # longer have a matching return row, e.g. after row removal or claim cancel.
+        if cancel or self.docstatus == 2:
+            self._sync_stale_return_case_claim_links(active_case_names=set())
+        else:
+            self._sync_stale_return_case_claim_links(active_case_names=active_case_names)
 
 
 def _validate_claim_payment_entry(claim, payment_entry):
@@ -430,6 +489,89 @@ def close_claim_as_paid(claim_name, payment_entry=None):
         payment_entry or claim.payment_entry or None,
         dry_run=False,
     )
+
+
+@frappe.whitelist()
+def resync_return_cases_for_supplier_claim(claim_name: str):
+    claim = frappe.get_doc("Supplier Claim", claim_name)
+    claim.check_permission("read")
+    claim._sync_return_cases(cancel=(claim.docstatus == 2))
+    return {
+        "supplier_claim": claim.name,
+        "docstatus": claim.docstatus,
+        "status": claim.status,
+        "accounting_settlement_status": claim.get("accounting_settlement_status"),
+        "synced": 1,
+    }
+
+
+def _submitted_link_exists(doctype: str, name: str | None) -> bool:
+    if not name or not frappe.db.exists(doctype, name):
+        return False
+    return frappe.db.get_value(doctype, name, "docstatus") == 1
+
+
+@frappe.whitelist()
+def safely_cancel_supplier_claim(claim_name: str):
+    """v0.7.29: Cancel Supplier Claim without cancelling linked Purchase Invoices / batches.
+
+    Standard Frappe cancellation may show a Cancel All Documents dialog because
+    a submitted Supplier Claim has child-table Links to submitted Purchase
+    Invoices and their Serial/Batch Bundles.  In this business flow, those
+    invoices are original supplier documents and must stay submitted.  This
+    utility is therefore used only after accounting reversal; it ignores link
+    cancellation for the Supplier Claim itself, then runs the normal on_cancel
+    synchronization to clear claim links from Purchase Invoices and Return Cases.
+    """
+    claim = frappe.get_doc("Supplier Claim", claim_name)
+    claim.check_permission("cancel")
+
+    if claim.docstatus != 1:
+        frappe.throw(_("Only submitted Supplier Claims can be safely cancelled."))
+
+    if claim.get("accounting_settlement_status") == "Reconciled":
+        frappe.throw(_("Reverse Accounting Settlement before safely cancelling this Supplier Claim."))
+
+    blockers = []
+    if _submitted_link_exists("Payment Entry", claim.get("payment_entry")):
+        blockers.append(_("Payment Entry {0}").format(frappe.bold(claim.get("payment_entry"))))
+    if _submitted_link_exists("Journal Entry", claim.get("settlement_discount_journal_entry")):
+        blockers.append(_("Discount Journal Entry {0}").format(frappe.bold(claim.get("settlement_discount_journal_entry"))))
+    for journal_name in (claim.get("accounting_reconciliation_journal_entries") or "").splitlines():
+        journal_name = (journal_name or "").strip()
+        if _submitted_link_exists("Journal Entry", journal_name):
+            blockers.append(_("Reconciliation Journal Entry {0}").format(frappe.bold(journal_name)))
+
+    if blockers:
+        frappe.throw(
+            _("Reverse Accounting Settlement first. The following submitted accounting documents are still linked: {0}").format(
+                ", ".join(blockers)
+            )
+        )
+
+    previous_ignore_links = getattr(frappe.flags, "ignore_links", False)
+    frappe.flags.safe_supplier_claim_cancel = True
+    frappe.flags.ignore_links = True
+    claim.flags.ignore_links = True
+    try:
+        claim.cancel()
+    finally:
+        frappe.flags.ignore_links = previous_ignore_links
+        frappe.flags.safe_supplier_claim_cancel = False
+
+    cancelled = frappe.get_doc("Supplier Claim", claim.name)
+    # Defensive re-sync in case future framework changes skip on_cancel side
+    # effects when ignore_links is used.  This keeps Return Cases Not Applied.
+    cancelled._sync_return_cases(cancel=True)
+
+    return {
+        "supplier_claim": cancelled.name,
+        "docstatus": cancelled.docstatus,
+        "status": cancelled.status,
+        "accounting_settlement_status": cancelled.get("accounting_settlement_status"),
+        "safe_cancelled": 1,
+        "linked_purchase_invoices_cancelled": 0,
+    }
 
 
 @frappe.whitelist()

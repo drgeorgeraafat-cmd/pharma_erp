@@ -73,6 +73,65 @@ frappe.ui.form.on("Supplier Claim", {
                 __("Reconcile"));
             }, __("Settlement"));
         }
+        if (frm.doc.docstatus === 1 && frm.doc.accounting_settlement_status === "Reconciled") {
+            frm.add_custom_button(__("Reverse Accounting Settlement"), async () => {
+                frappe.confirm(
+                    __("Reverse the accounting settlement for Supplier Claim {0}? Linked reconciliation journals and the claim payment entry will be cancelled when safely linked to this claim. If paid from cash/bank, ERPNext will reverse the GL back to the same paid-from account.", [frm.doc.name]),
+                    async () => {
+                        const result = await frappe.call({
+                            method: "pharma_erp.pharma_erp.supplier_claim_accounting.reverse_supplier_claim_accounting",
+                            args: { claim_name: frm.doc.name },
+                            freeze: true,
+                            freeze_message: __("Reversing journals, payment entry and cash/bank GL impact...")
+                        });
+                        const data = result.message || {};
+                        frappe.show_alert({
+                            message: __("Supplier Claim {0} accounting reversed.", [data.supplier_claim || frm.doc.name]),
+                            indicator: "green"
+                        }, 8);
+                        await frm.reload_doc();
+                    }
+                );
+            }, __("Settlement"));
+        }
+        // v0.7.29: safe claim cancellation without cancelling linked Purchase Invoices / batches.
+        if (frm.doc.docstatus === 1 && frm.doc.accounting_settlement_status !== "Reconciled") {
+            frm.add_custom_button(__("Cancel Supplier Claim Safely"), async () => {
+                frappe.confirm(
+                    __("Safely cancel Supplier Claim {0}? This will cancel the Supplier Claim only, clear linked Return Case deductions, and will NOT cancel linked Purchase Invoices or Serial/Batch Bundles. Accounting settlement must already be reversed.", [frm.doc.name]),
+                    async () => {
+                        const result = await frappe.call({
+                            method: "pharma_erp.pharma_erp.doctype.supplier_claim.supplier_claim.safely_cancel_supplier_claim",
+                            args: { claim_name: frm.doc.name },
+                            freeze: true,
+                            freeze_message: __("Safely cancelling supplier claim without cancelling linked invoices...")
+                        });
+                        const data = result.message || {};
+                        frappe.show_alert({
+                            message: __("Supplier Claim {0} safely cancelled. Linked return cases refreshed.", [data.supplier_claim || frm.doc.name]),
+                            indicator: "green"
+                        }, 10);
+                        await frm.reload_doc();
+                    }
+                );
+            }, __("Settlement"));
+        }
+        if (frm.doc.docstatus !== 0) {
+            frm.add_custom_button(__("Refresh Linked Return Cases"), async () => {
+                const result = await frappe.call({
+                    method: "pharma_erp.pharma_erp.doctype.supplier_claim.supplier_claim.resync_return_cases_for_supplier_claim",
+                    args: { claim_name: frm.doc.name },
+                    freeze: true,
+                    freeze_message: __("Refreshing linked return cases...")
+                });
+                const data = result.message || {};
+                frappe.show_alert({
+                    message: __("Linked Return Cases refreshed for Supplier Claim {0}.", [data.supplier_claim || frm.doc.name]),
+                    indicator: "green"
+                }, 8);
+                await frm.reload_doc();
+            }, __("Settlement"));
+        }
         if (frm.doc.docstatus === 1 && frm.doc.payment_entry) {
             frm.add_custom_button(__("Open Payment Entry"), () => {
                 frappe.set_route("Form", "Payment Entry", frm.doc.payment_entry);

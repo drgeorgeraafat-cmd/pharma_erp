@@ -120,6 +120,7 @@ class PharmacyPurchaseReturnsManagement {
                         <button class="btn btn-warning btn-sm" data-action="create-claim-deduction">${__("Create / Link Supplier Claim Draft")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-supplier-claim" disabled>${__("Open Supplier Claim")}</button>
                         <button type="button" class="btn btn-danger btn-sm" data-action="remove-claim-deduction">${__("Remove Draft Claim Deduction")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="reverse-claim-deduction">${__("Reverse Supplier Claim Deduction")}</button>
                         <button class="btn btn-success btn-sm" data-action="create-refund-payment">${__("Create Supplier Refund Draft")}</button>
                         <button class="btn btn-success btn-sm" data-action="submit-refund-payment">${__("Create & Submit Supplier Refund")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-refund-payment" disabled>${__("Open Latest Refund Payment")}</button>
@@ -690,7 +691,7 @@ class PharmacyPurchaseReturnsManagement {
             if(["Deduct from Supplier Claim","Mixed Settlement"].includes(method)||this.supplierClaim){
                 showControls(["supplier_claim"],false);
                 showActions(["create-claim-deduction"]);
-                if(this.supplierClaim)showActions(["open-supplier-claim"]);
+                if(this.supplierClaim)showActions(["open-supplier-claim","reverse-claim-deduction"]);
             }
             if(["Cash / Bank Refund","Mixed Settlement"].includes(method)||this.refundPaymentEntry){
                 showControls(["refund_posting_date","refund_mode_of_payment","refund_account","refund_request_amount","refund_reference_no","refund_reference_date","refund_notes"],false);
@@ -710,6 +711,7 @@ class PharmacyPurchaseReturnsManagement {
         if(this.rejectionReturnStockEntry && this.rejectionReturnDocstatus!==2)showActions(["cancel-rejection-return"]);
         if(this.approvedDebitNote && this.approvedDebitNoteDocstatus!==2)showActions(["cancel-approved-debit-note"]);
         if(this.supplierClaim && this.supplierClaimDocstatus===0)showActions(["remove-claim-deduction"]);
+        if(this.supplierClaim && this.supplierClaimDocstatus!==0)showActions(["reverse-claim-deduction"]);
         if(this.refundPaymentEntry && this.refundPaymentEntryDocstatus!==2)showActions(["cancel-refund-payment"]);
 
         const cardRoles=[
@@ -929,6 +931,7 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.on("click", "[data-action='cancel-rejection-return']", e=>this.runPageAction(e, "cancel-rejection-return", ()=>this.cancelRejectedQuantityDestination()));
         this.$main.on("click", "[data-action='cancel-approved-debit-note']", e=>this.runPageAction(e, "cancel-approved-debit-note", ()=>this.cancelApprovedDebitNote()));
         this.$main.on("click", "[data-action='remove-claim-deduction']", e=>this.runPageAction(e, "remove-claim-deduction", ()=>this.removeDraftClaimDeduction()));
+        this.$main.on("click", "[data-action='reverse-claim-deduction']", e=>this.runPageAction(e, "reverse-claim-deduction", ()=>this.reverseSupplierClaimDeduction()));
         this.$main.on("click", "[data-action='cancel-refund-payment']", e=>this.runPageAction(e, "cancel-refund-payment", ()=>this.cancelSupplierRefundPayment()));
         this.$main.on("click", ".prm-type:not(.disabled)", e=>this.setReturnType($(e.currentTarget).data("type")));
         this.$main.on("change", "[data-row-field]", e=>this.updateRow(e));
@@ -2020,6 +2023,16 @@ class PharmacyPurchaseReturnsManagement {
         });
     }
 
+    async reverseSupplierClaimDeduction(){
+        return this.cancelLinkedDocument({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.reverse_supplier_claim_deduction",
+            args:{case_name:this.caseName},
+            question:__("Refresh/reverse the Supplier Claim deduction for case {0}? If the claim is submitted, cancel it from the Supplier Claim document first.",[this.caseName]),
+            freezeMessage:__("Reversing supplier claim deduction..."),
+            successMessage:(m)=>__("Supplier Claim deduction checked. Action: {0}. Remaining settlement: {1}.",[m.action||"synced",this.money(m.remaining_settlement||0)])
+        });
+    }
+
     async cancelSupplierRefundPayment(){
         return this.cancelLinkedDocument({
             method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.cancel_supplier_refund_payment",
@@ -2031,7 +2044,7 @@ class PharmacyPurchaseReturnsManagement {
     }
 
     syncButtons(){
-        ["create-handover","create-rejection-return","create-approved-debit-note","create-refund-payment","cancel-quarantine","cancel-handover","cancel-rejection-return","cancel-approved-debit-note","remove-claim-deduction","cancel-refund-payment"].forEach(action=>{
+        ["create-handover","create-rejection-return","create-approved-debit-note","create-refund-payment","cancel-quarantine","cancel-handover","cancel-rejection-return","cancel-approved-debit-note","remove-claim-deduction","reverse-claim-deduction","cancel-refund-payment"].forEach(action=>{
             this.$main.find(`[data-action="${action}"]`).hide().prop("disabled",true);
         });
         const returnType=this.value("return_type");
@@ -2178,6 +2191,10 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.find('[data-action="remove-claim-deduction"]').prop(
             "disabled",
             !this.supplierClaim || this.supplierClaimDocstatus!==0
+        );
+        this.$main.find('[data-action="reverse-claim-deduction"]').prop(
+            "disabled",
+            !this.supplierClaim || this.supplierClaimDocstatus===0
         );
         this.$main.find('[data-action="cancel-refund-payment"]').prop(
             "disabled",

@@ -4586,6 +4586,80 @@ def remove_draft_supplier_claim_deduction(case_name: str):
 
 
 @frappe.whitelist()
+def reverse_supplier_claim_deduction(case_name: str):
+    _require_create()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    claim_name = case.get("supplier_claim")
+    settlement_document = _case_settlement_document(case)
+
+    if not claim_name or not frappe.db.exists("Supplier Claim", claim_name):
+        _clear_case_claim_fields(case)
+        case = _save_and_refresh_return_case(case)
+        return {
+            "case": case.name,
+            "supplier_claim": None,
+            "action": "already_unlinked",
+            "settlement_status": case.settlement_status,
+            "remaining_settlement": flt(case.remaining_settlement_amount),
+        }
+
+    claim = frappe.get_doc("Supplier Claim", claim_name)
+
+    if cint(claim.docstatus) == 0:
+        return remove_draft_supplier_claim_deduction(case_name)
+
+    if cint(claim.docstatus) == 2:
+        _clear_case_claim_fields(case)
+        case = _save_and_refresh_return_case(case)
+        return {
+            "case": case.name,
+            "supplier_claim": claim.name,
+            "action": "cancelled_claim_unlinked",
+            "settlement_status": case.settlement_status,
+            "remaining_settlement": flt(case.remaining_settlement_amount),
+        }
+
+    # Submitted Supplier Claims are source documents for multiple supplier invoices.
+    # Do not remove one return row from here; cancel/reverse the Supplier Claim itself
+    # so all payable invoices and return credits remain internally consistent.
+    if claim.get("accounting_settlement_status") == "Reconciled" or claim.status == "Paid":
+        frappe.throw(
+            _(
+                "Supplier Claim {0} is paid/reconciled. Reverse its accounting settlement first, "
+                "then cancel the Supplier Claim document. The Return Case will be released automatically."
+            ).format(frappe.bold(claim.name))
+        )
+
+    if settlement_document:
+        row_amount = frappe.db.get_value(
+            "Supplier Claim Invoice",
+            {
+                "parent": claim.name,
+                "parenttype": "Supplier Claim",
+                "purchase_invoice": settlement_document,
+            },
+            "included_amount",
+        )
+        if not row_amount:
+            _clear_case_claim_fields(case)
+            case = _save_and_refresh_return_case(case)
+            return {
+                "case": case.name,
+                "supplier_claim": claim.name,
+                "action": "no_matching_claim_row_unlinked",
+                "settlement_status": case.settlement_status,
+                "remaining_settlement": flt(case.remaining_settlement_amount),
+            }
+
+    frappe.throw(
+        _(
+            "Supplier Claim {0} is submitted. Cancel the Supplier Claim document first; "
+            "then reopen this Return Case or press Reverse Supplier Claim Deduction again."
+        ).format(frappe.bold(claim.name))
+    )
+
+
+@frappe.whitelist()
 def cancel_supplier_refund_payment(case_name: str, payment_entry: str | None = None):
     _require_create()
     case = frappe.get_doc("Pharmacy Return Case", case_name)
