@@ -16,6 +16,11 @@
   "original_purchase_invoice",
   "purchase_return",
   "operational_status",
+  "supplier_credit_note_section",
+  "supplier_credit_note_no",
+  "supplier_credit_note_date",
+  "supplier_credit_note_attachment",
+  "consolidated_purchase_returns",
   "regulatory_section",
   "authority_notification_no",
   "authority_notification_date",
@@ -160,6 +165,33 @@
    "default": "Draft",
    "reqd": 1,
    "in_list_view": 1
+  },
+  {
+   "fieldname": "supplier_credit_note_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Credit Note",
+   "depends_on": "eval:doc.return_type=='Return Against Invoice'"
+  },
+  {
+   "fieldname": "supplier_credit_note_no",
+   "fieldtype": "Data",
+   "label": "Supplier Credit Note No"
+  },
+  {
+   "fieldname": "supplier_credit_note_date",
+   "fieldtype": "Date",
+   "label": "Supplier Credit Note Date"
+  },
+  {
+   "fieldname": "supplier_credit_note_attachment",
+   "fieldtype": "Attach",
+   "label": "Supplier Credit Note Attachment"
+  },
+  {
+   "fieldname": "consolidated_purchase_returns",
+   "fieldtype": "Small Text",
+   "label": "Official Purchase Returns",
+   "read_only": 1
   },
   {
    "fieldname": "regulatory_section",

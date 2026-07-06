@@ -8,7 +8,10 @@
  "field_order": [
   "item_code",
   "item_name",
+  "original_purchase_invoice",
+  "original_supplier_invoice_no",
   "original_purchase_invoice_item",
+  "purchase_return",
   "batch_no",
   "expiry_date",
   "warehouse",
@@ -69,9 +72,29 @@
    "read_only": 1
   },
   {
+   "fieldname": "original_purchase_invoice",
+   "fieldtype": "Link",
+   "label": "Original Purchase Invoice",
+   "options": "Purchase Invoice",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "original_supplier_invoice_no",
+   "fieldtype": "Data",
+   "label": "Supplier Invoice No",
+   "read_only": 1
+  },
+  {
    "fieldname": "original_purchase_invoice_item",
    "fieldtype": "Data",
    "label": "Original Purchase Invoice Item",
+   "read_only": 1
+  },
+  {
+   "fieldname": "purchase_return",
+   "fieldtype": "Link",
+   "label": "Official Purchase Return",
+   "options": "Purchase Invoice",
    "read_only": 1
   },
   {

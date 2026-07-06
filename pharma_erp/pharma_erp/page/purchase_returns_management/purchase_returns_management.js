@@ -1,4 +1,4 @@
-/* Purchase Returns Management v0.7.26 - supplier handover reversal cleanup */
+/* Purchase Returns Management v0.7.31 - selected-item consolidated return against invoices */
 frappe.pages["purchase-returns-management"].on_page_load = function (wrapper) {
     frappe.purchase_returns_management = new PharmacyPurchaseReturnsManagement(wrapper);
 };
@@ -66,7 +66,7 @@ class PharmacyPurchaseReturnsManagement {
     render() {
         this.$main = $(this.page.main).html(`
             <style>
-                .prm-shell{padding:16px;max-width:1700px;margin:0 auto}.prm-hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;background:linear-gradient(135deg,var(--blue-50),var(--bg-color));border:1px solid var(--border-color);border-radius:14px;padding:18px;margin-bottom:14px}.prm-hero h3{margin:0 0 5px}.prm-muted{color:var(--text-muted)}.prm-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.prm-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0}.prm-type{border:1px solid var(--border-color);border-radius:12px;padding:13px;background:var(--card-bg);cursor:pointer}.prm-type.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-type.disabled{opacity:.62;cursor:default}.prm-type strong{display:block;margin-bottom:4px}.prm-panel{border:1px solid var(--border-color);background:var(--card-bg);border-radius:12px;padding:14px;margin-bottom:14px}.prm-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.prm-control .control-label{font-weight:600}.prm-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}.prm-status{border-radius:999px;padding:7px 11px;background:var(--gray-100);font-weight:700}.prm-table-wrap{overflow:auto}.prm-table{width:100%;border-collapse:collapse;min-width:2200px}.prm-table th,.prm-table td{border-bottom:1px solid var(--border-color);padding:8px;vertical-align:middle;white-space:nowrap}.prm-table th{font-size:12px;color:var(--text-muted);background:var(--subtle-fg)}.prm-table input,.prm-table select{min-width:90px}.prm-total{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}.prm-total>div{padding:11px;border:1px solid var(--border-color);border-radius:10px}.prm-total strong{display:block;font-size:18px}.prm-empty{text-align:center;padding:28px;color:var(--text-muted)}.prm-recent{width:100%;border-collapse:collapse}.prm-recent th,.prm-recent td{padding:8px;border-bottom:1px solid var(--border-color);vertical-align:top}.prm-recent-header{display:block}.prm-recent-title h4{margin:0 0 4px}.prm-recent-filters{width:100%;display:flex;flex-direction:column;gap:8px;margin-top:10px}.prm-filter-counts{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-filter-row{display:grid;grid-template-columns:minmax(180px,240px) minmax(260px,1fr);gap:8px;align-items:center}.prm-date-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) auto;gap:8px;align-items:end}.prm-filter-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-recent-filters .form-control{width:100%;min-width:0}.prm-recent-filters .prm-date-filter{min-width:0}.prm-recent-filters .prm-date-filter .form-group{margin-bottom:0}.prm-recent-filters .prm-date-filter .control-label{display:none}.prm-recent-filters .prm-date-filter .frappe-control{margin-bottom:0}.prm-recent-filters .prm-date-filter input{width:100%;min-width:0}.prm-recent-filters .input-with-feedback{width:100%}.prm-date-row .btn{white-space:nowrap}.prm-date-row{display:grid !important;grid-template-columns:minmax(160px,1fr) minmax(160px,1fr) !important;gap:8px !important;align-items:end !important;width:100% !important}.prm-date-row .prm-date-filter{min-width:0 !important;width:100% !important}.prm-date-row .control-input-wrapper,.prm-date-row .frappe-control,.prm-date-row .form-group{width:100% !important}.prm-date-row input{width:100% !important;min-width:0 !important}.prm-recent-filters{width:100% !important}.prm-native-date-wrap{position:relative;display:flex !important;gap:6px;align-items:center;width:100%;min-width:0}.prm-native-date-wrap .prm-date-text{flex:1 1 auto;min-width:0;width:100%}.prm-date-picker-btn{flex:0 0 auto;padding:3px 7px}.prm-native-date-input{position:absolute;right:0;bottom:0;width:1px;height:1px;opacity:.01;pointer-events:none}.prm-date-row{display:grid !important;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) !important;gap:8px !important;align-items:center !important}.prm-print-note{padding:8px 10px;border:1px solid var(--yellow-200);background:var(--yellow-50);border-radius:8px;margin-bottom:8px}.prm-print-summary{font-family:Arial, sans-serif;color:#111}.prm-print-summary h2,.prm-print-summary h3{margin:0 0 8px}.prm-print-summary table{width:100%;border-collapse:collapse;margin-top:8px}.prm-print-summary th,.prm-print-summary td{border:1px solid #ddd;padding:6px;text-align:left}.prm-print-summary .muted{color:#666}.prm-print-summary .section{margin-top:12px}.prm-counter{border:1px solid var(--border-color);border-radius:999px;padding:6px 10px;background:var(--subtle-fg);font-weight:700;white-space:nowrap}.prm-counter.open{border-color:var(--yellow-300);background:var(--yellow-50)}.prm-counter.closed{border-color:var(--green-300);background:var(--green-50)}.prm-recent-body{display:none;margin-top:12px}.prm-recent-body.expanded{display:block}.prm-supplier-invoice{font-size:12px;color:var(--text-muted);margin-top:3px}.prm-print-dropdown{position:relative;display:inline-block}.prm-print-menu{display:none;position:absolute;right:0;top:100%;min-width:230px;background:var(--card-bg);border:1px solid var(--border-color);border-radius:8px;box-shadow:var(--shadow-md);z-index:50;padding:6px}.prm-print-dropdown.open .prm-print-menu{display:block}.prm-print-menu a{display:block;padding:6px 8px;border-radius:6px;color:var(--text-color);text-decoration:none;cursor:pointer;white-space:nowrap}.prm-print-menu a:hover{background:var(--subtle-fg)}.prm-print-menu .disabled{color:var(--text-muted);cursor:not-allowed;pointer-events:none}.prm-link{color:var(--primary);cursor:pointer;font-weight:600}.prm-note{padding:11px;border-radius:10px;background:var(--yellow-50);border:1px solid var(--yellow-200)}.prm-toolbar .btn[data-not-ready="1"]{opacity:.72}.prm-vat-yes{font-weight:700}.prm-vat-no{color:var(--text-muted)}.prm-workflow{display:none;margin-bottom:12px;padding:12px;border:1px solid var(--border-color);border-radius:12px;background:var(--subtle-fg)}.prm-workflow-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.prm-workflow-step{padding:9px 10px;border:1px solid var(--border-color);border-radius:9px;background:var(--card-bg);font-size:12px}.prm-workflow-step strong{display:block;font-size:13px}.prm-workflow-step.done{border-color:var(--green-300);background:var(--green-50)}.prm-workflow-step.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-next-step{margin-top:10px;font-weight:700}.prm-stage-table{min-width:900px}.prm-stage-table.prm-stage-pricing{min-width:1250px}
+                .prm-shell{padding:16px;max-width:1700px;margin:0 auto}.prm-hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;background:linear-gradient(135deg,var(--blue-50),var(--bg-color));border:1px solid var(--border-color);border-radius:14px;padding:18px;margin-bottom:14px}.prm-hero h3{margin:0 0 5px}.prm-muted{color:var(--text-muted)}.prm-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.prm-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0}.prm-type{border:1px solid var(--border-color);border-radius:12px;padding:13px;background:var(--card-bg);cursor:pointer}.prm-type.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-type.disabled{opacity:.62;cursor:default}.prm-type strong{display:block;margin-bottom:4px}.prm-panel{border:1px solid var(--border-color);background:var(--card-bg);border-radius:12px;padding:14px;margin-bottom:14px}.prm-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.prm-control .control-label{font-weight:600}.prm-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}.prm-status{border-radius:999px;padding:7px 11px;background:var(--gray-100);font-weight:700}.prm-table-wrap{overflow:auto}.prm-table{width:100%;border-collapse:collapse;min-width:2200px}.prm-table th,.prm-table td{border-bottom:1px solid var(--border-color);padding:8px;vertical-align:middle;white-space:nowrap}.prm-table th{font-size:12px;color:var(--text-muted);background:var(--subtle-fg)}.prm-table input,.prm-table select{min-width:90px}.prm-total{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}.prm-total>div{padding:11px;border:1px solid var(--border-color);border-radius:10px}.prm-total strong{display:block;font-size:18px}.prm-empty{text-align:center;padding:28px;color:var(--text-muted)}.prm-recent{width:100%;border-collapse:collapse}.prm-recent th,.prm-recent td{padding:8px;border-bottom:1px solid var(--border-color);vertical-align:top}.prm-recent-header{display:block}.prm-recent-title h4{margin:0 0 4px}.prm-recent-filters{width:100%;display:flex;flex-direction:column;gap:8px;margin-top:10px}.prm-filter-counts{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-filter-row{display:grid;grid-template-columns:minmax(180px,240px) minmax(260px,1fr);gap:8px;align-items:center}.prm-date-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) auto;gap:8px;align-items:end}.prm-filter-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}.prm-recent-filters .form-control{width:100%;min-width:0}.prm-recent-filters .prm-date-filter{min-width:0}.prm-recent-filters .prm-date-filter .form-group{margin-bottom:0}.prm-recent-filters .prm-date-filter .control-label{display:none}.prm-recent-filters .prm-date-filter .frappe-control{margin-bottom:0}.prm-recent-filters .prm-date-filter input{width:100%;min-width:0}.prm-recent-filters .input-with-feedback{width:100%}.prm-date-row .btn{white-space:nowrap}.prm-date-row{display:grid !important;grid-template-columns:minmax(160px,1fr) minmax(160px,1fr) !important;gap:8px !important;align-items:end !important;width:100% !important}.prm-date-row .prm-date-filter{min-width:0 !important;width:100% !important}.prm-date-row .control-input-wrapper,.prm-date-row .frappe-control,.prm-date-row .form-group{width:100% !important}.prm-date-row input{width:100% !important;min-width:0 !important}.prm-recent-filters{width:100% !important}.prm-native-date-wrap{position:relative;display:flex !important;gap:6px;align-items:center;width:100%;min-width:0}.prm-native-date-wrap .prm-date-text{flex:1 1 auto;min-width:0;width:100%}.prm-date-picker-btn{flex:0 0 auto;padding:3px 7px}.prm-native-date-input{position:absolute;right:0;bottom:0;width:1px;height:1px;opacity:.01;pointer-events:none}.prm-date-row{display:grid !important;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) !important;gap:8px !important;align-items:center !important}.prm-print-note{padding:8px 10px;border:1px solid var(--yellow-200);background:var(--yellow-50);border-radius:8px;margin-bottom:8px}.prm-print-summary{font-family:Arial, sans-serif;color:#111}.prm-print-summary h2,.prm-print-summary h3{margin:0 0 8px}.prm-print-summary table{width:100%;border-collapse:collapse;margin-top:8px}.prm-print-summary th,.prm-print-summary td{border:1px solid #ddd;padding:6px;text-align:left}.prm-print-summary .muted{color:#666}.prm-print-summary .section{margin-top:12px}.prm-counter{border:1px solid var(--border-color);border-radius:999px;padding:6px 10px;background:var(--subtle-fg);font-weight:700;white-space:nowrap}.prm-counter.open{border-color:var(--yellow-300);background:var(--yellow-50)}.prm-counter.closed{border-color:var(--green-300);background:var(--green-50)}.prm-recent-body{display:none;margin-top:12px}.prm-recent-body.expanded{display:block}.prm-supplier-invoice{font-size:12px;color:var(--text-muted);margin-top:3px}.prm-print-dropdown{position:relative;display:inline-block}.prm-print-menu{display:none;position:absolute;right:0;top:100%;min-width:230px;background:var(--card-bg);border:1px solid var(--border-color);border-radius:8px;box-shadow:var(--shadow-md);z-index:50;padding:6px}.prm-print-dropdown.open .prm-print-menu{display:block}.prm-print-menu a{display:block;padding:6px 8px;border-radius:6px;color:var(--text-color);text-decoration:none;cursor:pointer;white-space:nowrap}.prm-print-menu a:hover{background:var(--subtle-fg)}.prm-print-menu .disabled{color:var(--text-muted);cursor:not-allowed;pointer-events:none}.prm-link{color:var(--primary);cursor:pointer;font-weight:600}.prm-note{padding:11px;border-radius:10px;background:var(--yellow-50);border:1px solid var(--yellow-200)}.prm-toolbar .btn[data-not-ready="1"]{opacity:.72}.prm-vat-yes{font-weight:700}.prm-vat-no{color:var(--text-muted)}.prm-workflow{display:none;margin-bottom:12px;padding:12px;border:1px solid var(--border-color);border-radius:12px;background:var(--subtle-fg)}.prm-workflow-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.prm-workflow-step{padding:9px 10px;border:1px solid var(--border-color);border-radius:9px;background:var(--card-bg);font-size:12px}.prm-workflow-step strong{display:block;font-size:13px}.prm-workflow-step.done{border-color:var(--green-300);background:var(--green-50)}.prm-workflow-step.active{border-color:var(--primary);box-shadow:0 0 0 2px var(--blue-100)}.prm-next-step{margin-top:10px;font-weight:700}.prm-stage-table{min-width:900px}.prm-stage-table.prm-stage-pricing{min-width:1250px}.prm-picker-table{width:100%;border-collapse:collapse}.prm-picker-table th,.prm-picker-table td{border-bottom:1px solid var(--border-color);padding:7px;vertical-align:middle}.prm-picker-table th{font-size:12px;background:var(--subtle-fg);color:var(--text-muted)}.prm-picker-search{margin-bottom:8px}
                 @media(max-width:900px){.prm-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.prm-types{grid-template-columns:1fr}.prm-hero{flex-direction:column}.prm-actions{justify-content:flex-start}.prm-workflow-steps{grid-template-columns:1fr 1fr}.prm-filter-row{grid-template-columns:1fr}.prm-date-row{grid-template-columns:1fr 1fr}}@media(max-width:560px){.prm-grid,.prm-total{grid-template-columns:1fr}.prm-date-row{grid-template-columns:1fr}}
             </style>
             <div class="prm-shell">
@@ -93,7 +93,9 @@ class PharmacyPurchaseReturnsManagement {
                     </div>
                     <div class="prm-grid" data-role="controls"></div>
                     <div class="prm-toolbar">
-                        <button class="btn btn-default btn-sm" data-action="load-invoice">${__("Load Invoice Items")}</button>
+                        <button class="btn btn-primary btn-sm" data-action="load-invoice">${__("Add Selected Item")}</button>
+                        <button class="btn btn-default btn-sm" data-action="pick-invoice-items">${__("Pick Items From Invoice")}</button>
+                        <button class="btn btn-default btn-sm" data-action="load-invoice-all">${__("Load All Invoice Items")}</button>
                         <button class="btn btn-default btn-sm" data-action="load-batch">${__("Add Item / Batch to Recall")}</button>
                         <button class="btn btn-default btn-sm" data-action="attach-notice">${__("Attach Authority Notice")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-original" disabled>${__("Open Original Invoice")}</button>
@@ -378,7 +380,25 @@ class PharmacyPurchaseReturnsManagement {
         this.makeControl("refund_reference_no", {label:__("Refund Transaction Reference"), fieldtype:"Data"});
         this.makeControl("refund_reference_date", {label:__("Refund Reference Date"), fieldtype:"Date"});
         this.makeControl("refund_notes", {label:__("Refund Notes"), fieldtype:"Small Text"});
-        this.makeControl("original_purchase_invoice", {label:__("Original Purchase Invoice"), fieldtype:"Link", options:"Purchase Invoice", reqd:1, get_query:()=>({filters:{docstatus:1,is_return:0,company:this.value("company")||undefined}})});
+        this.makeControl("supplier_credit_note_no", {label:__("Supplier Credit Note No"), fieldtype:"Data"});
+        this.makeControl("supplier_credit_note_date", {label:__("Supplier Credit Note Date"), fieldtype:"Date"});
+        this.makeControl("supplier_credit_note_attachment", {label:__("Supplier Credit Note Attachment"), fieldtype:"Attach", description:__("Attach the supplier credit note image or PDF.")});
+        this.makeControl("original_purchase_invoice", {label:__("Purchase Invoice to Add"), fieldtype:"Link", options:"Purchase Invoice", get_query:()=>({filters:{docstatus:1,is_return:0,company:this.value("company")||undefined,supplier:this.value("supplier")||undefined}})});
+        this.makeControl("return_item_to_add", {
+            label:__("Item / Barcode to Add"),
+            fieldtype:"Link",
+            options:"Item",
+            description:__("Type item code, barcode, or part of item name. Only matching rows from the selected invoice will be loaded."),
+            get_query:()=>({
+                query:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.search_invoice_return_items",
+                filters:{
+                    purchase_invoice:this.value("original_purchase_invoice")||"",
+                    company:this.value("company")||"",
+                    supplier:this.value("supplier")||""
+                }
+            })
+        });
+        this.makeControl("return_batch_no_to_add", {label:__("Batch No to Add (Optional)"), fieldtype:"Data", description:__("Use this when the same item exists in more than one batch inside the selected invoice.")});
         this.makeControl("settlement_method", {label:__("Settlement Method"), fieldtype:"Select", options:"Pending Settlement\nDeduct from Supplier Claim\nCash / Bank Refund\nMixed Settlement", reqd:1}, "Pending Settlement");
         this.makeControl("authority_notification_no", {label:__("Authority Notification Number"), fieldtype:"Data"});
         this.makeControl("authority_notification_date", {label:__("Authority Notification Date"), fieldtype:"Date"});
@@ -387,6 +407,9 @@ class PharmacyPurchaseReturnsManagement {
         this.makeControl("case_reference", {label:__("Case Reference"), fieldtype:"Data", read_only:1});
         this.controls.return_type.df.onchange = () => this.refreshReturnTypeUI(this.value("return_type"), true);
         this.controls.original_purchase_invoice.df.onchange = () => this.syncButtons();
+        this.controls.return_item_to_add.df.onchange = () => this.syncButtons();
+        this.controls.return_batch_no_to_add.df.onchange = () => this.syncButtons();
+        this.controls.supplier_credit_note_no.df.onchange = () => this.syncButtons();
         this.controls.settlement_method.df.onchange = () => {
             this.refreshSettlementUI();
             this.syncButtons();
@@ -611,7 +634,7 @@ class PharmacyPurchaseReturnsManagement {
             progressiveActions.forEach(action=>this.$main.find(`[data-action="${action}"]`).hide().prop("disabled",true));
             ["return_type","company","posting_date","supplier"].forEach(name=>this.setControlReadOnly(name,false));
             ["total-qty-card","requested-net-card","requested-vat-card","requested-total-card","total-lines-card","approved-value-card","settlement-status-card","claim-deduction-card","refund-amount-card","refund-status-card","remaining-settlement-card"].forEach(role=>this.$main.find(`[data-role="${role}"]`).show());
-            this.$main.find('[data-role="context-note"]').text(__("Price, discount and VAT are copied from the original Purchase Invoice and are locked. Available quantity is the lower of the invoice-returnable quantity and the current physical stock in the batch/warehouse."));
+            this.$main.find('[data-role="context-note"]').text(__("Add one or more Purchase Invoices from the same supplier under the same Supplier Credit Note. Each official Purchase Return is created against its own original invoice."));
             return;
         }
 
@@ -899,7 +922,9 @@ class PharmacyPurchaseReturnsManagement {
     bindEvents() {
         this.$main.on("click", "[data-action='purchase-page']", ()=>frappe.set_route("purchase-invoice-management"));
         this.$main.on("click", "[data-action='new-case']", ()=>this.newCase());
-        this.$main.on("click", "[data-action='load-invoice']", ()=>this.loadInvoice());
+        this.$main.on("click", "[data-action='load-invoice']", ()=>this.loadInvoice(false));
+        this.$main.on("click", "[data-action='load-invoice-all']", ()=>this.loadInvoice(true));
+        this.$main.on("click", "[data-action='pick-invoice-items']", ()=>this.openInvoiceItemPicker());
         this.$main.on("click", "[data-action='load-batch']", ()=>this.loadBatchStock());
         this.$main.on("click", "[data-action='attach-notice']", ()=>this.attachAuthorityNotice());
         this.$main.on("click", "[data-action='attach-handover']", ()=>this.attachHandoverReceipt());
@@ -939,6 +964,7 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.on("click", "[data-action='open-case-page']", e=>this.loadCase($(e.currentTarget).data("name")));
         this.$main.on("click", "[data-action='open-case-document']", e=>frappe.set_route("Form","Pharmacy Return Case",$(e.currentTarget).data("name")));
         this.$main.on("click", "[data-action='open-recent-original']", e=>frappe.set_route("Form","Purchase Invoice",$(e.currentTarget).data("name")));
+        this.$main.on("click", "[data-action='open-original-row']", e=>{const name=$(e.currentTarget).data("name"); if(name) frappe.set_route("Form","Purchase Invoice",name);});
         this.$main.on("click", "[data-action='open-recent-return']", e=>frappe.set_route("Form","Purchase Invoice",$(e.currentTarget).data("name")));
         this.$main.on("click", "[data-action='open-recent-quarantine']", e=>frappe.set_route("Form","Stock Entry",$(e.currentTarget).data("name")));
         this.$main.on("click", "[data-action='open-recent-handover']", e=>frappe.set_route("Form","Stock Entry",$(e.currentTarget).data("name")));
@@ -1025,21 +1051,21 @@ class PharmacyPurchaseReturnsManagement {
         const invoiceMode=type==="Return Against Invoice";
         const recallMode=this.isProgressiveReturnType(type);
         const expiredMode=type==="Expired Drugs Return";
-        ["original_purchase_invoice"].forEach(name=>this.showControl(name,invoiceMode));
+        ["supplier_credit_note_no","supplier_credit_note_date","supplier_credit_note_attachment","original_purchase_invoice","return_item_to_add","return_batch_no_to_add"].forEach(name=>this.showControl(name,invoiceMode));
         ["recall_source_warehouse","recall_item_code","recall_batch_no","recall_quarantine_warehouse","authority_notification_no","authority_notification_date","authority_notification_attachment","returns_with_supplier_warehouse","handover_date","handover_reference","handover_attachment","supplier_response_date","supplier_response_reference","supplier_response_attachment","supplier_response_notes","rejected_qty_destination","rejected_destination_warehouse","rejected_destruction_date","rejected_destruction_reference","rejected_destruction_attachment","rejected_destruction_notes","approved_debit_note_posting_date","supplier_claim"].forEach(name=>this.showControl(name,false));
-        this.$main.find("[data-action='load-invoice']").toggle(invoiceMode);
+        this.$main.find("[data-action='load-invoice'],[data-action='pick-invoice-items'],[data-action='load-invoice-all']").toggle(invoiceMode);
         this.$main.find("[data-action='open-original'],[data-action='open-return'],[data-action='delete-return-draft']").toggle(invoiceMode);
         this.$main.find("[data-action='load-batch'],[data-action='attach-notice'],[data-action='open-quarantine'],[data-action='submit-quarantine'],[data-action='submit-handover'],[data-action='open-handover'],[data-action='attach-handover'],[data-action='attach-response'],[data-action='save-response'],[data-action='submit-rejection-return'],[data-action='open-rejection-return'],[data-action='submit-approved-debit-note'],[data-action='open-approved-debit-note'],[data-action='create-claim-deduction'],[data-action='open-supplier-claim']").toggle(recallMode);
         this.$main.find("[data-action='attach-notice']").toggle(recallMode&&!expiredMode);
         this.refreshSettlementUI();
-        this.$main.find("[data-action='create-primary']").text(invoiceMode?__("Create & Submit Purchase Return"):__("Create & Submit Quarantine Transfer"));
+        this.$main.find("[data-action='create-primary']").text(invoiceMode?__("Create & Submit Supplier Credit Note Return"):__("Create & Submit Quarantine Transfer"));
         this.$main.find('[data-role="qty-label"]').text(recallMode?(expiredMode?__("Expired Return Quantity"):__("Recall Quantity")):__("Selected Quantity"));
         this.$main.find('[data-role="value-label"]').text(recallMode?__("Expected Supplier Credit incl. VAT"):__("Requested Total Credit incl. VAT"));
         this.$main.find('[data-role="context-note"]').text(recallMode
             ?(expiredMode
                 ?__("Expired Drugs Return is active: select physical batch stock, isolate it, hand it to the supplier, then record accepted/rejected quantities and approved value.")
                 :__("Enter either Discount % or Net Unit Value; the other value is calculated automatically. VAT is calculated only when the item is VAT taxable, and the VAT field cannot be added manually."))
-            :__("Price, discount and VAT are copied from the original Purchase Invoice and are locked. Available quantity is the lower of the invoice-returnable quantity and the current physical stock in the batch/warehouse."));
+            :__("Select a Purchase Invoice, type the item/barcode to return, then add only the matching line. Use Load All only when you really need all invoice rows."));
         this.$main.find('[data-role="stock-value-card"],[data-role="difference-card"],[data-role="handover-qty-card"],[data-role="accepted-qty-card"],[data-role="rejected-qty-card"],[data-role="pending-response-card"],[data-role="debit-note-amount-card"],[data-role="debit-note-outstanding-card"],[data-role="debit-note-status-card"],[data-role="planned-claim-card"]').toggle(recallMode);
         this.$main.find('[data-role="approved-value-card"],[data-role="settlement-status-card"],[data-role="claim-deduction-card"],[data-role="refund-amount-card"],[data-role="refund-status-card"],[data-role="remaining-settlement-card"]').toggle(invoiceMode||recallMode);
         if(notify && type==="Expired Drugs Return") frappe.show_alert({message:__("Expired Drugs Return workflow is active."),indicator:"green"},6);
@@ -1048,34 +1074,188 @@ class PharmacyPurchaseReturnsManagement {
         this.refreshProgressiveUI();
     }
 
-    async loadInvoice(){
+    async openInvoiceItemPicker(){
+        if(this.purchaseReturnDocstatus===1){
+            frappe.msgprint({title:__("Purchase Return Submitted"),message:__("Submitted Purchase Return documents are locked. Create a new Return Case for additional supplier credit note lines."),indicator:"orange"});
+            return;
+        }
         const name=this.value("original_purchase_invoice");
         if(!name){frappe.msgprint({title:__("Original Invoice Required"),message:__("Select a submitted Purchase Invoice first."),indicator:"orange"});return;}
-        const r=await frappe.call({method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.get_invoice_for_return",args:{name},freeze:true,freeze_message:__("Loading invoice items...")});
-        await this.applyInvoice(r.message||{});
+        const response=await frappe.call({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.get_invoice_for_return",
+            args:{name, selected_only:0},
+            freeze:true,
+            freeze_message:__("Loading invoice items...")
+        });
+        const invoice=response.message||{};
+        const rows=(invoice.items||[]).filter(row=>flt(row.available_to_return_qty)>0);
+        if(!rows.length){
+            frappe.msgprint({title:__("No Returnable Stock"),message:__("No returnable rows with physical stock are available for this Purchase Invoice."),indicator:"orange"});
+            return;
+        }
+        const html=`
+            <div class="prm-picker-search">
+                <input type="text" class="form-control input-sm" data-role="picker-search" placeholder="${__("Search item, code, batch, or supplier invoice no")}">
+            </div>
+            <div style="max-height:420px;overflow:auto">
+                <table class="prm-picker-table">
+                    <thead><tr>
+                        <th style="width:36px">${__("Select")}</th>
+                        <th>${__("Item")}</th>
+                        <th>${__("Batch")}</th>
+                        <th>${__("Expiry")}</th>
+                        <th>${__("Purchased")}</th>
+                        <th>${__("Returned")}</th>
+                        <th>${__("Physical")}</th>
+                        <th>${__("Returnable")}</th>
+                        <th style="width:110px">${__("Return Qty")}</th>
+                    </tr></thead>
+                    <tbody data-role="picker-rows"></tbody>
+                </table>
+            </div>`;
+        const dialog=new frappe.ui.Dialog({
+            title:__("Pick Items From Invoice {0}",[name]),
+            fields:[{fieldtype:"HTML", fieldname:"picker_html", options:html}],
+            primary_action_label:__("Add Selected Lines"),
+            primary_action:async()=>{
+                const selected=[];
+                dialog.$wrapper.find("tbody [data-row-index]").each((idx, tr)=>{
+                    const $tr=$(tr);
+                    if(!$tr.find('[data-role="pick-check"]').prop("checked")) return;
+                    const source=rows[cint($tr.attr("data-row-index"))];
+                    const qty=flt($tr.find('[data-role="pick-qty"]').val());
+                    if(qty<=0) return;
+                    const max=flt(source.available_to_return_qty);
+                    if(qty>max){
+                        frappe.msgprint({title:__("Invalid Quantity"),message:__("Return Qty for {0} cannot exceed {1}.",[source.item_code, max]),indicator:"orange"});
+                        return false;
+                    }
+                    selected.push({...source, return_qty:qty});
+                });
+                if(!selected.length){
+                    frappe.msgprint({title:__("No Lines Selected"),message:__("Select at least one invoice row and enter Return Qty."),indicator:"orange"});
+                    return;
+                }
+                const payload={...invoice, items:selected};
+                await this.applyInvoice(payload, {itemQuery:"picker"});
+                dialog.hide();
+            }
+        });
+        const renderPickerRows=(filterText="")=>{
+            const text=String(filterText||"").toLowerCase().trim();
+            const $tbody=dialog.$wrapper.find('[data-role="picker-rows"]');
+            $tbody.empty();
+            rows.forEach((row, idx)=>{
+                const haystack=[row.item_code,row.item_name,row.batch_no,row.original_supplier_invoice_no,row.description].map(v=>String(v||"").toLowerCase()).join(" ");
+                if(text && !haystack.includes(text)) return;
+                const alreadyLoaded=this.rows.some(current=>current.original_purchase_invoice_item===row.original_purchase_invoice_item);
+                const disabled=alreadyLoaded?"disabled":"";
+                const muted=alreadyLoaded?`<div class="text-muted">${__("Already loaded")}</div>`:"";
+                $tbody.append(`
+                    <tr data-row-index="${idx}" class="${alreadyLoaded?"text-muted":""}">
+                        <td><input type="checkbox" data-role="pick-check" ${disabled}></td>
+                        <td><b>${frappe.utils.escape_html(row.item_name||row.item_code||"")}</b><br><span class="text-muted">${frappe.utils.escape_html(row.item_code||"")}</span>${muted}</td>
+                        <td>${frappe.utils.escape_html(row.batch_no||"—")}</td>
+                        <td>${frappe.utils.escape_html(row.expiry_date||"—")}</td>
+                        <td>${flt(row.original_qty)}</td>
+                        <td>${flt(row.already_returned_qty)}</td>
+                        <td>${flt(row.physical_stock_qty)}</td>
+                        <td>${flt(row.available_to_return_qty)}</td>
+                        <td><input type="number" class="form-control input-sm" data-role="pick-qty" min="0" step="any" max="${flt(row.available_to_return_qty)}" value="0" ${disabled}></td>
+                    </tr>`);
+            });
+            if(!$tbody.children().length){
+                $tbody.append(`<tr><td colspan="9" class="text-muted text-center">${__("No matching rows")}</td></tr>`);
+            }
+        };
+        dialog.show();
+        renderPickerRows();
+        dialog.$wrapper.on("input", '[data-role="picker-search"]', frappe.utils.debounce(e=>renderPickerRows($(e.currentTarget).val()),120));
+        dialog.$wrapper.on("change", '[data-role="pick-check"]', e=>{
+            const $tr=$(e.currentTarget).closest("tr");
+            const idx=cint($tr.attr("data-row-index"));
+            if($(e.currentTarget).prop("checked") && flt($tr.find('[data-role="pick-qty"]').val())<=0){
+                $tr.find('[data-role="pick-qty"]').val(flt(rows[idx].available_to_return_qty));
+            }
+        });
+        dialog.$wrapper.on("input", '[data-role="pick-qty"]', e=>{
+            const $tr=$(e.currentTarget).closest("tr");
+            if(flt($(e.currentTarget).val())>0){
+                $tr.find('[data-role="pick-check"]').prop("checked", true);
+            }
+        });
     }
 
-    async applyInvoice(invoice){
+    async loadInvoice(loadAll=false){
+        if(this.purchaseReturnDocstatus===1){
+            frappe.msgprint({title:__("Purchase Return Submitted"),message:__("Submitted Purchase Return documents are locked. Create a new Return Case for additional supplier credit note lines."),indicator:"orange"});
+            return;
+        }
+        const name=this.value("original_purchase_invoice");
+        if(!name){frappe.msgprint({title:__("Original Invoice Required"),message:__("Select a submitted Purchase Invoice first."),indicator:"orange"});return;}
+        const itemQuery=(this.value("return_item_to_add")||"").trim();
+        const batchNo=(this.value("return_batch_no_to_add")||"").trim();
+        if(!loadAll && !itemQuery){
+            frappe.msgprint({title:__("Item Required"),message:__("Type the item code, barcode, or item name to add only the required invoice line. Use Load All Invoice Items only when needed."),indicator:"orange"});
+            return;
+        }
+        const r=await frappe.call({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.get_invoice_for_return",
+            args:{name,item_query:loadAll?"":itemQuery,batch_no:loadAll?"":batchNo,selected_only:loadAll?0:1},
+            freeze:true,
+            freeze_message:loadAll?__("Loading all invoice items..."):__("Loading selected invoice item...")
+        });
+        await this.applyInvoice(r.message||{}, {loadAll, itemQuery, batchNo});
+        if(!loadAll && (r.message||{}).items && (r.message||{}).items.length){
+            await this.setValue("return_item_to_add","");
+            await this.setValue("return_batch_no_to_add","");
+        }
+    }
+
+    async applyInvoice(invoice, options={}){
         await this.setReturnType("Return Against Invoice",false);
+        if(this.rows.length && this.value("supplier") && invoice.supplier && this.value("supplier") !== invoice.supplier){
+            frappe.msgprint({title:__("Different Supplier"),message:__("All invoices inside one Supplier Credit Note must belong to the same supplier."),indicator:"red"});
+            return;
+        }
+        if(this.value("company") && invoice.company && this.value("company") !== invoice.company){
+            frappe.msgprint({title:__("Different Company"),message:__("All invoices inside one Supplier Credit Note must belong to the same company."),indicator:"red"});
+            return;
+        }
         await this.setValue("company",invoice.company);
         await this.setValue("supplier",invoice.supplier);
-        await this.setValue("original_purchase_invoice",invoice.name);
+        if(!this.value("original_purchase_invoice")) await this.setValue("original_purchase_invoice",invoice.name);
+        else await this.setValue("original_purchase_invoice",invoice.name);
         this.currency=invoice.currency||this.currency;
-        this.rows=(invoice.items||[]).map(row=>this.recalculateRow({
-            ...row,
-            return_qty:flt(row.return_qty),
-            invoice_returnable_qty:flt(row.invoice_returnable_qty),
-            physical_stock_qty:flt(row.physical_stock_qty),
-            available_to_return_qty:flt(row.available_to_return_qty),
-            base_rate:flt(row.base_rate),
-            discount_percentage:flt(row.discount_percentage),
-            rate:flt(row.rate),
-            is_vat_taxable:cint(row.is_vat_taxable),
-            vat_rate:flt(row.vat_rate),
-            approved_discount_percentage:flt(row.approved_discount_percentage),
-            approved_rate:flt(row.approved_rate)
-        }));
-        this.$main.find('[data-role="invoice-summary"]').text(`${invoice.supplier_name||invoice.supplier||""} • ${invoice.bill_no||invoice.name||""} • ${this.money(invoice.grand_total)}`);
+        let added=0;
+        (invoice.items||[]).forEach(row=>{
+            const existing=this.rows.some(current=>current.original_purchase_invoice_item===row.original_purchase_invoice_item);
+            if(existing) return;
+            this.rows.push(this.recalculateRow({
+                ...row,
+                original_purchase_invoice:row.original_purchase_invoice||invoice.name,
+                original_supplier_invoice_no:row.original_supplier_invoice_no||invoice.bill_no||"",
+                return_qty:flt(row.return_qty),
+                invoice_returnable_qty:flt(row.invoice_returnable_qty),
+                physical_stock_qty:flt(row.physical_stock_qty),
+                available_to_return_qty:flt(row.available_to_return_qty),
+                base_rate:flt(row.base_rate),
+                discount_percentage:flt(row.discount_percentage),
+                rate:flt(row.rate),
+                is_vat_taxable:cint(row.is_vat_taxable),
+                vat_rate:flt(row.vat_rate),
+                approved_discount_percentage:flt(row.approved_discount_percentage),
+                approved_rate:flt(row.approved_rate)
+            }));
+            added+=1;
+        });
+        const invoices=[...new Set(this.rows.map(r=>r.original_purchase_invoice).filter(Boolean))];
+        this.$main.find('[data-role="invoice-summary"]').text(__("{0} invoice(s), {1} line(s) selected for Supplier Credit Note {2}.",[invoices.length,this.rows.length,this.value("supplier_credit_note_no")||"—"]));
+        if(!added){
+            frappe.show_alert({message:options.itemQuery?__("No new matching rows were added from invoice {0}.",[invoice.name]):__("All returnable rows from invoice {0} are already loaded.",[invoice.name]),indicator:"orange"},6);
+        }else{
+            frappe.show_alert({message:options.itemQuery?__("{0} selected line(s) added from invoice {1}.",[added,invoice.name]):__("{0} line(s) added from invoice {1}.",[added,invoice.name]),indicator:"green"},5);
+        }
         this.renderItems();this.syncButtons();this.refreshProgressiveUI();
     }
 
@@ -1246,6 +1426,9 @@ class PharmacyPurchaseReturnsManagement {
         await this.applyCompanyDefaults();
         await this.setValue("posting_date",doc.posting_date);
         await this.setValue("supplier",doc.supplier);
+        await this.setValue("supplier_credit_note_no",doc.supplier_credit_note_no);
+        await this.setValue("supplier_credit_note_date",doc.supplier_credit_note_date);
+        await this.setValue("supplier_credit_note_attachment",doc.supplier_credit_note_attachment);
         await this.setValue("original_purchase_invoice",doc.original_purchase_invoice);
         await this.setValue("settlement_method",doc.settlement_method||"Pending Settlement");
         await this.setValue("authority_notification_no",doc.authority_notification_no);
@@ -1348,7 +1531,7 @@ class PharmacyPurchaseReturnsManagement {
         const $host=this.$main.find('[data-role="items"]');
         const recallMode=this.isProgressiveReturnType();
         if(!this.rows.length){
-            $host.html(`<div class="prm-empty">${recallMode?__("Select an item and a positive-stock batch, then add it to the return list."):__("Load a submitted Purchase Invoice to select return quantities.")}</div>`);
+            $host.html(`<div class="prm-empty">${recallMode?__("Select an item and a positive-stock batch, then add it to the return list."):__("Add one or more submitted Purchase Invoices from the same supplier, then enter return quantities.")}</div>`);
             this.refreshTotals();
             if(recallMode)this.refreshProgressiveUI();
             return;
@@ -1359,7 +1542,7 @@ class PharmacyPurchaseReturnsManagement {
         }else{
             const reasons=["Normal Return","Near Expiry","Expired","Damaged","Wrong Item","Wrong Quantity","Supplier Error","Health Authority Recall","Other"];
             $host.html(`<table class="prm-table"><thead><tr>
-                <th>#</th><th>${__("Item")}</th><th>${__("Batch")}</th><th>${__("Expiry")}</th><th>${__("Warehouse")}</th>
+                <th>#</th><th>${__("Invoice")}</th><th>${__("Supplier Inv No")}</th><th>${__("Item")}</th><th>${__("Batch")}</th><th>${__("Expiry")}</th><th>${__("Warehouse")}</th>
                 <th>${__("Purchased")}</th><th>${__("Returned")}</th><th>${__("Remaining Against Invoice")}</th><th>${__("Physical Stock")}</th><th>${__("Returnable Qty")}</th><th>${__("Return Qty")}</th><th>${__("Reason")}</th>
                 <th>${__("Base Price")}</th><th>${__("Discount %")}</th><th>${__("Net Unit Value")}</th><th>${__("VAT")}</th><th>${__("Net Return Value")}</th><th>${__("VAT Amount")}</th><th>${__("Total Credit")}</th>
             </tr></thead><tbody>${this.rows.map((r,i)=>{
@@ -1370,7 +1553,7 @@ class PharmacyPurchaseReturnsManagement {
                     ? this.esc(r.return_reason||"Normal Return")
                     : `<select class="form-control input-sm" data-row-field="return_reason" data-index="${i}">${reasons.map(x=>`<option ${x===(r.return_reason||"Normal Return")?"selected":""}>${this.esc(x)}</option>`).join("")}</select>`;
                 return `<tr>
-                    <td>${i+1}</td><td><strong>${this.esc(r.item_name||r.item_code)}</strong><div class="prm-muted">${this.esc(r.item_code)}</div></td>
+                    <td>${i+1}</td><td><span class="prm-link" data-action="open-original-row" data-name="${this.esc(r.original_purchase_invoice||"")}">${this.esc(r.original_purchase_invoice||this.value("original_purchase_invoice")||"—")}</span></td><td>${this.esc(r.original_supplier_invoice_no||"")}</td><td><strong>${this.esc(r.item_name||r.item_code)}</strong><div class="prm-muted">${this.esc(r.item_code)}</div>${r.purchase_return?`<div class="prm-muted">${__("Return")}: ${this.esc(r.purchase_return)}</div>`:""}</td>
                     <td>${this.esc(r.batch_no||"—")}</td><td>${this.esc(r.expiry_date||"—")}</td><td>${this.esc(r.warehouse||"")}</td>
                     <td>${flt(r.original_qty)}</td><td>${flt(r.already_returned_qty)}</td><td>${flt(r.invoice_returnable_qty)}</td><td>${flt(r.physical_stock_qty)}</td><td>${flt(r.available_to_return_qty)}</td><td>${returnQtyControl}</td><td>${reasonControl}</td>
                     <td>${this.money(r.base_rate)}</td><td>${flt(r.discount_percentage)}%</td><td>${this.money(r.rate)}</td><td title="${this.esc(r.vat_source||"")}">${this.vatLabel(r)}</td>
@@ -1467,7 +1650,7 @@ class PharmacyPurchaseReturnsManagement {
     }
 
     payload(){return {
-        name:this.caseName,return_type:this.value("return_type"),company:this.value("company"),posting_date:this.value("posting_date"),supplier:this.value("supplier"),original_purchase_invoice:this.value("original_purchase_invoice"),settlement_method:this.value("settlement_method"),authority_notification_no:this.value("authority_notification_no"),authority_notification_date:this.value("authority_notification_date"),authority_notification_attachment:this.value("authority_notification_attachment"),recall_source_warehouse:this.value("recall_source_warehouse"),recall_item_code:this.value("recall_item_code"),recall_quarantine_warehouse:this.value("recall_quarantine_warehouse"),returns_with_supplier_warehouse:this.value("returns_with_supplier_warehouse"),handover_date:this.value("handover_date"),handover_reference:this.value("handover_reference"),handover_attachment:this.value("handover_attachment"),supplier_response_date:this.value("supplier_response_date"),supplier_response_reference:this.value("supplier_response_reference"),supplier_response_attachment:this.value("supplier_response_attachment"),supplier_response_notes:this.value("supplier_response_notes"),rejected_qty_destination:this.value("rejected_qty_destination"),rejected_destination_warehouse:this.value("rejected_destination_warehouse"),rejected_destruction_date:this.value("rejected_destruction_date"),rejected_destruction_reference:this.value("rejected_destruction_reference"),rejected_destruction_attachment:this.value("rejected_destruction_attachment"),rejected_destruction_notes:this.value("rejected_destruction_notes"),approved_debit_note_posting_date:this.value("approved_debit_note_posting_date"),supplier_claim:this.value("supplier_claim"),refund_posting_date:this.value("refund_posting_date"),refund_mode_of_payment:this.value("refund_mode_of_payment"),refund_account:this.value("refund_account"),refund_request_amount:flt(this.value("refund_request_amount")),refund_reference_no:this.value("refund_reference_no"),refund_reference_date:this.value("refund_reference_date"),refund_notes:this.value("refund_notes"),remarks:this.value("remarks"),items:this.rows
+        name:this.caseName,return_type:this.value("return_type"),company:this.value("company"),posting_date:this.value("posting_date"),supplier:this.value("supplier"),supplier_credit_note_no:this.value("supplier_credit_note_no"),supplier_credit_note_date:this.value("supplier_credit_note_date"),supplier_credit_note_attachment:this.value("supplier_credit_note_attachment"),original_purchase_invoice:this.value("original_purchase_invoice"),settlement_method:this.value("settlement_method"),authority_notification_no:this.value("authority_notification_no"),authority_notification_date:this.value("authority_notification_date"),authority_notification_attachment:this.value("authority_notification_attachment"),recall_source_warehouse:this.value("recall_source_warehouse"),recall_item_code:this.value("recall_item_code"),recall_quarantine_warehouse:this.value("recall_quarantine_warehouse"),returns_with_supplier_warehouse:this.value("returns_with_supplier_warehouse"),handover_date:this.value("handover_date"),handover_reference:this.value("handover_reference"),handover_attachment:this.value("handover_attachment"),supplier_response_date:this.value("supplier_response_date"),supplier_response_reference:this.value("supplier_response_reference"),supplier_response_attachment:this.value("supplier_response_attachment"),supplier_response_notes:this.value("supplier_response_notes"),rejected_qty_destination:this.value("rejected_qty_destination"),rejected_destination_warehouse:this.value("rejected_destination_warehouse"),rejected_destruction_date:this.value("rejected_destruction_date"),rejected_destruction_reference:this.value("rejected_destruction_reference"),rejected_destruction_attachment:this.value("rejected_destruction_attachment"),rejected_destruction_notes:this.value("rejected_destruction_notes"),approved_debit_note_posting_date:this.value("approved_debit_note_posting_date"),supplier_claim:this.value("supplier_claim"),refund_posting_date:this.value("refund_posting_date"),refund_mode_of_payment:this.value("refund_mode_of_payment"),refund_account:this.value("refund_account"),refund_request_amount:flt(this.value("refund_request_amount")),refund_reference_no:this.value("refund_reference_no"),refund_reference_date:this.value("refund_reference_date"),refund_notes:this.value("refund_notes"),remarks:this.value("remarks"),items:this.rows
     };}
 
     async saveCase(silent=false){
@@ -1509,8 +1692,9 @@ class PharmacyPurchaseReturnsManagement {
         });
         await this.loadCase(doc.name);
         await this.refreshRecent();
+        const submitted=(r.message.purchase_returns||[r.message.purchase_return]).filter(Boolean);
         frappe.show_alert({
-            message:__("Purchase Return {0} submitted successfully. Outstanding: {1}.",[r.message.purchase_return,this.money(r.message.outstanding)]),
+            message:__("{0} Purchase Return document(s) submitted for this Supplier Credit Note. Outstanding: {1}.",[submitted.length,this.money(r.message.outstanding)]),
             indicator:"green"
         },8);
     }
@@ -2060,7 +2244,6 @@ class PharmacyPurchaseReturnsManagement {
             && Boolean(this.value("recall_batch_no"))
             && Boolean(this.value("recall_quarantine_warehouse"));
         const primaryReady=(invoiceMode
-                && Boolean(this.value("original_purchase_invoice"))
                 && hasSelectedRows
                 && this.purchaseReturnDocstatus!==1)
             || (recallMode
@@ -2553,7 +2736,7 @@ class PharmacyPurchaseReturnsManagement {
     async newCase(){
         this.caseName=null;this.purchaseReturn=null;this.purchaseReturnDocstatus=null;this.purchaseReturnStatus=null;this.quarantineStockEntry=null;this.handoverStockEntry=null;this.rejectionReturnStockEntry=null;this.rejectedQtyDestination="";this.rejectedDestinationWarehouse="";this.approvedDebitNote=null;this.approvedDebitNoteDocstatus=null;this.approvedDebitNoteStatus=null;this.approvedDebitNoteAmount=0;this.approvedDebitNoteOutstanding=0;this.supplierClaim=null;this.supplierClaimDocstatus=null;this.supplierClaimStatus=null;this.supplierClaimAccountingStatus=null;this.settlementStatus="Pending Settlement";this.claimUtilizationStatus="Not Applied";this.claimSettlementDate=null;this.plannedClaimDeduction=0;this.claimDeductionAmount=0;this.settledAmount=0;this.remainingSettlementAmount=0;this.approvedReturnValue=0;this.refundPaymentEntry=null;this.refundPaymentEntryStatus=null;this.refundPaymentEntryDocstatus=null;this.refundAmount=0;this.refundEntriesCount=0;this.hasOpenRefundDraft=false;this.refundPayments=[];this.quarantineDocstatus=null;this.handoverDocstatus=null;this.rejectionReturnDocstatus=null;this.rows=[];
         await this.setReturnType("Return Against Invoice",false);
-        await this.setValue("supplier","");await this.setValue("original_purchase_invoice","");await this.setValue("settlement_method","Pending Settlement");await this.setValue("authority_notification_no","");await this.setValue("authority_notification_date","");await this.setValue("authority_notification_attachment","");await this.setValue("recall_item_code","");await this.setValue("recall_batch_no","");await this.setValue("recall_source_warehouse","");await this.applyCompanyDefaults();await this.setValue("remarks","");await this.setValue("supplier_claim","");await this.setValue("refund_posting_date",frappe.datetime.get_today());await this.setValue("refund_mode_of_payment","");await this.setValue("refund_account","");await this.setValue("refund_request_amount","");await this.setValue("refund_reference_no","");await this.setValue("refund_reference_date","");await this.setValue("refund_notes","");await this.setValue("rejected_qty_destination","");await this.setValue("rejected_destination_warehouse","");await this.setValue("rejected_destruction_date","");await this.setValue("rejected_destruction_reference","");await this.setValue("rejected_destruction_attachment","");await this.setValue("rejected_destruction_notes","");await this.setValue("case_reference","");
+        await this.setValue("supplier","");await this.setValue("supplier_credit_note_no","");await this.setValue("supplier_credit_note_date","");await this.setValue("supplier_credit_note_attachment","");await this.setValue("original_purchase_invoice","");await this.setValue("return_item_to_add","");await this.setValue("return_batch_no_to_add","");await this.setValue("settlement_method","Pending Settlement");await this.setValue("authority_notification_no","");await this.setValue("authority_notification_date","");await this.setValue("authority_notification_attachment","");await this.setValue("recall_item_code","");await this.setValue("recall_batch_no","");await this.setValue("recall_source_warehouse","");await this.applyCompanyDefaults();await this.setValue("remarks","");await this.setValue("supplier_claim","");await this.setValue("refund_posting_date",frappe.datetime.get_today());await this.setValue("refund_mode_of_payment","");await this.setValue("refund_account","");await this.setValue("refund_request_amount","");await this.setValue("refund_reference_no","");await this.setValue("refund_reference_date","");await this.setValue("refund_notes","");await this.setValue("rejected_qty_destination","");await this.setValue("rejected_destination_warehouse","");await this.setValue("rejected_destruction_date","");await this.setValue("rejected_destruction_reference","");await this.setValue("rejected_destruction_attachment","");await this.setValue("rejected_destruction_notes","");await this.setValue("case_reference","");
         this.$main.find('[data-role="case-status"]').text(__("New Case"));this.$main.find('[data-role="invoice-summary"]').text("");this.renderItems();this.syncButtons();this.refreshProgressiveUI();
     }
 }

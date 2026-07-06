@@ -1,4 +1,7 @@
-"""Operational API for Purchase Returns Management."""
+"""Operational API for Purchase Returns Management.
+
+v0.7.31: selected item loading for consolidated supplier credit note returns.
+"""
 from __future__ import annotations
 
 import json
@@ -538,7 +541,69 @@ def _case_settlement_document(doc) -> str | None:
     return None
 
 
+def _case_purchase_return_names(doc) -> list[str]:
+    names: list[str] = []
+    seen = set()
+
+    def add(name):
+        if name and name not in seen and frappe.db.exists("Purchase Invoice", name):
+            seen.add(name)
+            names.append(name)
+
+    add(doc.get("purchase_return"))
+    for row in doc.get("items") or []:
+        add(row.get("purchase_return"))
+
+    meta = frappe.get_meta("Purchase Invoice")
+    if meta.has_field("custom_pharmacy_return_case"):
+        linked = frappe.get_all(
+            "Purchase Invoice",
+            filters={
+                "custom_pharmacy_return_case": doc.name,
+                "is_return": 1,
+                "docstatus": ["<", 2],
+            },
+            fields=["name"],
+            order_by="posting_date asc, creation asc",
+            limit_page_length=0,
+        )
+        for row in linked:
+            add(row.name)
+
+    return names
+
+
+def _set_case_purchase_returns_summary(doc, names: list[str] | None = None) -> None:
+    names = names if names is not None else _case_purchase_return_names(doc)
+    summary = "\n".join(names)
+    if (doc.get("consolidated_purchase_returns") or "") != summary:
+        doc.db_set("consolidated_purchase_returns", summary, update_modified=False)
+        doc.consolidated_purchase_returns = summary
+
+
 def _case_settlement_base(doc) -> float:
+    if doc.return_type == "Return Against Invoice":
+        total = 0.0
+        for name in _case_purchase_return_names(doc):
+            note = frappe.db.get_value(
+                "Purchase Invoice",
+                name,
+                [
+                    "docstatus",
+                    "is_return",
+                    "grand_total",
+                    "rounded_total",
+                    "disable_rounded_total",
+                    "outstanding_amount",
+                ],
+                as_dict=True,
+            )
+            if note and note.is_return and note.docstatus < 2:
+                amount, ignored_outstanding = _return_invoice_total_and_outstanding(note)
+                total += amount
+        if total > 0:
+            return total
+
     financial_document = _case_settlement_document(doc)
     if financial_document and frappe.db.exists(
         "Purchase Invoice",
@@ -1164,7 +1229,7 @@ def get_bootstrap(company: str | None = None, purchase_invoice: str | None = Non
 
 def _returned_qty_by_original_item(
     invoice_name: str,
-    exclude_purchase_return: str | None = None,
+    exclude_purchase_return: str | list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, float]:
     conditions = [
         "pi.return_against = %(invoice_name)s",
@@ -1173,9 +1238,14 @@ def _returned_qty_by_original_item(
         "ifnull(pii.purchase_invoice_item, '') != ''",
     ]
     values = {"invoice_name": invoice_name}
-    if exclude_purchase_return:
-        conditions.append("pi.name != %(exclude_purchase_return)s")
-        values["exclude_purchase_return"] = exclude_purchase_return
+    exclude_names = []
+    if isinstance(exclude_purchase_return, (list, tuple, set)):
+        exclude_names = [name for name in exclude_purchase_return if name]
+    elif exclude_purchase_return:
+        exclude_names = [exclude_purchase_return]
+    if exclude_names:
+        conditions.append("pi.name not in %(exclude_purchase_returns)s")
+        values["exclude_purchase_returns"] = tuple(exclude_names)
 
     rows = frappe.db.sql(
         f"""
@@ -1527,8 +1597,60 @@ def _trusted_row_vat(
     }
 
 
+def _item_codes_matching_query(query: Any) -> set[str]:
+    """Resolve an item search text to candidate Item codes.
+
+    Used by consolidated Return Against Invoice so the operator can add only
+    the required item from a large invoice instead of loading every invoice row.
+    The query accepts item code, barcode, or part of item name.
+    """
+    text = str(query or "").strip()
+    if not text:
+        return set()
+
+    codes: set[str] = set()
+    if frappe.db.exists("Item", text):
+        codes.add(text)
+
+    if frappe.db.exists("DocType", "Item Barcode"):
+        for row in frappe.get_all("Item Barcode", filters={"barcode": text}, fields=["parent"], limit_page_length=50):
+            if row.parent:
+                codes.add(row.parent)
+
+    like = f"%{text}%"
+    for row in frappe.get_all(
+        "Item",
+        filters=[["Item", "disabled", "=", 0], ["Item", "item_name", "like", like]],
+        fields=["name"],
+        limit_page_length=20,
+    ):
+        codes.add(row.name)
+    for row in frappe.get_all(
+        "Item",
+        filters=[["Item", "disabled", "=", 0], ["Item", "item_code", "like", like]],
+        fields=["name"],
+        limit_page_length=20,
+    ):
+        codes.add(row.name)
+
+    return codes
+
+
+def _purchase_invoice_row_matches_item_filter(row: Any, query: Any, candidate_codes: set[str]) -> bool:
+    text = str(query or "").strip().lower()
+    if not text:
+        return True
+    if row.item_code in candidate_codes:
+        return True
+    haystack = " ".join(
+        str(value or "")
+        for value in (row.item_code, row.item_name, row.description)
+    ).lower()
+    return text in haystack
+
+
 @frappe.whitelist()
-def get_invoice_for_return(name: str):
+def get_invoice_for_return(name: str, item_query: str | None = None, batch_no: str | None = None, selected_only: int = 0):
     _require_read()
     if not name or not frappe.db.exists("Purchase Invoice", name):
         frappe.throw(_("Purchase Invoice does not exist."))
@@ -1541,15 +1663,26 @@ def get_invoice_for_return(name: str):
     returned = _returned_qty_by_original_item(doc.name)
     item_meta = frappe.get_meta("Purchase Invoice Item")
     item_fields = {df.fieldname for df in item_meta.fields if df.fieldname}
+    selected_only = cint(selected_only)
+    item_query = str(item_query or "").strip()
+    batch_no_filter = str(batch_no or "").strip()
+    candidate_item_codes = _item_codes_matching_query(item_query) if selected_only and item_query else set()
     result_items = []
     for row in doc.items:
         already = flt(returned.get(row.name))
         limits = _invoice_return_stock_limits(row, already)
         batch_no = limits["batch_no"]
         has_batch_no = cint(limits.get("has_batch_no"))
+        if selected_only:
+            if item_query and not _purchase_invoice_row_matches_item_filter(row, item_query, candidate_item_codes):
+                continue
+            if batch_no_filter and str(batch_no or "").strip() != batch_no_filter:
+                continue
         expiry_date = (row.get("custom_expiry_date") if "custom_expiry_date" in item_fields else None) if has_batch_no else None
         pricing = _pricing_from_purchase_invoice_row(doc, row)
         result_items.append({
+            "original_purchase_invoice": doc.name,
+            "original_supplier_invoice_no": doc.bill_no or "",
             "original_purchase_invoice_item": row.name,
             "item_code": row.item_code,
             "item_name": row.item_name,
@@ -1593,6 +1726,61 @@ def get_invoice_for_return(name: str):
         "update_stock": cint(doc.update_stock),
         "items": result_items,
     }
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def search_invoice_return_items(doctype, txt, searchfield, start, page_len, filters):
+    """Autocomplete for the consolidated Supplier Credit Note item field.
+
+    Shows only items that exist inside the selected submitted Purchase Invoice,
+    so the operator can type a few letters or scan a barcode instead of loading
+    every invoice line.
+    v0.7.32
+    """
+    _require_read()
+    filters = frappe.parse_json(filters) if isinstance(filters, str) else (filters or {})
+    purchase_invoice = (filters.get("purchase_invoice") or "").strip()
+    company = (filters.get("company") or "").strip()
+    supplier = (filters.get("supplier") or "").strip()
+    if not purchase_invoice or not frappe.db.exists("Purchase Invoice", purchase_invoice):
+        return []
+
+    doc = frappe.get_doc("Purchase Invoice", purchase_invoice)
+    if doc.docstatus != 1 or cint(doc.is_return):
+        return []
+    if company and doc.company != company:
+        return []
+    if supplier and doc.supplier != supplier:
+        return []
+
+    txt = str(txt or "").strip()
+    start = max(cint(start), 0)
+    page_len = max(1, min(cint(page_len) or 20, 50))
+
+    invoice = get_invoice_for_return(
+        purchase_invoice,
+        item_query=txt,
+        batch_no=None,
+        selected_only=1 if txt else 0,
+    )
+    rows = []
+    seen = set()
+    for row in invoice.get("items") or []:
+        if flt(row.get("available_to_return_qty")) <= 0:
+            continue
+        key = (row.get("item_code"), row.get("batch_no") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        label = _("{0} | Batch: {1} | Returnable: {2}").format(
+            row.get("item_name") or row.get("item_code"),
+            row.get("batch_no") or _("No Batch"),
+            flt(row.get("available_to_return_qty")),
+        )
+        rows.append((row.get("item_code"), label, row.get("batch_no") or "", flt(row.get("available_to_return_qty"))))
+
+    return rows[start : start + page_len]
 
 
 def _stock_valuation_rate(item_code: str, warehouse: str, batch_no: str | None = None) -> float:
@@ -1906,41 +2094,94 @@ def get_batch_stock_for_recall(
     }
 
 
+def _invoice_payload_invoice_map(payload: dict) -> dict[str, Any]:
+    """Return submitted original invoices used by an invoice-linked case.
+
+    A single supplier credit note may contain rows from multiple Purchase
+    Invoices. ERPNext still needs each official Purchase Return linked to its
+    own original invoice, so each child row keeps its original invoice.
+    """
+    invoice_names = set()
+    parent_invoice = payload.get("original_purchase_invoice")
+    if parent_invoice:
+        invoice_names.add(parent_invoice)
+    for raw in payload.get("items") or []:
+        row = frappe._dict(raw)
+        row_invoice = row.get("original_purchase_invoice") or parent_invoice
+        if row_invoice:
+            invoice_names.add(row_invoice)
+
+    invoices = {}
+    for invoice_name in sorted(invoice_names):
+        if not frappe.db.exists("Purchase Invoice", invoice_name):
+            frappe.throw(_("Purchase Invoice {0} does not exist.").format(frappe.bold(invoice_name)))
+        invoice = frappe.get_doc("Purchase Invoice", invoice_name)
+        if invoice.docstatus != 1 or cint(invoice.is_return):
+            frappe.throw(_("Select submitted original Purchase Invoices only. Invalid invoice: {0}.").format(frappe.bold(invoice_name)))
+        if payload.get("supplier") and payload.get("supplier") != invoice.supplier:
+            frappe.throw(_("All invoices in one Supplier Credit Note must belong to the same supplier. Invoice {0} belongs to {1}.").format(frappe.bold(invoice_name), frappe.bold(invoice.supplier)))
+        if payload.get("company") and payload.get("company") != invoice.company:
+            frappe.throw(_("All invoices in one Supplier Credit Note must belong to the same company. Invoice {0} belongs to {1}.").format(frappe.bold(invoice_name), frappe.bold(invoice.company)))
+        invoices[invoice_name] = invoice
+    return invoices
+
+
 def _validate_invoice_case_payload(
     payload: dict,
     exclude_purchase_return: str | None = None,
 ) -> None:
     if payload.get("return_type") != "Return Against Invoice":
         return
-    if not payload.get("original_purchase_invoice"):
-        frappe.throw(_("Select the original Purchase Invoice."))
-    invoice = frappe.get_doc("Purchase Invoice", payload.get("original_purchase_invoice"))
-    if invoice.docstatus != 1 or cint(invoice.is_return):
-        frappe.throw(_("Select a submitted original Purchase Invoice."))
-    if payload.get("supplier") and payload.get("supplier") != invoice.supplier:
-        frappe.throw(_("The receiving supplier must match the original invoice supplier for an invoice-linked return."))
+
     selected = [frappe._dict(row) for row in (payload.get("items") or []) if flt(row.get("return_qty")) > 0]
     if not selected:
         frappe.throw(_("Enter a return quantity for at least one item."))
-    source = {row.name: row for row in invoice.items}
-    already = _returned_qty_by_original_item(
-        invoice.name,
-        exclude_purchase_return=exclude_purchase_return,
-    )
+
+    invoices = _invoice_payload_invoice_map(payload)
+    if not invoices:
+        frappe.throw(_("Select at least one original Purchase Invoice."))
+
+    invoice_rows_by_invoice = {
+        invoice_name: {row.name: row for row in invoice.items}
+        for invoice_name, invoice in invoices.items()
+    }
+    exclude_by_invoice = {invoice_name: [] for invoice_name in invoices}
+    if exclude_purchase_return:
+        for invoice_name in invoices:
+            exclude_by_invoice[invoice_name].append(exclude_purchase_return)
+    for raw in payload.get("items") or []:
+        row = frappe._dict(raw)
+        row_invoice = row.get("original_purchase_invoice") or payload.get("original_purchase_invoice")
+        if row_invoice in exclude_by_invoice and row.get("purchase_return"):
+            exclude_by_invoice[row_invoice].append(row.get("purchase_return"))
+    returned_by_invoice = {
+        invoice_name: _returned_qty_by_original_item(
+            invoice_name,
+            exclude_purchase_return=exclude_by_invoice.get(invoice_name),
+        )
+        for invoice_name in invoices
+    }
+
+    parent_invoice = payload.get("original_purchase_invoice")
     for row in selected:
+        invoice_name = row.get("original_purchase_invoice") or parent_invoice
+        if not invoice_name or invoice_name not in invoices:
+            frappe.throw(_("Each return row must have a valid original Purchase Invoice."))
+        source = invoice_rows_by_invoice[invoice_name]
         original = source.get(row.original_purchase_invoice_item)
         if not original:
-            frappe.throw(_("Invalid original invoice item in return rows."))
+            frappe.throw(_("Invalid original invoice item in return rows for invoice {0}.").format(frappe.bold(invoice_name)))
 
         limits = _invoice_return_stock_limits(
             original,
-            flt(already.get(original.name)),
+            flt(returned_by_invoice[invoice_name].get(original.name)),
         )
         requested_qty = flt(row.return_qty)
         if requested_qty > limits["invoice_returnable_qty"] + 0.000001:
             frappe.throw(
-                _("Return quantity for {0} cannot exceed the invoice-returnable quantity {1}.").format(
+                _("Return quantity for {0} in invoice {1} cannot exceed the invoice-returnable quantity {2}.").format(
                     frappe.bold(original.item_code),
+                    frappe.bold(invoice_name),
                     limits["invoice_returnable_qty"],
                 )
             )
@@ -1955,18 +2196,18 @@ def _validate_invoice_case_payload(
             )
             frappe.throw(
                 _(
-                    "Return quantity for item {0} cannot exceed the current physical stock {1} in {2}. "
+                    "Return quantity for item {0} from invoice {1} cannot exceed the current physical stock {2} in {3}. "
                     "Choose stock that is physically available, use the warehouse that actually holds it, "
                     "or correct the stock ledger before creating the Purchase Return."
                 ).format(
                     frappe.bold(original.item_code),
+                    frappe.bold(invoice_name),
                     limits["physical_stock_qty"],
                     stock_reference,
                 )
             )
         if not row.get("return_reason"):
             frappe.throw(_("Select a return reason for item {0}.").format(frappe.bold(original.item_code)))
-
 
 def _normalize_payload_row_pricing(
     payload: dict,
@@ -2299,6 +2540,9 @@ def _set_case_values(doc, payload: dict) -> None:
     doc.company = payload.get("company")
     doc.posting_date = payload.get("posting_date") or nowdate()
     doc.supplier = payload.get("supplier")
+    doc.supplier_credit_note_no = payload.get("supplier_credit_note_no") or None
+    doc.supplier_credit_note_date = payload.get("supplier_credit_note_date") or None
+    doc.supplier_credit_note_attachment = payload.get("supplier_credit_note_attachment") or None
     doc.original_purchase_invoice = payload.get("original_purchase_invoice") or None
     doc.settlement_method = payload.get("settlement_method") or "Pending Settlement"
     doc.remarks = payload.get("remarks") or ""
@@ -2354,27 +2598,29 @@ def _set_case_values(doc, payload: dict) -> None:
         or payload.get("supplier_response_date")
         or None
     )
-    invoice_doc = None
-    invoice_rows = {}
-    returned_by_original_item = {}
-    if return_type == "Return Against Invoice" and doc.original_purchase_invoice:
-        invoice_doc = frappe.get_doc("Purchase Invoice", doc.original_purchase_invoice)
-        invoice_rows = {row.name: row for row in invoice_doc.items}
-        returned_by_original_item = _returned_qty_by_original_item(
-            doc.original_purchase_invoice,
-            exclude_purchase_return=doc.get("purchase_return"),
-        )
+    invoice_docs = {}
+    invoice_rows_by_invoice = {}
+    returned_by_invoice = {}
+    if return_type == "Return Against Invoice":
+        invoice_docs = _invoice_payload_invoice_map(payload)
+        invoice_rows_by_invoice = {
+            invoice_name: {row.name: row for row in invoice.items}
+            for invoice_name, invoice in invoice_docs.items()
+        }
+        returned_by_invoice = {
+            invoice_name: _returned_qty_by_original_item(invoice_name)
+            for invoice_name in invoice_docs
+        }
 
     doc.set("items", [])
     for source in payload.get("items") or []:
         row = frappe._dict(source)
         if flt(row.return_qty) <= 0:
             continue
-        invoice_row = (
-            invoice_rows.get(row.get("original_purchase_invoice_item"))
-            if invoice_rows
-            else None
-        )
+        row_invoice_name = row.get("original_purchase_invoice") or doc.original_purchase_invoice
+        invoice_doc = invoice_docs.get(row_invoice_name) if invoice_docs else None
+        invoice_rows = invoice_rows_by_invoice.get(row_invoice_name, {})
+        invoice_row = invoice_rows.get(row.get("original_purchase_invoice_item")) if invoice_rows else None
         row = _normalize_payload_row_pricing(
             payload,
             row,
@@ -2384,19 +2630,22 @@ def _set_case_values(doc, payload: dict) -> None:
         if invoice_row:
             limits = _invoice_return_stock_limits(
                 invoice_row,
-                flt(returned_by_original_item.get(invoice_row.name)),
+                flt(returned_by_invoice.get(row_invoice_name, {}).get(invoice_row.name)),
             )
             row.warehouse = limits["warehouse"]
             row.batch_no = limits["batch_no"]
             row.has_batch_no = cint(limits.get("has_batch_no"))
             row.original_qty = limits["original_qty"]
             row.already_returned_qty = flt(
-                returned_by_original_item.get(invoice_row.name)
+                returned_by_invoice.get(row_invoice_name, {}).get(invoice_row.name)
             )
             row.invoice_returnable_qty = limits["invoice_returnable_qty"]
             row.physical_stock_qty = limits["physical_stock_qty"]
             row.available_to_return_qty = limits["available_to_return_qty"]
         doc.append("items", {
+            "original_purchase_invoice": row.get("original_purchase_invoice") or doc.original_purchase_invoice,
+            "original_supplier_invoice_no": row.get("original_supplier_invoice_no") or "",
+            "purchase_return": row.get("purchase_return") or None,
             "original_purchase_invoice_item": row.get("original_purchase_invoice_item"),
             "item_code": row.item_code,
             "item_name": row.item_name,
@@ -2444,6 +2693,11 @@ def _set_case_values(doc, payload: dict) -> None:
             "rejected_returned_qty": flt(row.get("rejected_returned_qty")),
             "notes": row.notes or "",
         })
+
+    if return_type == "Return Against Invoice" and not doc.original_purchase_invoice:
+        first_invoice = next((row.get("original_purchase_invoice") for row in doc.items if row.get("original_purchase_invoice")), None)
+        if first_invoice:
+            doc.original_purchase_invoice = first_invoice
 
     if _is_progressive_return_type(return_type):
         unique_items = sorted({row.item_code for row in doc.items if row.item_code})
@@ -2508,6 +2762,10 @@ def save_case(payload):
 def _supplier_handover_schema_requirements():
     return {
         "Pharmacy Return Case": (
+            "supplier_credit_note_no",
+            "supplier_credit_note_date",
+            "supplier_credit_note_attachment",
+            "consolidated_purchase_returns",
             "returns_with_supplier_warehouse",
             "handover_stock_entry",
             "handed_over_quantity",
@@ -2548,6 +2806,9 @@ def _supplier_handover_schema_requirements():
             "refund_notes",
         ),
         "Pharmacy Return Item": (
+            "original_purchase_invoice",
+            "original_supplier_invoice_no",
+            "purchase_return",
             "delivered_qty",
             "accepted_qty",
             "rejected_qty",
@@ -2753,29 +3014,37 @@ def get_case(name: str):
         )
         if doc.get("approved_debit_note") else None
     )
-    returned_by_original_item = (
-        _returned_qty_by_original_item(doc.original_purchase_invoice)
-        if doc.return_type == "Return Against Invoice" and doc.original_purchase_invoice
-        else {}
-    )
-    source_invoice = (
-        frappe.get_doc("Purchase Invoice", doc.original_purchase_invoice)
-        if doc.return_type == "Return Against Invoice" and doc.original_purchase_invoice
-        else None
-    )
-    source_invoice_rows = (
-        {row.name: row for row in source_invoice.items}
-        if source_invoice
-        else {}
-    )
+    invoice_names = sorted({
+        (row.get("original_purchase_invoice") or doc.original_purchase_invoice)
+        for row in doc.items
+        if (row.get("original_purchase_invoice") or doc.original_purchase_invoice)
+    }) if doc.return_type == "Return Against Invoice" else []
+    source_invoices = {
+        invoice_name: frappe.get_doc("Purchase Invoice", invoice_name)
+        for invoice_name in invoice_names
+        if frappe.db.exists("Purchase Invoice", invoice_name)
+    }
+    source_invoice_rows_by_invoice = {
+        invoice_name: {row.name: row for row in invoice.items}
+        for invoice_name, invoice in source_invoices.items()
+    }
+    returned_by_invoice = {
+        invoice_name: _returned_qty_by_original_item(invoice_name)
+        for invoice_name in source_invoices
+    }
     item_rows = []
     for row in doc.items:
         values = row.as_dict()
+        source_invoice = None
+        source_invoice_rows = {}
         if doc.return_type == "Return Against Invoice":
+            row_invoice = values.get("original_purchase_invoice") or doc.original_purchase_invoice
+            source_invoice = source_invoices.get(row_invoice)
+            source_invoice_rows = source_invoice_rows_by_invoice.get(row_invoice, {})
             original_item = values.get("original_purchase_invoice_item")
             original_row = source_invoice_rows.get(original_item)
             already_returned = flt(
-                returned_by_original_item.get(
+                returned_by_invoice.get(row_invoice, {}).get(
                     original_item,
                     values.get("already_returned_qty"),
                 )
@@ -2793,7 +3062,7 @@ def get_case(name: str):
                 values["invoice_returnable_qty"] = limits["invoice_returnable_qty"]
                 values["physical_stock_qty"] = limits["physical_stock_qty"]
                 values["available_to_return_qty"] = limits["available_to_return_qty"]
-                if not doc.purchase_return:
+                if not values.get("purchase_return") and not doc.purchase_return:
                     values["return_qty"] = min(
                         flt(values.get("return_qty")),
                         limits["available_to_return_qty"],
@@ -2824,6 +3093,11 @@ def get_case(name: str):
         "company": doc.company,
         "posting_date": doc.posting_date,
         "supplier": doc.supplier,
+        "supplier_credit_note_no": doc.get("supplier_credit_note_no"),
+        "supplier_credit_note_date": doc.get("supplier_credit_note_date"),
+        "supplier_credit_note_attachment": doc.get("supplier_credit_note_attachment"),
+        "consolidated_purchase_returns": doc.get("consolidated_purchase_returns"),
+        "purchase_returns": _case_purchase_return_names(doc),
         "original_purchase_invoice": doc.original_purchase_invoice,
         "purchase_return": doc.purchase_return,
         "purchase_return_docstatus": purchase_return_details.docstatus if purchase_return_details else None,
@@ -3096,12 +3370,11 @@ def _save_and_refresh_return_case(case):
 
 @frappe.whitelist()
 def delete_purchase_return_draft(case_name: str):
-    """Safely unlink and delete a draft Purchase Return created by this page.
+    """Delete draft Purchase Return documents created from a return case.
 
-    Frappe correctly blocks deleting a Purchase Invoice while a Pharmacy Return
-    Case still links to it. This method validates both documents, clears the
-    case link inside the same transaction, then deletes only a Draft return.
-    Submitted or cancelled accounting documents are never deleted here.
+    For consolidated supplier credit notes there may be one draft Purchase
+    Return per original Purchase Invoice. Submitted or cancelled accounting
+    documents are never deleted here.
     """
     _require_read()
     case = frappe.get_doc("Pharmacy Return Case", case_name)
@@ -3113,53 +3386,137 @@ def delete_purchase_return_draft(case_name: str):
             frappe.PermissionError,
         )
 
-    purchase_return = case.get("purchase_return")
-    if not purchase_return:
-        return {"case": case.name, "deleted": 0, "purchase_return": None}
+    names = _case_purchase_return_names(case)
+    if not names:
+        return {"case": case.name, "deleted": 0, "purchase_return": None, "purchase_returns": []}
 
-    if not frappe.db.exists("Purchase Invoice", purchase_return):
-        case.db_set("purchase_return", None, update_modified=False)
-        if case.operational_status == "Purchase Return Draft Created":
-            case.db_set("operational_status", "Under Review", update_modified=False)
-        return {"case": case.name, "deleted": 0, "purchase_return": purchase_return}
-
-    return_doc = frappe.get_doc("Purchase Invoice", purchase_return)
-    if return_doc.docstatus != 0:
-        frappe.throw(
-            _("Only a Draft Purchase Return can be deleted. {0} has status {1}.").format(
-                frappe.bold(return_doc.name),
-                frappe.bold(return_doc.status or return_doc.docstatus),
+    deleted = []
+    for purchase_return in names:
+        if not frappe.db.exists("Purchase Invoice", purchase_return):
+            continue
+        return_doc = frappe.get_doc("Purchase Invoice", purchase_return)
+        if return_doc.docstatus != 0:
+            frappe.throw(
+                _("Only Draft Purchase Returns can be deleted. {0} has status {1}.").format(
+                    frappe.bold(return_doc.name),
+                    frappe.bold(return_doc.status or return_doc.docstatus),
+                )
             )
-        )
-    if not cint(return_doc.get("is_return")):
-        frappe.throw(_("Linked Purchase Invoice {0} is not a return document.").format(frappe.bold(return_doc.name)))
-    if return_doc.get("return_against") and return_doc.get("return_against") != case.original_purchase_invoice:
-        frappe.throw(_("Purchase Return {0} is linked to a different original invoice.").format(frappe.bold(return_doc.name)))
-    if return_doc.meta.has_field("custom_pharmacy_return_case"):
-        linked_case = return_doc.get("custom_pharmacy_return_case")
-        if linked_case and linked_case != case.name:
-            frappe.throw(_("Purchase Return {0} belongs to another Pharmacy Return Case.").format(frappe.bold(return_doc.name)))
-    if not frappe.has_permission("Purchase Invoice", "delete", doc=return_doc):
-        frappe.throw(
-            _("You are not permitted to delete Draft Purchase Return {0}.").format(
-                frappe.bold(return_doc.name)
-            ),
-            frappe.PermissionError,
-        )
+        if not cint(return_doc.get("is_return")):
+            frappe.throw(_("Linked Purchase Invoice {0} is not a return document.").format(frappe.bold(return_doc.name)))
+        if return_doc.meta.has_field("custom_pharmacy_return_case"):
+            linked_case = return_doc.get("custom_pharmacy_return_case")
+            if linked_case and linked_case != case.name:
+                frappe.throw(_("Purchase Return {0} belongs to another Pharmacy Return Case.").format(frappe.bold(return_doc.name)))
+        if not frappe.has_permission("Purchase Invoice", "delete", doc=return_doc):
+            frappe.throw(
+                _("You are not permitted to delete Draft Purchase Return {0}.").format(
+                    frappe.bold(return_doc.name)
+                ),
+                frappe.PermissionError,
+            )
+        for row in case.items:
+            if row.get("purchase_return") == return_doc.name:
+                row.db_set("purchase_return", None, update_modified=False)
+        if case.get("purchase_return") == return_doc.name:
+            case.db_set("purchase_return", None, update_modified=False)
+        frappe.delete_doc("Purchase Invoice", return_doc.name)
+        deleted.append(return_doc.name)
 
-    # Clear the incoming Link first; otherwise Frappe's link protection blocks
-    # deletion. Both operations are part of one request/transaction.
-    case.db_set("purchase_return", None, update_modified=False)
+    case.reload()
+    _set_case_purchase_returns_summary(case, [])
     if case.operational_status == "Purchase Return Draft Created":
         case.db_set("operational_status", "Under Review", update_modified=False)
-    frappe.delete_doc("Purchase Invoice", return_doc.name)
-
     return {
         "case": case.name,
-        "deleted": 1,
-        "purchase_return": return_doc.name,
+        "deleted": len(deleted),
+        "purchase_return": deleted[0] if deleted else None,
+        "purchase_returns": deleted,
         "operational_status": "Under Review",
     }
+
+
+def _configure_mapped_purchase_return_item(mapped_row, case_row) -> None:
+    mapped_row.qty = -abs(flt(case_row.return_qty))
+    if mapped_row.meta.has_field("rejected_qty"):
+        mapped_row.rejected_qty = 0
+    if mapped_row.meta.has_field("received_qty"):
+        mapped_row.received_qty = mapped_row.qty
+    mapped_row.stock_qty = mapped_row.qty * (flt(mapped_row.conversion_factor) or 1)
+    mapped_row.warehouse = case_row.warehouse or mapped_row.warehouse
+    if mapped_row.meta.has_field("rejected_warehouse"):
+        mapped_row.rejected_warehouse = None
+    if mapped_row.meta.has_field("rejected_serial_and_batch_bundle"):
+        mapped_row.rejected_serial_and_batch_bundle = None
+    if mapped_row.meta.has_field("rejected_serial_no"):
+        mapped_row.rejected_serial_no = None
+    item_has_batch = _item_has_batch_no(case_row.item_code)
+    if mapped_row.meta.has_field("batch_no"):
+        mapped_row.batch_no = case_row.batch_no if item_has_batch and case_row.batch_no else None
+    if mapped_row.meta.has_field("serial_and_batch_bundle"):
+        mapped_row.serial_and_batch_bundle = None
+    if mapped_row.meta.has_field("use_serial_batch_fields"):
+        mapped_row.use_serial_batch_fields = 1 if item_has_batch and case_row.batch_no else 0
+
+    taxable = bool(
+        cint(case_row.get("is_vat_taxable"))
+        and flt(case_row.get("vat_rate")) > 0
+    )
+    if mapped_row.meta.has_field("custom_tax_entry_mode"):
+        mapped_row.custom_tax_entry_mode = (
+            _normalize_purchase_invoice_vat_entry_mode(
+                mapped_row.get("custom_tax_entry_mode"),
+                taxable=taxable,
+            )
+            if taxable
+            else "No VAT"
+        )
+    if mapped_row.meta.has_field("custom_vat_rate"):
+        mapped_row.custom_vat_rate = (
+            max(0.0, flt(case_row.get("vat_rate"))) if taxable else 0.0
+        )
+    if mapped_row.meta.has_field("custom_vat_per_unit"):
+        mapped_row.custom_vat_per_unit = (
+            abs(flt(case_row.get("tax_amount")))
+            / max(abs(flt(case_row.get("return_qty"))), 0.000001)
+            if taxable
+            else 0.0
+        )
+
+
+def _create_purchase_return_for_invoice(case, invoice_name: str, case_rows: list[Any]):
+    mapped = _make_standard_debit_note(invoice_name)
+    mapped.posting_date = case.posting_date or nowdate()
+    mapped.set_posting_time = 0
+    mapped.update_stock = 1
+    note_reference = case.get("supplier_credit_note_no") or case.name
+    mapped.remarks = _(
+        "Created from Pharmacy Return Case {0}. Supplier Credit Note: {1}."
+    ).format(case.name, note_reference)
+
+    new_items = []
+    for case_row in case_rows:
+        if flt(case_row.return_qty) <= 0:
+            continue
+        mapped_row = _match_mapped_item(mapped, case_row)
+        if not mapped_row:
+            frappe.throw(
+                _("Could not match original row for item {0} in invoice {1}.").format(
+                    frappe.bold(case_row.item_code),
+                    frappe.bold(invoice_name),
+                )
+            )
+        _configure_mapped_purchase_return_item(mapped_row, case_row)
+        new_items.append(mapped_row)
+
+    if not new_items:
+        frappe.throw(_("No returnable rows found for invoice {0}.").format(frappe.bold(invoice_name)))
+
+    mapped.set("items", new_items)
+    if mapped.meta.has_field("custom_pharmacy_return_case"):
+        mapped.custom_pharmacy_return_case = case.name
+    mapped.insert()
+    return mapped
 
 
 @frappe.whitelist()
@@ -3170,123 +3527,100 @@ def create_purchase_return_draft(case_name: str):
     case = frappe.get_doc("Pharmacy Return Case", case_name)
     if case.return_type != "Return Against Invoice":
         frappe.throw(_("This action is only for invoice-linked returns."))
-    if case.purchase_return:
-        if frappe.db.exists("Purchase Invoice", case.purchase_return):
-            return {"case": case.name, "purchase_return": case.purchase_return, "already_exists": 1}
-        case.purchase_return = None
-    if not case.original_purchase_invoice:
-        frappe.throw(_("Original Purchase Invoice is required."))
 
     payload = {
         "return_type": case.return_type,
+        "company": case.company,
         "original_purchase_invoice": case.original_purchase_invoice,
         "supplier": case.supplier,
         "items": [row.as_dict() for row in case.items],
     }
     _validate_invoice_case_payload(payload)
 
-    mapped = _make_standard_debit_note(case.original_purchase_invoice)
-    mapped.posting_date = case.posting_date or nowdate()
-    mapped.set_posting_time = 0
-    mapped.update_stock = 1
-    mapped.remarks = _("Created from Pharmacy Return Case {0}").format(case.name)
-
-    new_items = []
-    for case_row in case.items:
-        if flt(case_row.return_qty) <= 0:
+    grouped: dict[str, list[Any]] = {}
+    existing_returns: dict[str, str] = {}
+    for row in case.items:
+        if flt(row.return_qty) <= 0:
             continue
-        mapped_row = _match_mapped_item(mapped, case_row)
-        if not mapped_row:
-            frappe.throw(_("Could not match original row for item {0}.").format(frappe.bold(case_row.item_code)))
-        mapped_row.qty = -abs(flt(case_row.return_qty))
-        if mapped_row.meta.has_field("rejected_qty"):
-            mapped_row.rejected_qty = 0
-        if mapped_row.meta.has_field("received_qty"):
-            mapped_row.received_qty = mapped_row.qty
-        mapped_row.stock_qty = mapped_row.qty * (flt(mapped_row.conversion_factor) or 1)
-        mapped_row.warehouse = case_row.warehouse or mapped_row.warehouse
-        if mapped_row.meta.has_field("rejected_warehouse"):
-            mapped_row.rejected_warehouse = None
-        if mapped_row.meta.has_field("rejected_serial_and_batch_bundle"):
-            mapped_row.rejected_serial_and_batch_bundle = None
-        if mapped_row.meta.has_field("rejected_serial_no"):
-            mapped_row.rejected_serial_no = None
-        item_has_batch = _item_has_batch_no(case_row.item_code)
-        if mapped_row.meta.has_field("batch_no"):
-            mapped_row.batch_no = case_row.batch_no if item_has_batch and case_row.batch_no else None
-        if mapped_row.meta.has_field("serial_and_batch_bundle"):
-            mapped_row.serial_and_batch_bundle = None
-        if mapped_row.meta.has_field("use_serial_batch_fields"):
-            mapped_row.use_serial_batch_fields = 1 if item_has_batch and case_row.batch_no else 0
+        invoice_name = row.get("original_purchase_invoice") or case.original_purchase_invoice
+        if not invoice_name:
+            frappe.throw(_("Each return line must have an original Purchase Invoice."))
+        grouped.setdefault(invoice_name, []).append(row)
+        if row.get("purchase_return") and frappe.db.exists("Purchase Invoice", row.get("purchase_return")):
+            existing_returns[invoice_name] = row.get("purchase_return")
 
-        # Do not copy malformed historical Select values such as
-        # ``Auto by VAT %/%`` into the new Purchase Return. The return-case
-        # row contains the trusted VAT classification resolved from the
-        # original Purchase Invoice / item tax setup.
-        taxable = bool(
-            cint(case_row.get("is_vat_taxable"))
-            and flt(case_row.get("vat_rate")) > 0
-        )
-        if mapped_row.meta.has_field("custom_tax_entry_mode"):
-            mapped_row.custom_tax_entry_mode = (
-                _normalize_purchase_invoice_vat_entry_mode(
-                    mapped_row.get("custom_tax_entry_mode"),
-                    taxable=taxable,
-                )
-                if taxable
-                else "No VAT"
-            )
-        if mapped_row.meta.has_field("custom_vat_rate"):
-            mapped_row.custom_vat_rate = (
-                max(0.0, flt(case_row.get("vat_rate"))) if taxable else 0.0
-            )
-        if mapped_row.meta.has_field("custom_vat_per_unit"):
-            mapped_row.custom_vat_per_unit = (
-                abs(flt(case_row.get("tax_amount")))
-                / max(abs(flt(case_row.get("return_qty"))), 0.000001)
-                if taxable
-                else 0.0
-            )
+    if not grouped:
+        frappe.throw(_("Enter a return quantity for at least one item."))
 
-        new_items.append(mapped_row)
-    mapped.set("items", new_items)
+    created_or_existing: list[str] = []
+    already_exists = 1
+    for invoice_name, rows in grouped.items():
+        purchase_return = existing_returns.get(invoice_name)
+        if purchase_return:
+            created_or_existing.append(purchase_return)
+            continue
+        already_exists = 0
+        mapped = _create_purchase_return_for_invoice(case, invoice_name, rows)
+        purchase_return = mapped.name
+        created_or_existing.append(purchase_return)
+        for row in rows:
+            row.db_set("purchase_return", purchase_return, update_modified=False)
+            row.purchase_return = purchase_return
 
-    if mapped.meta.has_field("custom_pharmacy_return_case"):
-        mapped.custom_pharmacy_return_case = case.name
-    mapped.insert()
-
-    case.purchase_return = mapped.name
+    first_return = created_or_existing[0] if created_or_existing else None
+    case.db_set("purchase_return", first_return, update_modified=False)
+    case.purchase_return = first_return
+    _set_case_purchase_returns_summary(case, created_or_existing)
+    case.db_set("operational_status", "Purchase Return Draft Created", update_modified=False)
     case.operational_status = "Purchase Return Draft Created"
-    case.save(ignore_permissions=True)
-    return {"case": case.name, "purchase_return": mapped.name, "already_exists": 0}
-
+    case.reload()
+    return {
+        "case": case.name,
+        "purchase_return": first_return,
+        "purchase_returns": created_or_existing,
+        "already_exists": already_exists,
+    }
 
 
 @frappe.whitelist()
 def create_and_submit_purchase_return(case_name: str):
     result = create_purchase_return_draft(case_name)
-    purchase_return, already_submitted = _submit_linked_return_document(
-        "Purchase Invoice",
-        result.get("purchase_return"),
-    )
+    submitted_names = []
+    already_submitted_count = 0
+    for name in result.get("purchase_returns") or ([result.get("purchase_return")] if result.get("purchase_return") else []):
+        purchase_return, already_submitted = _submit_linked_return_document(
+            "Purchase Invoice",
+            name,
+        )
+        submitted_names.append(purchase_return.name)
+        if already_submitted:
+            already_submitted_count += 1
 
     case = frappe.get_doc("Pharmacy Return Case", case_name)
     if case.return_type != "Return Against Invoice":
         frappe.throw(_("This action is only for invoice-linked returns."))
 
+    first_return = submitted_names[0] if submitted_names else case.get("purchase_return")
+    case.db_set("purchase_return", first_return, update_modified=False)
+    _set_case_purchase_returns_summary(case, submitted_names)
     case.operational_status = _case_status_before_claim(case)
     case.save(ignore_permissions=True)
     _sync_supplier_claim_settlement(case)
     case.reload()
 
+    total_outstanding = 0.0
+    for name in submitted_names:
+        total_outstanding += flt(frappe.db.get_value("Purchase Invoice", name, "outstanding_amount"))
+
     return {
         "case": case.name,
-        "purchase_return": purchase_return.name,
-        "docstatus": purchase_return.docstatus,
+        "purchase_return": first_return,
+        "purchase_returns": submitted_names,
+        "docstatus": 1 if submitted_names else None,
         "already_exists": cint(result.get("already_exists")),
-        "already_submitted": cint(already_submitted),
+        "already_submitted": already_submitted_count,
         "operational_status": case.operational_status,
-        "outstanding": flt(purchase_return.get("outstanding_amount")),
+        "outstanding": total_outstanding,
     }
 
 
