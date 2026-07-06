@@ -1,4 +1,4 @@
-/* Purchase Returns Management v0.7.24 - rejected destination warehouse value sync hotfix */
+/* Purchase Returns Management v0.7.26 - supplier handover reversal cleanup */
 frappe.pages["purchase-returns-management"].on_page_load = function (wrapper) {
     frappe.purchase_returns_management = new PharmacyPurchaseReturnsManagement(wrapper);
 };
@@ -100,24 +100,30 @@ class PharmacyPurchaseReturnsManagement {
                         <button class="btn btn-default btn-sm" data-action="open-return" disabled>${__("Open Purchase Return")}</button>
                         <button class="btn btn-danger btn-sm" data-action="delete-return-draft">${__("Delete Purchase Return Draft")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-quarantine" disabled>${__("Open Quarantine Transfer")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="cancel-quarantine">${__("Cancel Quarantine Transfer")}</button>
                         <button class="btn btn-success btn-sm" data-action="submit-quarantine">${__("Create & Submit Quarantine Transfer")}</button>
                         <button class="btn btn-info btn-sm" data-action="create-handover">${__("Create Supplier Handover Draft")}</button>
                         <button class="btn btn-success btn-sm" data-action="submit-handover">${__("Create & Submit Supplier Handover")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-handover" disabled>${__("Open Supplier Handover")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="cancel-handover">${__("Cancel Supplier Handover")}</button>
                         <button class="btn btn-default btn-sm" data-action="attach-handover">${__("Attach Handover Receipt")}</button>
                         <button class="btn btn-default btn-sm" data-action="attach-response">${__("Attach Supplier Response")}</button>
                         <button class="btn btn-success btn-sm" data-action="save-response">${__("Save Supplier Response")}</button>
                         <button type="button" class="btn btn-danger btn-sm" data-action="create-rejection-return">${__("Create Rejected Qty Destination Draft")}</button>
                         <button type="button" class="btn btn-success btn-sm" data-action="submit-rejection-return">${__("Create & Submit Rejected Qty Destination")}</button>
                         <button type="button" class="btn btn-default btn-sm" data-action="open-rejection-return" disabled>${__("Open Rejected Qty Document")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="cancel-rejection-return">${__("Cancel Rejected Qty Document")}</button>
                         <button class="btn btn-primary btn-sm" data-action="create-approved-debit-note">${__("Create Approved Debit Note Draft")}</button>
                         <button class="btn btn-success btn-sm" data-action="submit-approved-debit-note">${__("Create & Submit Approved Debit Note")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-approved-debit-note" disabled>${__("Open Approved Debit Note")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="cancel-approved-debit-note">${__("Cancel Approved Debit Note")}</button>
                         <button class="btn btn-warning btn-sm" data-action="create-claim-deduction">${__("Create / Link Supplier Claim Draft")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-supplier-claim" disabled>${__("Open Supplier Claim")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="remove-claim-deduction">${__("Remove Draft Claim Deduction")}</button>
                         <button class="btn btn-success btn-sm" data-action="create-refund-payment">${__("Create Supplier Refund Draft")}</button>
                         <button class="btn btn-success btn-sm" data-action="submit-refund-payment">${__("Create & Submit Supplier Refund")}</button>
                         <button class="btn btn-default btn-sm" data-action="open-refund-payment" disabled>${__("Open Latest Refund Payment")}</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-action="cancel-refund-payment">${__("Cancel Latest Refund Payment")}</button>
                         <span class="prm-muted" data-role="invoice-summary"></span>
                     </div>
                 </div>
@@ -599,7 +605,7 @@ class PharmacyPurchaseReturnsManagement {
                 "load-batch","attach-notice","open-quarantine","submit-quarantine","create-handover","submit-handover","open-handover","attach-handover",
                 "attach-response","save-response","create-rejection-return","submit-rejection-return","open-rejection-return",
                 "create-approved-debit-note","submit-approved-debit-note","open-approved-debit-note","create-claim-deduction","open-supplier-claim",
-                "create-refund-payment","submit-refund-payment","open-refund-payment"
+                "create-refund-payment","submit-refund-payment","open-refund-payment","cancel-quarantine","cancel-handover","cancel-rejection-return","cancel-approved-debit-note","remove-claim-deduction","cancel-refund-payment"
             ];
             progressiveActions.forEach(action=>this.$main.find(`[data-action="${action}"]`).hide().prop("disabled",true));
             ["return_type","company","posting_date","supplier"].forEach(name=>this.setControlReadOnly(name,false));
@@ -630,7 +636,7 @@ class PharmacyPurchaseReturnsManagement {
             "load-batch","attach-notice","open-quarantine","submit-quarantine","create-handover","submit-handover","open-handover","attach-handover",
             "attach-response","save-response","create-rejection-return","submit-rejection-return","open-rejection-return",
             "create-approved-debit-note","submit-approved-debit-note","open-approved-debit-note","create-claim-deduction","open-supplier-claim",
-            "create-refund-payment","submit-refund-payment","open-refund-payment"
+            "create-refund-payment","submit-refund-payment","open-refund-payment","cancel-quarantine","cancel-handover","cancel-rejection-return","cancel-approved-debit-note","remove-claim-deduction","cancel-refund-payment"
         ];
         actions.forEach(action=>this.$main.find(`[data-action="${action}"]`).hide());
         this.$main.find('[data-action="create-primary"]').hide();
@@ -697,6 +703,14 @@ class PharmacyPurchaseReturnsManagement {
             if(this.refundPaymentEntry)showActions(["open-refund-payment"]);
             if(this.rejectionReturnStockEntry)showActions(["open-rejection-return"]);
         }
+
+        // Reversal actions remain available whenever their linked document exists.
+        if(this.quarantineStockEntry && this.quarantineDocstatus!==2)showActions(["cancel-quarantine"]);
+        if(this.handoverStockEntry && this.handoverDocstatus!==2)showActions(["cancel-handover"]);
+        if(this.rejectionReturnStockEntry && this.rejectionReturnDocstatus!==2)showActions(["cancel-rejection-return"]);
+        if(this.approvedDebitNote && this.approvedDebitNoteDocstatus!==2)showActions(["cancel-approved-debit-note"]);
+        if(this.supplierClaim && this.supplierClaimDocstatus===0)showActions(["remove-claim-deduction"]);
+        if(this.refundPaymentEntry && this.refundPaymentEntryDocstatus!==2)showActions(["cancel-refund-payment"]);
 
         const cardRoles=[
             "total-qty-card","stock-value-card","requested-net-card","requested-vat-card","requested-total-card","difference-card","total-lines-card",
@@ -910,6 +924,12 @@ class PharmacyPurchaseReturnsManagement {
         this.$main.on("click", "[data-action='open-approved-debit-note']", ()=>{if(this.approvedDebitNote)frappe.set_route("Form","Purchase Invoice",this.approvedDebitNote);});
         this.$main.on("click", "[data-action='open-supplier-claim']", ()=>{if(this.supplierClaim)frappe.set_route("Form","Supplier Claim",this.supplierClaim);});
         this.$main.on("click", "[data-action='open-refund-payment']", ()=>{if(this.refundPaymentEntry)frappe.set_route("Form","Payment Entry",this.refundPaymentEntry);});
+        this.$main.on("click", "[data-action='cancel-quarantine']", e=>this.runPageAction(e, "cancel-quarantine", ()=>this.cancelQuarantineTransfer()));
+        this.$main.on("click", "[data-action='cancel-handover']", e=>this.runPageAction(e, "cancel-handover", ()=>this.cancelSupplierHandover()));
+        this.$main.on("click", "[data-action='cancel-rejection-return']", e=>this.runPageAction(e, "cancel-rejection-return", ()=>this.cancelRejectedQuantityDestination()));
+        this.$main.on("click", "[data-action='cancel-approved-debit-note']", e=>this.runPageAction(e, "cancel-approved-debit-note", ()=>this.cancelApprovedDebitNote()));
+        this.$main.on("click", "[data-action='remove-claim-deduction']", e=>this.runPageAction(e, "remove-claim-deduction", ()=>this.removeDraftClaimDeduction()));
+        this.$main.on("click", "[data-action='cancel-refund-payment']", e=>this.runPageAction(e, "cancel-refund-payment", ()=>this.cancelSupplierRefundPayment()));
         this.$main.on("click", ".prm-type:not(.disabled)", e=>this.setReturnType($(e.currentTarget).data("type")));
         this.$main.on("change", "[data-row-field]", e=>this.updateRow(e));
         this.$main.on("click", "[data-action='remove-recall-row']", e=>this.removeRecallRow(Number($(e.currentTarget).data("index"))));
@@ -1195,6 +1215,9 @@ class PharmacyPurchaseReturnsManagement {
         this.approvedDebitNoteAmount=flt(doc.approved_debit_note_amount);
         this.approvedDebitNoteOutstanding=flt(doc.approved_debit_note_outstanding);
         this.supplierClaim=doc.supplier_claim||null;
+        this.supplierClaimDocstatus=doc.supplier_claim_docstatus;
+        this.supplierClaimStatus=doc.supplier_claim_status||null;
+        this.supplierClaimAccountingStatus=doc.supplier_claim_accounting_settlement_status||null;
         this.settlementStatus=doc.settlement_status||"Pending Settlement";
         this.claimUtilizationStatus=doc.claim_utilization_status||"Not Applied";
         this.claimSettlementDate=doc.claim_settlement_date||null;
@@ -1205,6 +1228,7 @@ class PharmacyPurchaseReturnsManagement {
         this.approvedReturnValue=flt(doc.approved_return_value);
         this.refundPaymentEntry=doc.refund_payment_entry||null;
         this.refundPaymentEntryStatus=doc.refund_payment_entry_status||null;
+        this.refundPaymentEntryDocstatus=doc.refund_payment_entry_docstatus;
         this.refundAmount=flt(doc.refund_amount);
         this.refundEntriesCount=cint(doc.refund_entries_count);
         this.hasOpenRefundDraft=Boolean(doc.has_open_refund_draft);
@@ -1445,7 +1469,7 @@ class PharmacyPurchaseReturnsManagement {
 
     async saveCase(silent=false){
         const r=await frappe.call({method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.save_case",args:{payload:this.payload()},freeze:true,freeze_message:__("Saving return case...")});
-        const doc=r.message||{};this.caseName=doc.name;this.purchaseReturn=doc.purchase_return||null;this.purchaseReturnDocstatus=doc.purchase_return_docstatus;this.purchaseReturnStatus=doc.purchase_return_status||null;this.quarantineStockEntry=doc.quarantine_stock_entry||null;this.handoverStockEntry=doc.handover_stock_entry||null;this.rejectionReturnStockEntry=doc.rejection_return_stock_entry||null;this.approvedDebitNote=doc.approved_debit_note||null;this.approvedDebitNoteDocstatus=doc.approved_debit_note_docstatus;this.approvedDebitNoteStatus=doc.approved_debit_note_status||null;this.approvedDebitNoteAmount=flt(doc.approved_debit_note_amount);this.approvedDebitNoteOutstanding=flt(doc.approved_debit_note_outstanding);this.supplierClaim=doc.supplier_claim||null;this.settlementStatus=doc.settlement_status||"Pending Settlement";this.claimUtilizationStatus=doc.claim_utilization_status||"Not Applied";this.claimSettlementDate=doc.claim_settlement_date||null;this.plannedClaimDeduction=flt(doc.planned_claim_deduction_amount);this.claimDeductionAmount=flt(doc.claim_deduction_amount);this.settledAmount=flt(doc.settled_amount);this.remainingSettlementAmount=flt(doc.remaining_settlement_amount);this.approvedReturnValue=flt(doc.approved_return_value);this.refundPaymentEntry=doc.refund_payment_entry||null;this.refundPaymentEntryStatus=doc.refund_payment_entry_status||null;this.refundAmount=flt(doc.refund_amount);this.refundEntriesCount=cint(doc.refund_entries_count);this.hasOpenRefundDraft=Boolean(doc.has_open_refund_draft);this.refundPayments=doc.refund_payments||[];this.quarantineDocstatus=doc.quarantine_docstatus;this.handoverDocstatus=doc.handover_docstatus;this.rejectionReturnDocstatus=doc.rejection_return_docstatus;this.rejectedQtyDestination=doc.rejected_qty_destination||"";this.rejectedDestinationWarehouse=doc.rejected_destination_warehouse||"";await this.setValue("case_reference",doc.name);this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${doc.operational_status||__("Draft")}`);this.refreshSettlementUI();this.renderItems();this.syncButtons();this.refreshProgressiveUI();if(!silent)frappe.show_alert({message:__("Return Case {0} saved.",[doc.name]),indicator:"green"},6);await this.refreshRecent();return doc;
+        const doc=r.message||{};this.caseName=doc.name;this.purchaseReturn=doc.purchase_return||null;this.purchaseReturnDocstatus=doc.purchase_return_docstatus;this.purchaseReturnStatus=doc.purchase_return_status||null;this.quarantineStockEntry=doc.quarantine_stock_entry||null;this.handoverStockEntry=doc.handover_stock_entry||null;this.rejectionReturnStockEntry=doc.rejection_return_stock_entry||null;this.approvedDebitNote=doc.approved_debit_note||null;this.approvedDebitNoteDocstatus=doc.approved_debit_note_docstatus;this.approvedDebitNoteStatus=doc.approved_debit_note_status||null;this.approvedDebitNoteAmount=flt(doc.approved_debit_note_amount);this.approvedDebitNoteOutstanding=flt(doc.approved_debit_note_outstanding);this.supplierClaim=doc.supplier_claim||null;this.supplierClaimDocstatus=doc.supplier_claim_docstatus;this.supplierClaimStatus=doc.supplier_claim_status||null;this.supplierClaimAccountingStatus=doc.supplier_claim_accounting_settlement_status||null;this.settlementStatus=doc.settlement_status||"Pending Settlement";this.claimUtilizationStatus=doc.claim_utilization_status||"Not Applied";this.claimSettlementDate=doc.claim_settlement_date||null;this.plannedClaimDeduction=flt(doc.planned_claim_deduction_amount);this.claimDeductionAmount=flt(doc.claim_deduction_amount);this.settledAmount=flt(doc.settled_amount);this.remainingSettlementAmount=flt(doc.remaining_settlement_amount);this.approvedReturnValue=flt(doc.approved_return_value);this.refundPaymentEntry=doc.refund_payment_entry||null;this.refundPaymentEntryStatus=doc.refund_payment_entry_status||null;this.refundPaymentEntryDocstatus=doc.refund_payment_entry_docstatus;this.refundAmount=flt(doc.refund_amount);this.refundEntriesCount=cint(doc.refund_entries_count);this.hasOpenRefundDraft=Boolean(doc.has_open_refund_draft);this.refundPayments=doc.refund_payments||[];this.quarantineDocstatus=doc.quarantine_docstatus;this.handoverDocstatus=doc.handover_docstatus;this.rejectionReturnDocstatus=doc.rejection_return_docstatus;this.rejectedQtyDestination=doc.rejected_qty_destination||"";this.rejectedDestinationWarehouse=doc.rejected_destination_warehouse||"";await this.setValue("case_reference",doc.name);this.$main.find('[data-role="case-status"]').text(`${doc.name} • ${doc.operational_status||__("Draft")}`);this.refreshSettlementUI();this.renderItems();this.syncButtons();this.refreshProgressiveUI();if(!silent)frappe.show_alert({message:__("Return Case {0} saved.",[doc.name]),indicator:"green"},6);await this.refreshRecent();return doc;
     }
 
     async createPrimaryDraft(){
@@ -1932,8 +1956,82 @@ class PharmacyPurchaseReturnsManagement {
         frappe.show_alert({message:__("Supplier Refund Payment {0} submitted successfully. Amount: {1}.",[r.message.payment_entry,this.money(r.message.amount)]),indicator:"green"},8);
     }
 
+    async cancelLinkedDocument({method,args,question,freezeMessage,successMessage}){
+        if(!this.caseName){
+            frappe.msgprint({title:__("Return Case Required"),message:__("Open the return case first."),indicator:"orange"});
+            return;
+        }
+        const answer=await new Promise(resolve=>frappe.confirm(question,()=>resolve(true),()=>resolve(false)));
+        if(!answer)return;
+        const r=await frappe.call({method,args,freeze:true,freeze_message:freezeMessage});
+        const caseName=(r.message&&r.message.case)||this.caseName;
+        await this.loadCase(caseName);
+        await this.refreshRecent();
+        frappe.show_alert({message:successMessage(r.message||{}),indicator:"green"},8);
+    }
+
+    async cancelQuarantineTransfer(){
+        return this.cancelLinkedDocument({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.cancel_quarantine_transfer",
+            args:{case_name:this.caseName},
+            question:__("Cancel/delete the Quarantine Transfer for case {0}? This is allowed only before Supplier Handover.",[this.caseName]),
+            freezeMessage:__("Cancelling quarantine transfer..."),
+            successMessage:(m)=>__("Quarantine Transfer {0} reversed. Case status: {1}.",[m.document||"",m.operational_status||""])
+        });
+    }
+
+    async cancelSupplierHandover(){
+        return this.cancelLinkedDocument({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.cancel_supplier_handover",
+            args:{case_name:this.caseName},
+            question:__("Cancel/delete the Supplier Handover for case {0}? Supplier response quantities will be cleared.",[this.caseName]),
+            freezeMessage:__("Cancelling supplier handover..."),
+            successMessage:(m)=>__("Supplier Handover {0} reversed. Case status: {1}.",[m.document||"",m.operational_status||""])
+        });
+    }
+
+    async cancelRejectedQuantityDestination(){
+        return this.cancelLinkedDocument({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.cancel_rejected_quantity_destination",
+            args:{case_name:this.caseName},
+            question:__("Cancel/delete the rejected-stock document for case {0}? The rejected quantity will become pending destination again.",[this.caseName]),
+            freezeMessage:__("Cancelling rejected quantity destination..."),
+            successMessage:(m)=>__("Rejected Qty Document {0} reversed. Case status: {1}.",[m.document||"",m.operational_status||""])
+        });
+    }
+
+    async cancelApprovedDebitNote(){
+        return this.cancelLinkedDocument({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.cancel_approved_debit_note",
+            args:{case_name:this.caseName},
+            question:__("Cancel/delete the Approved Debit Note for case {0}? Supplier credit and accepted-stock finalization will be reversed.",[this.caseName]),
+            freezeMessage:__("Cancelling approved debit note..."),
+            successMessage:(m)=>__("Approved Debit Note {0} reversed. Remaining settlement: {1}.",[m.purchase_invoice||"",this.money(m.remaining_settlement||0)])
+        });
+    }
+
+    async removeDraftClaimDeduction(){
+        return this.cancelLinkedDocument({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.remove_draft_supplier_claim_deduction",
+            args:{case_name:this.caseName},
+            question:__("Remove the draft Supplier Claim deduction for case {0}? Submitted claims must be cancelled from the Supplier Claim document.",[this.caseName]),
+            freezeMessage:__("Removing draft supplier claim deduction..."),
+            successMessage:(m)=>__("Supplier Claim deduction reversed. Remaining settlement: {0}.",[this.money(m.remaining_settlement||0)])
+        });
+    }
+
+    async cancelSupplierRefundPayment(){
+        return this.cancelLinkedDocument({
+            method:"pharma_erp.pharma_erp.page.purchase_returns_management.purchase_returns_management.cancel_supplier_refund_payment",
+            args:{case_name:this.caseName,payment_entry:this.refundPaymentEntry},
+            question:__("Cancel/delete the latest Supplier Refund Payment for case {0}? Remaining settlement will be recalculated.",[this.caseName]),
+            freezeMessage:__("Cancelling supplier refund payment..."),
+            successMessage:(m)=>__("Supplier Refund Payment {0} reversed. Remaining settlement: {1}.",[m.payment_entry||"",this.money(m.remaining_settlement||0)])
+        });
+    }
+
     syncButtons(){
-        ["create-handover","create-rejection-return","create-approved-debit-note","create-refund-payment"].forEach(action=>{
+        ["create-handover","create-rejection-return","create-approved-debit-note","create-refund-payment","cancel-quarantine","cancel-handover","cancel-rejection-return","cancel-approved-debit-note","remove-claim-deduction","cancel-refund-payment"].forEach(action=>{
             this.$main.find(`[data-action="${action}"]`).hide().prop("disabled",true);
         });
         const returnType=this.value("return_type");
@@ -2059,6 +2157,33 @@ class PharmacyPurchaseReturnsManagement {
                 || !hasSelectedRows
                 || this.quarantineDocstatus===1
         );
+        const activeClaim=Boolean(this.supplierClaim)&&this.supplierClaimDocstatus!==2;
+        const activeRefund=Boolean(this.refundPaymentEntry)&&this.refundPaymentEntryDocstatus!==2;
+        this.$main.find('[data-action="cancel-quarantine"]').prop(
+            "disabled",
+            !this.quarantineStockEntry || this.handoverDocstatus===0 || this.handoverDocstatus===1
+        );
+        this.$main.find('[data-action="cancel-handover"]').prop(
+            "disabled",
+            !this.handoverStockEntry || this.rejectionReturnDocstatus===0 || this.rejectionReturnDocstatus===1 || this.approvedDebitNoteDocstatus===0 || this.approvedDebitNoteDocstatus===1
+        );
+        this.$main.find('[data-action="cancel-rejection-return"]').prop(
+            "disabled",
+            !this.rejectionReturnStockEntry || this.approvedDebitNoteDocstatus===0 || this.approvedDebitNoteDocstatus===1
+        );
+        this.$main.find('[data-action="cancel-approved-debit-note"]').prop(
+            "disabled",
+            !this.approvedDebitNote || activeClaim || activeRefund
+        );
+        this.$main.find('[data-action="remove-claim-deduction"]').prop(
+            "disabled",
+            !this.supplierClaim || this.supplierClaimDocstatus!==0
+        );
+        this.$main.find('[data-action="cancel-refund-payment"]').prop(
+            "disabled",
+            !this.refundPaymentEntry || this.refundPaymentEntryDocstatus===2
+        );
+
         this.refreshProgressiveUI();
     }
 
@@ -2409,7 +2534,7 @@ class PharmacyPurchaseReturnsManagement {
     }
 
     async newCase(){
-        this.caseName=null;this.purchaseReturn=null;this.purchaseReturnDocstatus=null;this.purchaseReturnStatus=null;this.quarantineStockEntry=null;this.handoverStockEntry=null;this.rejectionReturnStockEntry=null;this.rejectedQtyDestination="";this.rejectedDestinationWarehouse="";this.approvedDebitNote=null;this.approvedDebitNoteDocstatus=null;this.approvedDebitNoteStatus=null;this.approvedDebitNoteAmount=0;this.approvedDebitNoteOutstanding=0;this.supplierClaim=null;this.settlementStatus="Pending Settlement";this.claimUtilizationStatus="Not Applied";this.claimSettlementDate=null;this.plannedClaimDeduction=0;this.claimDeductionAmount=0;this.settledAmount=0;this.remainingSettlementAmount=0;this.approvedReturnValue=0;this.refundPaymentEntry=null;this.refundPaymentEntryStatus=null;this.refundAmount=0;this.refundEntriesCount=0;this.hasOpenRefundDraft=false;this.refundPayments=[];this.quarantineDocstatus=null;this.handoverDocstatus=null;this.rejectionReturnDocstatus=null;this.rows=[];
+        this.caseName=null;this.purchaseReturn=null;this.purchaseReturnDocstatus=null;this.purchaseReturnStatus=null;this.quarantineStockEntry=null;this.handoverStockEntry=null;this.rejectionReturnStockEntry=null;this.rejectedQtyDestination="";this.rejectedDestinationWarehouse="";this.approvedDebitNote=null;this.approvedDebitNoteDocstatus=null;this.approvedDebitNoteStatus=null;this.approvedDebitNoteAmount=0;this.approvedDebitNoteOutstanding=0;this.supplierClaim=null;this.supplierClaimDocstatus=null;this.supplierClaimStatus=null;this.supplierClaimAccountingStatus=null;this.settlementStatus="Pending Settlement";this.claimUtilizationStatus="Not Applied";this.claimSettlementDate=null;this.plannedClaimDeduction=0;this.claimDeductionAmount=0;this.settledAmount=0;this.remainingSettlementAmount=0;this.approvedReturnValue=0;this.refundPaymentEntry=null;this.refundPaymentEntryStatus=null;this.refundPaymentEntryDocstatus=null;this.refundAmount=0;this.refundEntriesCount=0;this.hasOpenRefundDraft=false;this.refundPayments=[];this.quarantineDocstatus=null;this.handoverDocstatus=null;this.rejectionReturnDocstatus=null;this.rows=[];
         await this.setReturnType("Return Against Invoice",false);
         await this.setValue("supplier","");await this.setValue("original_purchase_invoice","");await this.setValue("settlement_method","Pending Settlement");await this.setValue("authority_notification_no","");await this.setValue("authority_notification_date","");await this.setValue("authority_notification_attachment","");await this.setValue("recall_item_code","");await this.setValue("recall_batch_no","");await this.setValue("recall_source_warehouse","");await this.applyCompanyDefaults();await this.setValue("remarks","");await this.setValue("supplier_claim","");await this.setValue("refund_posting_date",frappe.datetime.get_today());await this.setValue("refund_mode_of_payment","");await this.setValue("refund_account","");await this.setValue("refund_request_amount","");await this.setValue("refund_reference_no","");await this.setValue("refund_reference_date","");await this.setValue("refund_notes","");await this.setValue("rejected_qty_destination","");await this.setValue("rejected_destination_warehouse","");await this.setValue("rejected_destruction_date","");await this.setValue("rejected_destruction_reference","");await this.setValue("rejected_destruction_attachment","");await this.setValue("rejected_destruction_notes","");await this.setValue("case_reference","");
         this.$main.find('[data-role="case-status"]').text(__("New Case"));this.$main.find('[data-role="invoice-summary"]').text("");this.renderItems();this.syncButtons();this.refreshProgressiveUI();

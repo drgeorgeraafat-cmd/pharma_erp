@@ -2725,6 +2725,16 @@ def get_case(name: str):
     )
     refund_payments = _get_case_refund_payment_entries(doc.name)
     latest_refund_payment = refund_payments[-1] if refund_payments else None
+    supplier_claim_details = (
+        frappe.db.get_value(
+            "Supplier Claim",
+            doc.get("supplier_claim"),
+            ["docstatus", "status", "accounting_settlement_status"],
+            as_dict=True,
+        )
+        if doc.get("supplier_claim") and frappe.db.exists("Supplier Claim", doc.get("supplier_claim"))
+        else None
+    )
     debit_note_details = (
         frappe.db.get_value(
             "Purchase Invoice",
@@ -2829,6 +2839,9 @@ def get_case(name: str):
         "approved_debit_note_outstanding": _return_invoice_total_and_outstanding(debit_note_details)[1] if debit_note_details else flt(doc.get("approved_debit_note_outstanding")),
         "approved_debit_note_update_stock": debit_note_details.update_stock if debit_note_details else None,
         "supplier_claim": doc.get("supplier_claim"),
+        "supplier_claim_docstatus": supplier_claim_details.docstatus if supplier_claim_details else None,
+        "supplier_claim_status": supplier_claim_details.status if supplier_claim_details else None,
+        "supplier_claim_accounting_settlement_status": supplier_claim_details.accounting_settlement_status if supplier_claim_details else None,
         "refund_posting_date": doc.get("refund_posting_date"),
         "refund_mode_of_payment": doc.get("refund_mode_of_payment"),
         "refund_account": doc.get("refund_account"),
@@ -2837,6 +2850,8 @@ def get_case(name: str):
         "refund_reference_date": doc.get("refund_reference_date"),
         "refund_payment_entry": doc.get("refund_payment_entry"),
         "refund_payment_entry_status": doc.get("refund_payment_entry_status"),
+        "refund_payment_entry_docstatus": latest_refund_payment.docstatus if latest_refund_payment else None,
+
         "refund_entries_count": cint(doc.get("refund_entries_count")),
         "refund_notes": doc.get("refund_notes"),
         "refund_payments": refund_payments,
@@ -2937,6 +2952,145 @@ def _refresh_case_after_official_submit(case_name: str):
     case = frappe.get_doc("Pharmacy Return Case", case_name)
     _sync_case_operational_status(case)
     _sync_supplier_claim_settlement(case)
+    return case
+
+
+def _linked_doc_docstatus(doctype: str, name: str | None) -> int | None:
+    if not name or not frappe.db.exists(doctype, name):
+        return None
+    return cint(frappe.db.get_value(doctype, name, "docstatus"))
+
+
+def _doc_is_active(doctype: str, name: str | None) -> bool:
+    status = _linked_doc_docstatus(doctype, name)
+    return status in (0, 1)
+
+
+def _cancel_or_delete_linked_document(doctype: str, name: str, purpose: str) -> tuple[Any, str]:
+    if not name or not frappe.db.exists(doctype, name):
+        frappe.throw(_("Linked {0} could not be found.").format(purpose))
+
+    doc = frappe.get_doc(doctype, name)
+    if doc.docstatus == 2:
+        return doc, "already_cancelled"
+
+    if doc.docstatus == 0:
+        if not frappe.has_permission(doctype, "delete", doc=doc):
+            frappe.throw(
+                _("You are not permitted to delete Draft {0} {1}.").format(
+                    purpose,
+                    frappe.bold(name),
+                ),
+                frappe.PermissionError,
+            )
+        frappe.delete_doc(doctype, name)
+        return doc, "deleted_draft"
+
+    if not frappe.has_permission(doctype, "cancel", doc=doc):
+        frappe.throw(
+            _("You are not permitted to cancel {0} {1}.").format(
+                purpose,
+                frappe.bold(name),
+            ),
+            frappe.PermissionError,
+        )
+    doc.cancel()
+    return doc, "cancelled"
+
+
+def _active_case_refund_entries(case_name: str) -> list[dict]:
+    return [row for row in _get_case_refund_payment_entries(case_name) if cint(row.docstatus) in (0, 1)]
+
+
+def _case_claim_row_amount(case, settlement_document: str | None = None) -> float:
+    settlement_document = settlement_document or _case_settlement_document(case)
+    if not case.get("supplier_claim") or not settlement_document:
+        return 0.0
+    if not frappe.db.exists("Supplier Claim", case.get("supplier_claim")):
+        return 0.0
+    return abs(
+        flt(
+            frappe.db.get_value(
+                "Supplier Claim Invoice",
+                {
+                    "parent": case.get("supplier_claim"),
+                    "parenttype": "Supplier Claim",
+                    "purchase_invoice": settlement_document,
+                },
+                "included_amount",
+            )
+        )
+    )
+
+
+def _active_case_claim_deduction(case, settlement_document: str | None = None) -> dict | None:
+    claim_name = case.get("supplier_claim")
+    settlement_document = settlement_document or _case_settlement_document(case)
+    if not claim_name or not settlement_document or not frappe.db.exists("Supplier Claim", claim_name):
+        return None
+    claim = frappe.db.get_value(
+        "Supplier Claim",
+        claim_name,
+        ["name", "docstatus", "status", "accounting_settlement_status"],
+        as_dict=True,
+    )
+    if not claim or cint(claim.docstatus) == 2:
+        return None
+    row_amount = _case_claim_row_amount(case, settlement_document)
+    if row_amount <= 0.000001:
+        return None
+    return claim
+
+
+def _clear_case_claim_fields(case) -> None:
+    values = {
+        "supplier_claim": None,
+        "planned_claim_deduction_amount": 0,
+        "claim_deduction_amount": 0,
+        "claim_utilization_status": "Not Applied",
+        "claim_settlement_date": None,
+    }
+    for fieldname, value in values.items():
+        if case.meta.has_field(fieldname):
+            case.db_set(fieldname, value, update_modified=False)
+            setattr(case, fieldname, value)
+
+
+def _clear_case_refund_fields(case) -> None:
+    values = {
+        "refund_payment_entry": None,
+        "refund_payment_entry_status": None,
+        "refund_entries_count": 0,
+        "refund_amount": 0,
+        "refund_request_amount": 0,
+    }
+    for fieldname, value in values.items():
+        if case.meta.has_field(fieldname):
+            case.db_set(fieldname, value, update_modified=False)
+            setattr(case, fieldname, value)
+
+
+def _reset_case_financial_settlement(case) -> None:
+    _clear_case_claim_fields(case)
+    _clear_case_refund_fields(case)
+    values = {
+        "settlement_method": "Pending Settlement",
+        "settlement_status": "Pending Settlement",
+        "settled_amount": 0,
+        "remaining_settlement_amount": flt(case.get("approved_return_value")),
+    }
+    for fieldname, value in values.items():
+        if case.meta.has_field(fieldname):
+            case.db_set(fieldname, value, update_modified=False)
+            setattr(case, fieldname, value)
+
+
+def _save_and_refresh_return_case(case):
+    case.save(ignore_permissions=True)
+    case.reload()
+    _sync_case_operational_status(case)
+    _sync_supplier_claim_settlement(case)
+    case.reload()
     return case
 
 
@@ -4229,6 +4383,293 @@ def create_and_submit_supplier_refund_payment(
         "settlement_status": case.get("settlement_status"),
         "remaining_settlement_amount": flt(case.get("remaining_settlement_amount")),
     }
+
+
+@frappe.whitelist()
+def cancel_quarantine_transfer(case_name: str):
+    _require_create()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    if not _is_progressive_return_type(case.return_type):
+        frappe.throw(_("This action is only for progressive Recall / Expired return cases."))
+    if not case.get("quarantine_stock_entry"):
+        frappe.throw(_("No Quarantine Transfer is linked to this Return Case."))
+    if _doc_is_active("Stock Entry", case.get("handover_stock_entry")):
+        frappe.throw(_("Cancel the Supplier Handover Stock Entry before cancelling the Quarantine Transfer."))
+
+    document_name = case.get("quarantine_stock_entry")
+    ignored_doc, action = _cancel_or_delete_linked_document(
+        "Stock Entry",
+        document_name,
+        "Quarantine Transfer",
+    )
+
+    case.quarantine_stock_entry = None
+    case.quarantined_quantity = 0
+    for row in case.items:
+        row.quarantined_qty = 0
+        row.delivered_qty = 0
+        row.accepted_qty = 0
+        row.rejected_qty = 0
+        row.rejected_returned_qty = 0
+        row.rejection_reason = None
+    case.handed_over_quantity = 0
+    case.accepted_quantity = 0
+    case.rejected_quantity = 0
+    case.pending_response_quantity = 0
+    case.rejected_return_quantity = 0
+    case.operational_status = "Under Review"
+    case = _save_and_refresh_return_case(case)
+
+    return {
+        "case": case.name,
+        "document": document_name,
+        "action": action,
+        "operational_status": case.operational_status,
+    }
+
+
+@frappe.whitelist()
+def cancel_supplier_handover(case_name: str):
+    _require_create()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    if not _is_progressive_return_type(case.return_type):
+        frappe.throw(_("This action is only for progressive Recall / Expired return cases."))
+    if not case.get("handover_stock_entry"):
+        frappe.throw(_("No Supplier Handover Stock Entry is linked to this Return Case."))
+    if _doc_is_active("Stock Entry", case.get("rejection_return_stock_entry")):
+        frappe.throw(_("Cancel the Rejected Qty Destination document before cancelling Supplier Handover."))
+    if _doc_is_active("Purchase Invoice", case.get("approved_debit_note")):
+        frappe.throw(_("Cancel the Approved Debit Note before cancelling Supplier Handover."))
+
+    document_name = case.get("handover_stock_entry")
+    ignored_doc, action = _cancel_or_delete_linked_document(
+        "Stock Entry",
+        document_name,
+        "Supplier Handover",
+    )
+
+    case.handover_stock_entry = None
+    case.handed_over_quantity = 0
+    case.accepted_quantity = 0
+    case.rejected_quantity = 0
+    case.pending_response_quantity = 0
+    case.rejected_return_quantity = 0
+    case.supplier_response_date = None
+    case.supplier_response_reference = None
+    case.supplier_response_attachment = None
+    case.supplier_response_notes = None
+    case.rejection_return_stock_entry = None
+    case.accepted_stock_finalized_quantity = 0
+    case.approved_debit_note = None
+    case.approved_debit_note_status = None
+    case.approved_debit_note_amount = 0
+    case.approved_debit_note_outstanding = 0
+    _reset_case_financial_settlement(case)
+    for row in case.items:
+        row.delivered_qty = 0
+        row.accepted_qty = 0
+        row.rejected_qty = 0
+        row.rejected_returned_qty = 0
+        row.rejection_reason = None
+        row.approved_discount_percentage = 0
+        row.approved_rate = 0
+        row.approved_pricing_input_mode = "Discount Percentage"
+        row.approved_net_amount = 0
+        row.approved_tax_amount = 0
+        row.approved_total_credit = 0
+        row.accepted_amount = 0
+    case.operational_status = "Quarantined"
+    case = _save_and_refresh_return_case(case)
+
+    return {
+        "case": case.name,
+        "document": document_name,
+        "action": action,
+        "operational_status": case.operational_status,
+    }
+
+
+@frappe.whitelist()
+def cancel_rejected_quantity_destination(case_name: str):
+    _require_create()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    if not _is_progressive_return_type(case.return_type):
+        frappe.throw(_("This action is only for progressive Recall / Expired return cases."))
+    if not case.get("rejection_return_stock_entry"):
+        frappe.throw(_("No Rejected Qty Destination document is linked to this Return Case."))
+    if _doc_is_active("Purchase Invoice", case.get("approved_debit_note")):
+        frappe.throw(_("Cancel the Approved Debit Note before cancelling the rejected-stock movement."))
+
+    document_name = case.get("rejection_return_stock_entry")
+    ignored_doc, action = _cancel_or_delete_linked_document(
+        "Stock Entry",
+        document_name,
+        "Rejected Qty Destination",
+    )
+
+    case.rejection_return_stock_entry = None
+    case.rejected_return_quantity = 0
+    for row in case.items:
+        row.rejected_returned_qty = 0
+    case.operational_status = "Partially Accepted" if flt(case.accepted_quantity) > 0 else "Rejected"
+    case = _save_and_refresh_return_case(case)
+
+    return {
+        "case": case.name,
+        "document": document_name,
+        "action": action,
+        "operational_status": case.operational_status,
+    }
+
+
+@frappe.whitelist()
+def remove_draft_supplier_claim_deduction(case_name: str):
+    _require_create()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    settlement_document = _case_settlement_document(case)
+    if not case.get("supplier_claim") or not frappe.db.exists("Supplier Claim", case.get("supplier_claim")):
+        _clear_case_claim_fields(case)
+        case = _save_and_refresh_return_case(case)
+        return {"case": case.name, "supplier_claim": None, "action": "already_unlinked"}
+    if not settlement_document:
+        frappe.throw(_("No settlement document is linked to this Return Case."))
+
+    claim = frappe.get_doc("Supplier Claim", case.get("supplier_claim"))
+    if claim.docstatus == 2:
+        _clear_case_claim_fields(case)
+        case = _save_and_refresh_return_case(case)
+        return {"case": case.name, "supplier_claim": claim.name, "action": "already_cancelled"}
+    if claim.docstatus == 1:
+        frappe.throw(
+            _("Supplier Claim {0} is submitted. Cancel the Supplier Claim document itself first, then refresh this case.").format(
+                frappe.bold(claim.name)
+            )
+        )
+    if not frappe.has_permission("Supplier Claim", "write", doc=claim):
+        frappe.throw(
+            _("You are not permitted to update Supplier Claim {0}.").format(frappe.bold(claim.name)),
+            frappe.PermissionError,
+        )
+
+    original_count = len(claim.get("invoices") or [])
+    claim.set(
+        "invoices",
+        [row for row in claim.get("invoices") if row.purchase_invoice != settlement_document],
+    )
+    removed = original_count - len(claim.get("invoices") or [])
+    action = "unlinked"
+    if not removed:
+        action = "no_matching_row"
+    if not claim.get("invoices"):
+        if not frappe.has_permission("Supplier Claim", "delete", doc=claim):
+            frappe.throw(
+                _("You are not permitted to delete empty Draft Supplier Claim {0}.").format(
+                    frappe.bold(claim.name)
+                ),
+                frappe.PermissionError,
+            )
+        frappe.delete_doc("Supplier Claim", claim.name)
+        action = "deleted_empty_draft"
+    else:
+        claim.save()
+
+    _clear_case_claim_fields(case)
+    case = _save_and_refresh_return_case(case)
+    return {
+        "case": case.name,
+        "supplier_claim": claim.name,
+        "removed_rows": removed,
+        "action": action,
+        "settlement_status": case.settlement_status,
+        "remaining_settlement": flt(case.remaining_settlement_amount),
+    }
+
+
+@frappe.whitelist()
+def cancel_supplier_refund_payment(case_name: str, payment_entry: str | None = None):
+    _require_create()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    active_entries = _active_case_refund_entries(case.name)
+    if not payment_entry:
+        payment_entry = case.get("refund_payment_entry") or (active_entries[-1].name if active_entries else None)
+    if not payment_entry:
+        _sync_supplier_claim_settlement(case)
+        return {"case": case.name, "payment_entry": None, "action": "already_clear"}
+    if not frappe.db.exists("Payment Entry", payment_entry):
+        _clear_case_refund_fields(case)
+        case = _save_and_refresh_return_case(case)
+        return {"case": case.name, "payment_entry": payment_entry, "action": "missing_unlinked"}
+
+    payment = frappe.get_doc("Payment Entry", payment_entry)
+    if payment.meta.has_field("custom_pharmacy_return_case") and payment.get("custom_pharmacy_return_case") != case.name:
+        frappe.throw(_("Payment Entry {0} belongs to another Return Case.").format(frappe.bold(payment_entry)))
+
+    ignored_doc, action = _cancel_or_delete_linked_document(
+        "Payment Entry",
+        payment_entry,
+        "Supplier Refund Payment",
+    )
+
+    case = _save_and_refresh_return_case(case)
+    return {
+        "case": case.name,
+        "payment_entry": payment_entry,
+        "action": action,
+        "settlement_status": case.settlement_status,
+        "remaining_settlement": flt(case.remaining_settlement_amount),
+    }
+
+
+@frappe.whitelist()
+def cancel_approved_debit_note(case_name: str):
+    _require_create()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    debit_note = case.get("approved_debit_note")
+    if not debit_note:
+        frappe.throw(_("No Approved Debit Note is linked to this Return Case."))
+
+    active_refunds = _active_case_refund_entries(case.name)
+    if active_refunds:
+        frappe.throw(_("Cancel the Supplier Refund Payment Entry before cancelling the Approved Debit Note."))
+
+    claim = _active_case_claim_deduction(case, debit_note)
+    if claim:
+        if cint(claim.docstatus) == 0:
+            frappe.throw(_("Remove the draft Supplier Claim deduction before cancelling the Approved Debit Note."))
+        frappe.throw(_("Cancel Supplier Claim {0} before cancelling the Approved Debit Note.").format(frappe.bold(claim.name)))
+
+    ignored_doc, action = _cancel_or_delete_linked_document(
+        "Purchase Invoice",
+        debit_note,
+        "Approved Debit Note",
+    )
+
+    case.approved_debit_note = None
+    case.approved_debit_note_status = None
+    case.approved_debit_note_amount = 0
+    case.approved_debit_note_outstanding = 0
+    case.accepted_stock_finalized_quantity = 0
+    _reset_case_financial_settlement(case)
+    case.operational_status = "Accepted" if flt(case.accepted_quantity) > 0 else "Rejected"
+    case = _save_and_refresh_return_case(case)
+
+    return {
+        "case": case.name,
+        "purchase_invoice": debit_note,
+        "action": action,
+        "operational_status": case.operational_status,
+        "settlement_status": case.settlement_status,
+        "remaining_settlement": flt(case.remaining_settlement_amount),
+    }
+
+
+@frappe.whitelist()
+def refresh_case_reversal_status(case_name: str):
+    _require_read()
+    case = frappe.get_doc("Pharmacy Return Case", case_name)
+    _sync_case_operational_status(case)
+    _sync_supplier_claim_settlement(case)
+    return get_case(case.name)
 
 
 @frappe.whitelist()
