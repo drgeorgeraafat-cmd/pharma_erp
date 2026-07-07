@@ -21,6 +21,7 @@ class SupplierRunningAccountPage {
         this.page.set_primary_action(__("Load Statement"), () => this.loadStatement(), "refresh");
         this.page.add_inner_button(__("Export CSV"), () => this.exportCsv(), __("Actions"));
         this.page.add_inner_button(__("Open Supplier"), () => this.openSupplier(), __("Actions"));
+        this.page.add_inner_button(__("Create Payment Draft"), () => this.openPaymentDraftDialog(), __("Actions"));
         this.loadBootstrap();
     }
 
@@ -473,6 +474,110 @@ class SupplierRunningAccountPage {
 
     esc(value) {
         return frappe.utils.escape_html(String(value || ""));
+    }
+
+
+    async openPaymentDraftDialog() {
+        const supplier = this.controls.supplier.get_value();
+        const company = this.controls.company.get_value();
+        if (!company || !supplier) {
+            frappe.msgprint(__("Select Company and Supplier first."));
+            return;
+        }
+
+        const defaults = await frappe.call({
+            method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.get_supplier_payment_defaults",
+            args: { company, supplier }
+        });
+        const d = defaults.message || {};
+        const dialog = new frappe.ui.Dialog({
+            title: __("Create Supplier Payment Draft"),
+            fields: [
+                { fieldname: "company", fieldtype: "Link", label: __("Company"), options: "Company", default: company, reqd: 1, read_only: 1 },
+                { fieldname: "supplier", fieldtype: "Link", label: __("Supplier"), options: "Supplier", default: supplier, reqd: 1, read_only: 1 },
+                { fieldname: "posting_date", fieldtype: "Date", label: __("Posting Date"), default: frappe.datetime.get_today(), reqd: 1 },
+                { fieldname: "amount", fieldtype: "Currency", label: __("Amount"), reqd: 1, description: __("Payment Entry will be saved as Draft only. Submit manually after review.") },
+                { fieldtype: "Column Break" },
+                { fieldname: "mode_of_payment", fieldtype: "Link", label: __("Mode of Payment"), options: "Mode of Payment", default: d.mode_of_payment || "" },
+                { fieldname: "paid_from", fieldtype: "Link", label: __("Paid From Account"), options: "Account", default: d.paid_from || "", reqd: 1, get_query: () => ({ filters: { company, is_group: 0 } }) },
+                { fieldname: "allocation_mode", fieldtype: "Select", label: __("Allocation Mode"), default: "Oldest Outstanding First", options: ["Oldest Outstanding First", "Selected Invoices", "Unallocated Advance"].join("\n"), reqd: 1 },
+                { fieldtype: "Section Break", label: __("Allocation") },
+                { fieldname: "include_claim_linked", fieldtype: "Check", label: __("Include invoices already linked to Supplier Claim"), default: 0, description: __("Keep off unless you intentionally want to pay invoices already tied to a claim.") },
+                { fieldname: "load_candidates", fieldtype: "Button", label: __("Load Invoice Candidates") },
+                {
+                    fieldname: "invoices",
+                    fieldtype: "Table",
+                    label: __("Selected Invoices"),
+                    cannot_add_rows: true,
+                    in_place_edit: true,
+                    depends_on: "eval:doc.allocation_mode=='Selected Invoices'",
+                    fields: [
+                        { fieldtype: "Link", fieldname: "invoice", label: __("Invoice"), options: "Purchase Invoice", in_list_view: 1, read_only: 1, columns: 2 },
+                        { fieldtype: "Data", fieldname: "supplier_invoice_no", label: __("Supplier Inv No"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldtype: "Currency", fieldname: "outstanding_amount", label: __("Outstanding"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldtype: "Data", fieldname: "settlement_classification", label: __("Class"), in_list_view: 1, read_only: 1, columns: 1 },
+                        { fieldtype: "Currency", fieldname: "allocated_amount", label: __("Allocate"), in_list_view: 1, columns: 1 },
+                    ],
+                    data: []
+                },
+                { fieldtype: "Section Break", label: __("Reference / Notes") },
+                { fieldname: "reference_no", fieldtype: "Data", label: __("Reference No") },
+                { fieldname: "remarks", fieldtype: "Small Text", label: __("Remarks") },
+            ],
+            primary_action_label: __("Create Draft"),
+            primary_action: async (values) => {
+                if (!values.amount || flt(values.amount) <= 0) {
+                    frappe.msgprint(__("Enter a valid payment amount."));
+                    return;
+                }
+                const rows = (values.invoices || []).filter(row => flt(row.allocated_amount || 0) > 0);
+                dialog.hide();
+                const r = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.create_supplier_payment_draft",
+                    args: { args: { ...values, invoices: rows } },
+                    freeze: true,
+                    freeze_message: __("Creating draft Payment Entry...")
+                });
+                const out = r.message || {};
+                if (out.name) {
+                    frappe.show_alert({ message: __("Draft Payment Entry created: {0}", [out.name]), indicator: "green" });
+                    frappe.set_route("Form", "Payment Entry", out.name);
+                }
+            }
+        });
+
+        const loadCandidates = async () => {
+            const values = dialog.get_values() || {};
+            const r = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.get_supplier_payment_candidates",
+                args: {
+                    company,
+                    supplier,
+                    include_claim_linked: values.include_claim_linked ? 1 : 0,
+                    limit: 200,
+                },
+                freeze: true,
+                freeze_message: __("Loading invoice candidates...")
+            });
+            const rows = (r.message || []).map(row => ({
+                invoice: row.name,
+                supplier_invoice_no: row.supplier_invoice_no || "",
+                outstanding_amount: row.outstanding_amount || 0,
+                settlement_classification: row.settlement_classification || "",
+                allocated_amount: 0,
+            }));
+            dialog.fields_dict.invoices.df.data = rows;
+            dialog.fields_dict.invoices.grid.refresh();
+        };
+
+        dialog.fields_dict.load_candidates.$input.on("click", loadCandidates);
+        dialog.fields_dict.allocation_mode.df.onchange = () => {
+            const mode = dialog.get_value("allocation_mode");
+            dialog.fields_dict.invoices.df.hidden = mode !== "Selected Invoices";
+            dialog.fields_dict.invoices.refresh();
+            if (mode === "Selected Invoices") loadCandidates();
+        };
+        dialog.show();
     }
 
     openSupplier() {

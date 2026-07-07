@@ -838,3 +838,264 @@ def get_statement(
         "balance_note": _("Net Supplier Balance = previous balance + Credit - Debit. Invoices increase supplier balance, while payments / purchase returns / refunds reduce it. Positive balance means amount payable to supplier; negative balance means supplier credit / refund due to pharmacy."),
         **statement,
     }
+
+
+# -----------------------------------------------------------------------------
+# Supplier Running Account v0.7.42 — Draft Supplier Payment creation
+# -----------------------------------------------------------------------------
+
+@frappe.whitelist()
+def get_supplier_payment_defaults(company: str, supplier: str | None = None) -> dict:
+    """Return lightweight defaults for the Create Supplier Payment Draft dialog."""
+    company = _sra_payment_required(company, "Company")
+    default_currency = frappe.get_cached_value("Company", company, "default_currency")
+    paid_from = (
+        frappe.get_cached_value("Company", company, "default_bank_account")
+        or frappe.get_cached_value("Company", company, "default_cash_account")
+        or ""
+    )
+    mode_of_payment = ""
+    if paid_from and frappe.db.exists("DocType", "Mode of Payment Account"):
+        mode_of_payment = frappe.db.get_value(
+            "Mode of Payment Account",
+            {"company": company, "default_account": paid_from, "parenttype": "Mode of Payment"},
+            "parent",
+        ) or ""
+    return {
+        "company": company,
+        "supplier": supplier,
+        "currency": default_currency,
+        "paid_from": paid_from,
+        "mode_of_payment": mode_of_payment,
+    }
+
+
+@frappe.whitelist()
+def get_supplier_payment_candidates(company: str, supplier: str, include_claim_linked: int = 0, limit: int = 200) -> list[dict]:
+    """Outstanding submitted Purchase Invoices that can be used for payment allocation.
+
+    This is read-only and intentionally returns one unified supplier view. Linked claim
+    invoices are excluded by default for safety, but can be included explicitly.
+    """
+    company = _sra_payment_required(company, "Company")
+    supplier = _sra_payment_required(supplier, "Supplier")
+    rows = frappe.get_all(
+        "Purchase Invoice",
+        filters={
+            "company": company,
+            "supplier": supplier,
+            "docstatus": 1,
+            "is_return": 0,
+        },
+        fields=[
+            "name",
+            "posting_date",
+            "bill_no",
+            "outstanding_amount",
+            "grand_total",
+            "rounded_total",
+            "status",
+            "custom_payment_classification",
+            "custom_supplier_claim" if _sra_has_field("Purchase Invoice", "custom_supplier_claim") else "name",
+        ],
+        order_by="posting_date asc, creation asc",
+        limit_page_length=int(limit or 200),
+    )
+    out = []
+    for row in rows:
+        outstanding = _sra_flt(row.get("outstanding_amount"))
+        if outstanding <= 0.005:
+            continue
+        linked_claim = row.get("custom_supplier_claim") if _sra_has_field("Purchase Invoice", "custom_supplier_claim") else None
+        if not linked_claim:
+            linked_claim = _sra_find_claim_for_invoice(row.name)
+        if linked_claim and not int(include_claim_linked or 0):
+            continue
+        out.append({
+            "name": row.name,
+            "posting_date": row.posting_date,
+            "supplier_invoice_no": row.get("bill_no") or "",
+            "outstanding_amount": outstanding,
+            "settlement_classification": row.get("custom_payment_classification") or "",
+            "status": row.get("status") or "",
+            "related_supplier_claim": linked_claim or "",
+        })
+    return out
+
+
+@frappe.whitelist()
+def create_supplier_payment_draft(args: dict | None = None) -> dict:
+    """Create a Draft Payment Entry for a supplier.
+
+    Safety rule: this method only saves Draft. It never submits and never reconciles
+    automatically. The user must review and submit Payment Entry manually.
+    """
+    if isinstance(args, str):
+        args = frappe.parse_json(args) or {}
+    args = frappe._dict(args or {})
+    company = _sra_payment_required(args.get("company"), "Company")
+    supplier = _sra_payment_required(args.get("supplier"), "Supplier")
+    posting_date = args.get("posting_date") or _sra_nowdate()
+    paid_from = _sra_payment_required(args.get("paid_from"), "Paid From Account")
+    amount = _sra_flt(args.get("amount"))
+    if amount <= 0:
+        frappe.throw(_("Payment amount must be greater than zero."))
+
+    allocation_mode = args.get("allocation_mode") or "Oldest Outstanding First"
+    include_claim_linked = int(args.get("include_claim_linked") or 0)
+    allocations = []
+
+    if allocation_mode == "Oldest Outstanding First":
+        remaining = amount
+        for inv in get_supplier_payment_candidates(company, supplier, include_claim_linked=include_claim_linked, limit=500):
+            if remaining <= 0.005:
+                break
+            alloc = min(_sra_flt(inv.get("outstanding_amount")), remaining)
+            if alloc > 0:
+                allocations.append({"invoice": inv["name"], "allocated_amount": alloc, "outstanding_amount": inv.get("outstanding_amount")})
+                remaining -= alloc
+    elif allocation_mode == "Selected Invoices":
+        for row in args.get("invoices") or []:
+            row = frappe._dict(row)
+            inv = row.get("invoice")
+            alloc = _sra_flt(row.get("allocated_amount"))
+            if inv and alloc > 0:
+                _sra_validate_invoice_candidate(company, supplier, inv, alloc, include_claim_linked)
+                allocations.append({"invoice": inv, "allocated_amount": alloc})
+        if not allocations:
+            frappe.throw(_("Select at least one invoice and enter allocation amount."))
+    elif allocation_mode == "Unallocated Advance":
+        allocations = []
+    else:
+        frappe.throw(_("Unsupported Allocation Mode: {0}").format(allocation_mode))
+
+    total_allocated = sum(_sra_flt(row.get("allocated_amount")) for row in allocations)
+    if total_allocated - amount > 0.005:
+        frappe.throw(_("Allocated amount cannot exceed payment amount."))
+
+    pe = frappe.new_doc("Payment Entry")
+    pe.payment_type = "Pay"
+    pe.company = company
+    pe.posting_date = posting_date
+    pe.party_type = "Supplier"
+    pe.party = supplier
+    pe.mode_of_payment = args.get("mode_of_payment") or None
+    pe.paid_from = paid_from
+    pe.paid_to = _sra_get_supplier_party_account(company, supplier)
+    pe.paid_amount = amount
+    pe.received_amount = amount
+    pe.reference_no = args.get("reference_no") or None
+    pe.reference_date = posting_date if pe.reference_no else None
+    pe.remarks = args.get("remarks") or _("Draft supplier payment created from Supplier Running Account.")
+
+    company_currency = frappe.get_cached_value("Company", company, "default_currency")
+    if pe.paid_from:
+        pe.paid_from_account_currency = frappe.get_cached_value("Account", pe.paid_from, "account_currency") or company_currency
+    if pe.paid_to:
+        pe.paid_to_account_currency = frappe.get_cached_value("Account", pe.paid_to, "account_currency") or company_currency
+    pe.source_exchange_rate = 1
+    pe.target_exchange_rate = 1
+
+    for allocation in allocations:
+        inv_name = allocation["invoice"]
+        inv = frappe.db.get_value(
+            "Purchase Invoice",
+            inv_name,
+            ["grand_total", "rounded_total", "outstanding_amount"],
+            as_dict=True,
+        ) or {}
+        pe.append("references", {
+            "reference_doctype": "Purchase Invoice",
+            "reference_name": inv_name,
+            "total_amount": _sra_payment_invoice_total(inv),
+            "outstanding_amount": _sra_flt(inv.get("outstanding_amount")),
+            "allocated_amount": _sra_flt(allocation.get("allocated_amount")),
+        })
+
+    try:
+        pe.set_missing_values()
+    except Exception:
+        pass
+    try:
+        pe.set_amounts()
+    except Exception:
+        pass
+    pe.flags.ignore_permissions = False
+    pe.insert()
+    return {"name": pe.name, "doctype": pe.doctype, "allocated_amount": total_allocated, "unallocated_amount": amount - total_allocated}
+
+
+def _sra_payment_required(value, label: str) -> str:
+    value = (value or "").strip() if isinstance(value, str) else value
+    if not value:
+        frappe.throw(_("{0} is required.").format(_(label)))
+    return value
+
+
+def _sra_has_field(doctype: str, fieldname: str) -> bool:
+    try:
+        return frappe.get_meta(doctype).has_field(fieldname)
+    except Exception:
+        return False
+
+
+def _sra_flt(value) -> float:
+    from frappe.utils import flt
+    return flt(value)
+
+
+def _sra_nowdate() -> str:
+    from frappe.utils import nowdate
+    return nowdate()
+
+
+def _sra_find_claim_for_invoice(invoice: str) -> str:
+    if frappe.db.exists("DocType", "Supplier Claim Invoice"):
+        return frappe.db.get_value(
+            "Supplier Claim Invoice",
+            {"purchase_invoice": invoice, "parenttype": "Supplier Claim"},
+            "parent",
+        ) or ""
+    return ""
+
+
+def _sra_validate_invoice_candidate(company: str, supplier: str, invoice: str, allocated_amount: float, include_claim_linked: int = 0) -> None:
+    inv = frappe.db.get_value(
+        "Purchase Invoice",
+        invoice,
+        ["company", "supplier", "docstatus", "is_return", "outstanding_amount"],
+        as_dict=True,
+    )
+    if not inv:
+        frappe.throw(_("Purchase Invoice {0} not found.").format(invoice))
+    if inv.company != company or inv.supplier != supplier or int(inv.docstatus or 0) != 1 or int(inv.is_return or 0):
+        frappe.throw(_("Purchase Invoice {0} is not eligible for this supplier payment.").format(invoice))
+    outstanding = _sra_flt(inv.outstanding_amount)
+    if outstanding <= 0.005:
+        frappe.throw(_("Purchase Invoice {0} has no outstanding amount.").format(invoice))
+    if allocated_amount - outstanding > 0.005:
+        frappe.throw(_("Allocated amount for {0} exceeds outstanding amount.").format(invoice))
+    linked_claim = _sra_find_claim_for_invoice(invoice)
+    if linked_claim and not int(include_claim_linked or 0):
+        frappe.throw(_("Purchase Invoice {0} is linked to Supplier Claim {1}. Enable include linked claims if intentional.").format(invoice, linked_claim))
+
+
+def _sra_get_supplier_party_account(company: str, supplier: str) -> str:
+    try:
+        from erpnext.accounts.party import get_party_account
+        return get_party_account("Supplier", supplier, company)
+    except Exception:
+        account = frappe.db.get_value("Party Account", {"parenttype": "Supplier", "parent": supplier, "company": company}, "account")
+        if account:
+            return account
+        default_payable = frappe.get_cached_value("Company", company, "default_payable_account")
+        if default_payable:
+            return default_payable
+        frappe.throw(_("Could not determine supplier payable account for {0}.").format(supplier))
+
+
+def _sra_payment_invoice_total(inv: dict) -> float:
+    rounded = _sra_flt(inv.get("rounded_total"))
+    grand = _sra_flt(inv.get("grand_total"))
+    return rounded if abs(rounded) > 0.005 else grand
+
