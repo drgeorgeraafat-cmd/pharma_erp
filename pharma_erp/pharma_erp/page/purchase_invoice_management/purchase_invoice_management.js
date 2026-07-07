@@ -342,6 +342,9 @@ class PurchaseInvoiceManagementPageV1 {
                     <div class="pimv1-hero-actions">
                         <div class="pimv1-doc-badge" data-role="draft-badge">${__("New Draft")}</div>
                         <div class="pimv1-lifecycle-actions">
+                            <button type="button" class="btn btn-default btn-sm" data-action="supplier-running-account">
+                                ${__("Supplier Account")}
+                            </button>
                             <button type="button" class="btn btn-default btn-sm" data-action="returns-management">
                                 ${__("Returns Management")}
                             </button>
@@ -492,7 +495,7 @@ class PurchaseInvoiceManagementPageV1 {
             get_query: () => ({ filters: { company: this.value("company"), is_group: 0, disabled: 0 } }),
         }, this.bootstrap.default_warehouse || "");
         this.makeControl("payment_classification", {
-            label: __("Payment Classification"), fieldtype: "Select",
+            label: __("Settlement Classification"), fieldtype: "Select",
             options: "\nCash Invoice\nClaim Invoice\nCredit Invoice Outside Claim",
         }, "", () => this.refreshSupplierClassification());
         this.makeControl("posting_date", { label: __("Posting Date"), fieldtype: "Date", reqd: 1 }, today);
@@ -546,6 +549,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.on("click.pimv1", "[data-action='attach']", () => this.openUploader());
         this.$main.on("click.pimv1", "[data-action='page-save-draft']", () => this.saveDraft());
         this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
+        this.$main.on("click.pimv1", "[data-action='supplier-running-account']", () => this.openSupplierRunningAccount());
         this.$main.on("click.pimv1", "[data-action='returns-management']", () => this.openReturnsManagement());
         this.$main.on("click.pimv1", "[data-action='create-purchase-return']", (event) => {
             frappe.route_options = {
@@ -718,7 +722,7 @@ class PurchaseInvoiceManagementPageV1 {
         if (!options.preserveClassification) {
             if (this.supplierContext.default_payment_classification) {
                 await this.controls.payment_classification.set_value(this.supplierContext.default_payment_classification);
-            } else if (this.supplierContext.custom_purchase_payment_model === "Mixed") {
+            } else {
                 await this.controls.payment_classification.set_value("");
             }
         }
@@ -1989,7 +1993,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.find("[data-role='supplier-balance']").text(balance === undefined ? "—" : this.money(Math.abs(balance)));
         this.$main.find("[data-role='supplier-type']").text([
             this.supplierContext.custom_purchase_supplier_type,
-            this.supplierContext.custom_purchase_payment_model,
+            this.supplierContext.supplier_settlement_policy || this.supplierContext.custom_purchase_payment_model,
         ].filter(Boolean).join(" • ") || __("Select supplier"));
         this.$main.find("[data-role='items-count']").text(this.rows.length);
         this.$main.find("[data-role='bonus-count']").text(__("Bonus lines: {0}", [this.rows.filter((row) => row.is_bonus).length]));
@@ -2010,7 +2014,7 @@ class PurchaseInvoiceManagementPageV1 {
         if (!this.value("warehouse")) errors.push({ message: __("Receiving Warehouse is required."), field: "warehouse" });
         if (!this.value("bill_no")) errors.push({ message: __("Supplier Invoice Number is required."), field: "bill_no" });
         if (!this.value("bill_date")) errors.push({ message: __("Supplier Invoice Date is required."), field: "bill_date" });
-        if (!this.value("payment_classification")) errors.push({ message: __("Payment Classification is required, especially for mixed suppliers."), field: "payment_classification" });
+        if (!this.value("payment_classification")) errors.push({ message: __("Settlement Classification is required."), field: "payment_classification" });
         const effectiveSupplierInvoiceTotal = flt(this.totals().supplierInvoiceTotal);
         if (cint((this.bootstrap.purchase_settings || {}).require_exact_supplier_invoice_total) && effectiveSupplierInvoiceTotal <= 0) errors.push({ message: __("Supplier Invoice Total is required."), field: "supplier_invoice_total" });
         if (!this.rows.length) errors.push({ message: __("Add at least one purchase item."), action: "add-item" });
@@ -2128,6 +2132,14 @@ class PurchaseInvoiceManagementPageV1 {
             buying_price_list: this.bootstrap.buying_price_list,
             items: this.rows,
         };
+    }
+
+    openSupplierRunningAccount() {
+        frappe.route_options = {
+            company: this.value("company"),
+            supplier: this.value("supplier"),
+        };
+        frappe.set_route("supplier-running-account");
     }
 
     openReturnsManagement() {

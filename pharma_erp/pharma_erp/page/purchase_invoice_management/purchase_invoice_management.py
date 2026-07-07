@@ -318,6 +318,7 @@ def get_supplier_context(supplier: str, company: str | None = None):
             "supplier_type",
             "default_currency",
             "custom_purchase_supplier_type",
+            "custom_supplier_settlement_policy",
             "custom_purchase_payment_model",
             "custom_claim_cycle_start_day",
             "custom_claim_cycle_end_day",
@@ -328,14 +329,22 @@ def get_supplier_context(supplier: str, company: str | None = None):
     data = frappe.db.get_value("Supplier", supplier, fields, as_dict=True) or frappe._dict()
     payment_model = data.get("custom_purchase_payment_model")
     supplier_type = data.get("custom_purchase_supplier_type")
-    if payment_model == "Cash":
-        classification = "Cash Invoice"
-    elif payment_model == "Credit Claim" or (supplier_type == "Distribution Company" and payment_model != "Mixed"):
-        classification = "Claim Invoice"
-    elif payment_model == "Mixed":
-        classification = ""
-    else:
-        classification = ""
+    settlement_policy = (data.get("custom_supplier_settlement_policy") or "").strip()
+    if not settlement_policy:
+        if payment_model == "Cash":
+            settlement_policy = "Cash Per Invoice"
+        elif payment_model == "Mixed":
+            settlement_policy = "Mixed Cash + Claim"
+        elif payment_model == "Credit Claim" or (supplier_type == "Distribution Company" and payment_model != "Mixed"):
+            settlement_policy = "Claim Only"
+        else:
+            settlement_policy = ""
+    classification = {
+        "Cash Per Invoice": "Cash Invoice",
+        "Claim Only": "Claim Invoice",
+        "Mixed Cash + Claim": "Claim Invoice",
+        "Credit Outside Claim": "Credit Invoice Outside Claim",
+    }.get(settlement_policy, "")
 
     company = company or _default_company()
     outstanding = frappe.db.sql(
@@ -352,6 +361,7 @@ def get_supplier_context(supplier: str, company: str | None = None):
         **dict(data),
         "balance": _supplier_balance(supplier, company),
         "outstanding_invoices": flt(outstanding[0][0] if outstanding else 0),
+        "supplier_settlement_policy": settlement_policy,
         "default_payment_classification": classification,
         "exclude_from_claim": cint(
             classification == "Cash Invoice"
