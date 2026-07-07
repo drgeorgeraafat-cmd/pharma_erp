@@ -67,6 +67,14 @@ class SupplierRunningAccountPage {
                 .sra-pill-refund { background:#eefcff; border-color:#c8e9f1; color:#0b7285; }
                 .sra-pill-journal { background:#f4efff; border-color:#d8c9f0; color:#6b46c1; }
                 .sra-pill-context { background:#fff8db; border-color:#f2e3a0; color:#8a6d1d; }
+                .sra-action-badge { display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:800; white-space:nowrap; border:1px solid var(--border-color); background:var(--control-bg); }
+                .sra-action-direct { background:#eaf8ef; border-color:#bfe1c9; color:#0b6e4f; }
+                .sra-action-claim { background:#fff4df; border-color:#f4d6a1; color:#8a5a12; }
+                .sra-action-linked { background:#f4efff; border-color:#d8c9f0; color:#6b46c1; }
+                .sra-action-settled { background:#eef2f7; border-color:#d8e0ea; color:#425466; }
+                .sra-action-return { background:#e8f7ff; border-color:#b6def3; color:#0f5f8a; }
+                .sra-action-other { background:#f7f7f7; border-color:#e0e0e0; color:#666; }
+                .sra-filter-help { color:var(--text-muted); font-size:11px; margin-top:4px; }
                 .sra-row-context td { background:var(--yellow-50); }
                 .sra-row-invoice td { background:#fffbf3; }
                 .sra-row-return td { background:#f4fbff; }
@@ -77,6 +85,34 @@ class SupplierRunningAccountPage {
                 .sra-row-cancelled { opacity:.68; text-decoration:line-through; }
                 .sra-empty { padding:34px; text-align:center; color:var(--text-muted); }
                 .sra-note { margin:10px 0 0; padding:10px 12px; border-radius:12px; background:var(--control-bg); color:var(--text-muted); font-size:12px; }
+                body[data-route="supplier-running-account"] .page-container,
+                body[data-route="supplier-running-account"] .page-content,
+                body[data-route="supplier-running-account"] .page-body,
+                body[data-route="supplier-running-account"] .standard-page,
+                body[data-route="supplier-running-account"] .container,
+                body[data-route="supplier-running-account"] .layout-main-section-wrapper,
+                body[data-route="supplier-running-account"] .layout-main-section {
+                    max-width:none !important;
+                    width:100% !important;
+                    margin-left:0 !important;
+                    margin-right:0 !important;
+                    padding-left:6px !important;
+                    padding-right:6px !important;
+                }
+                body[data-route="supplier-running-account"] .sra {
+                    width:calc(100vw - 28px) !important;
+                    max-width:none !important;
+                    margin-left:0 !important;
+                    margin-right:0 !important;
+                }
+                .sra-full-table-mode { max-width:none !important; width:100% !important; }
+                .sra-table-wrap { width:100% !important; overflow-x:hidden !important; }
+                .sra-table { width:100% !important; min-width:0 !important; table-layout:fixed !important; }
+                .sra-table th { font-size:10px !important; padding:7px 4px !important; white-space:normal !important; line-height:1.15 !important; }
+                .sra-table td { font-size:11px !important; padding:8px 4px !important; white-space:normal !important; overflow-wrap:anywhere !important; word-break:break-word !important; line-height:1.25 !important; }
+                .sra-amount { text-align:right !important; font-size:11px !important; }
+                .sra-pill, .sra-action-badge { white-space:normal !important; justify-content:center; text-align:center; line-height:1.15; padding:3px 6px !important; font-size:10px !important; }
+                .sra-doclink { max-width:100%; overflow-wrap:anywhere; }
                 @media(max-width: 1100px) { .sra-filters, .sra-cards { grid-template-columns:repeat(2,minmax(180px,1fr)); } }
                 @media(max-width: 760px) { .sra-filters, .sra-cards { grid-template-columns:1fr; } }
             </style>
@@ -85,7 +121,7 @@ class SupplierRunningAccountPage {
 
     render() {
         this.$main.empty().append(`
-            <div class="sra">
+            <div class="sra sra-full-table-mode">
                 <div class="sra-hero">
                     <div>
                         <h2>${__("Supplier Running Account")}</h2>
@@ -119,6 +155,23 @@ class SupplierRunningAccountPage {
         });
         this.controls.to_date = this.makeControl($filters, {
             fieldtype: "Date", fieldname: "to_date", label: __("To Date"), change: () => this.loadStatement()
+        });
+        this.controls.statement_view = this.makeControl($filters, {
+            fieldtype: "Select",
+            fieldname: "statement_view",
+            label: __("Statement View"),
+            options: [
+                "All Movements",
+                "Outstanding Invoices",
+                "Direct Pay Candidates",
+                "Claim Candidates",
+                "Linked to Claim",
+                "Cash Invoices",
+                "Claim Invoices",
+                "Credit Outside Claim",
+            ].join("\n"),
+            default: "All Movements",
+            change: () => this.renderRows(),
         });
         const $checks = $(`<div class="sra-checkboxes"></div>`).appendTo($filters);
         this.controls.include_cancelled = this.makeControl($checks, {
@@ -214,10 +267,104 @@ class SupplierRunningAccountPage {
         `).join(""));
     }
 
+    visibleRows() {
+        const rows = this.rows || [];
+        const view = (this.controls.statement_view && this.controls.statement_view.get_value()) || "All Movements";
+        const hasOutstanding = (row) => Math.abs(flt(row.outstanding_amount || 0, 2)) > 0.005;
+        const isInvoice = (row) => row.document_type === "Purchase Invoice" && !cint(row.is_purchase_return);
+        const classification = (row) => String(row.settlement_classification || "").trim();
+        const isLinkedToClaim = (row) => !!String(row.related_supplier_claim || "").trim();
+        if (view === "Outstanding Invoices") {
+            return rows.filter(row => isInvoice(row) && hasOutstanding(row));
+        }
+        if (view === "Direct Pay Candidates") {
+            return rows.filter(row => isInvoice(row) && hasOutstanding(row) && !isLinkedToClaim(row) && classification(row) !== "Claim Invoice");
+        }
+        if (view === "Claim Candidates") {
+            return rows.filter(row => isInvoice(row) && hasOutstanding(row) && !isLinkedToClaim(row) && classification(row) === "Claim Invoice");
+        }
+        if (view === "Linked to Claim") {
+            return rows.filter(row => isLinkedToClaim(row));
+        }
+        if (view === "Cash Invoices") {
+            return rows.filter(row => classification(row) === "Cash Invoice");
+        }
+        if (view === "Claim Invoices") {
+            return rows.filter(row => classification(row) === "Claim Invoice");
+        }
+        if (view === "Credit Outside Claim") {
+            return rows.filter(row => classification(row) === "Credit Invoice Outside Claim");
+        }
+        return rows;
+    }
+
+    nextActionKey(row) {
+        const outstanding = Math.abs(flt(row.outstanding_amount || 0, 2));
+        const classification = String(row.settlement_classification || "").trim();
+        const linkedClaim = !!String(row.related_supplier_claim || "").trim();
+        if (row.document_type === "Purchase Invoice" && cint(row.is_purchase_return)) return "return";
+        if (row.document_type !== "Purchase Invoice") {
+            if (row.document_type === "Supplier Claim") return "linked";
+            if (row.document_type === "Payment Entry" || row.document_type === "Journal Entry") return "other";
+            return "other";
+        }
+        if (outstanding <= 0.005) return "settled";
+        if (linkedClaim) return "linked";
+        if (classification === "Claim Invoice") return "claim";
+        return "direct";
+    }
+
+    nextActionLabel(row) {
+        const key = this.nextActionKey(row);
+        const labels = {
+            direct: __("Direct Pay Candidate"),
+            claim: __("Claim Candidate"),
+            linked: __("Linked / Claim Flow"),
+            settled: __("Settled"),
+            return: __("Return / Credit"),
+            other: __("Context"),
+        };
+        return labels[key] || __("Context");
+    }
+
+    actionBadge(row) {
+        const key = this.nextActionKey(row);
+        return `<span class="sra-action-badge sra-action-${this.esc(key)}">${this.esc(this.nextActionLabel(row))}</span>`;
+    }
+
+    outstandingClass(row) {
+        const amount = flt(row.outstanding_amount || 0, 2);
+        return amount < 0 ? "sra-balance-negative" : "sra-balance-positive";
+    }
+
+    renderColgroup() {
+        return `<colgroup>
+            <col style="width:5%">
+            <col style="width:7%">
+            <col style="width:8%">
+            <col style="width:7%">
+            <col style="width:8%">
+            <col style="width:7%">
+            <col style="width:6%">
+            <col style="width:6%">
+            <col style="width:8%">
+            <col style="width:6%">
+            <col style="width:6%">
+            <col style="width:7%">
+            <col style="width:7%">
+            <col style="width:12%">
+        </colgroup>`;
+    }
+
     renderRows() {
         const $table = this.$main.find("#sra-table");
+        const displayRows = this.visibleRows();
         if (!this.rows.length) {
             $table.html(`<tbody><tr><td><div class="sra-empty">${__("No rows to display.")}</div></td></tr></tbody>`);
+            return;
+        }
+        if (!displayRows.length) {
+            $table.html(`<tbody><tr><td><div class="sra-empty">${__("No rows match the selected statement view.")}</div></td></tr></tbody>`);
             return;
         }
         const header = `
@@ -227,20 +374,22 @@ class SupplierRunningAccountPage {
                 <th>${__("Document")}</th>
                 <th>${__("Supplier Invoice No")}</th>
                 <th>${__("Settlement Classification")}</th>
+                <th>${__("Outstanding")}</th>
                 <th>${__("Debit")}</th>
                 <th>${__("Credit")}</th>
                 <th>${__("Net Supplier Balance / صافي المورد")}</th>
                 <th>${__("Status")}</th>
                 <th>${__("Return Case")}</th>
                 <th>${__("Supplier Claim")}</th>
+                <th>${__("Next Action")}</th>
                 <th>${__("Notes")}</th>
             </tr></thead>`;
         const body = [
             this.renderBalanceRow(__("Opening Supplier Net / رصيد أول المدة"), this.summary.opening_balance, this.controls.from_date.get_value()),
-            this.rows.map(row => this.renderRow(row)).join(""),
+            displayRows.map(row => this.renderRow(row)).join(""),
             this.renderBalanceRow(__("Closing Supplier Net / صافي المورد النهائي"), this.summary.closing_balance, this.controls.to_date.get_value(), true),
         ].join("");
-        $table.html(`${header}<tbody>${body}</tbody>`);
+        $table.html(`${this.renderColgroup()}${header}<tbody>${body}</tbody>`);
         $table.find("[data-doctype][data-name]").on("click", (event) => {
             event.preventDefault();
             const $link = $(event.currentTarget);
@@ -283,9 +432,9 @@ class SupplierRunningAccountPage {
         return `<tr class="sra-balance-row sra-row-balance">
             <td>${dateValue ? frappe.datetime.str_to_user(dateValue) : ""}</td>
             <td><span class="sra-pill sra-pill-balance">${this.esc(label)}</span></td>
-            <td colspan="5"><span class="sra-balance-label">${this.esc(note)}</span></td>
+            <td colspan="6"><span class="sra-balance-label">${this.esc(note)}</span></td>
             <td class="sra-amount ${this.balanceClass(value || 0)}">${this.money(value || 0)}</td>
-            <td colspan="4">${isClosing ? this.esc(__("Positive = payable to supplier; negative = credit/refund due to pharmacy.")) : ""}</td>
+            <td colspan="5">${isClosing ? this.esc(__("Positive = payable to supplier; negative = credit/refund due to pharmacy.")) : ""}</td>
         </tr>`;
     }
 
@@ -297,12 +446,14 @@ class SupplierRunningAccountPage {
             <td>${this.docLink(row.document_type, row.document)}</td>
             <td>${this.esc(row.supplier_invoice_no || "")}</td>
             <td>${this.esc(row.settlement_classification || "")}</td>
+            <td class="sra-amount ${this.outstandingClass(row)}">${this.money(row.outstanding_amount || 0)}</td>
             <td class="sra-amount sra-debit-amount">${this.money(row.debit || 0)}</td>
             <td class="sra-amount sra-credit-amount">${this.money(row.credit || 0)}</td>
             <td class="sra-amount ${row.running_balance === null || row.running_balance === undefined ? "" : this.balanceClass(row.running_balance || 0)}">${row.running_balance === null || row.running_balance === undefined ? `<span class="sra-pill sra-pill-muted sra-pill-context">${__("Context")}</span>` : this.money(row.running_balance || 0)}</td>
             <td>${this.esc(row.status || "")}</td>
             <td>${this.docLink("Pharmacy Return Case", row.related_return_case)}</td>
             <td>${this.docLink("Supplier Claim", row.related_supplier_claim)}</td>
+            <td>${this.actionBadge(row)}</td>
             <td>${this.esc(row.notes || "")}</td>
         </tr>`;
     }
@@ -334,10 +485,11 @@ class SupplierRunningAccountPage {
             frappe.msgprint(__("Load a statement first."));
             return;
         }
-        const headers = ["Date", "Type", "Document Type", "Document", "Supplier Invoice No", "Settlement Classification", "Debit", "Credit", "Net Supplier Balance", "Status", "Related Return Case", "Related Supplier Claim", "Notes"];
-        const lines = [headers].concat(this.rows.map(row => [
+        const rows = this.visibleRows();
+        const headers = ["Date", "Type", "Document Type", "Document", "Supplier Invoice No", "Settlement Classification", "Outstanding", "Debit", "Credit", "Net Supplier Balance", "Status", "Related Return Case", "Related Supplier Claim", "Next Action", "Notes"];
+        const lines = [headers].concat(rows.map(row => [
             row.posting_date || "", row.type || "", row.document_type || "", row.document || "", row.supplier_invoice_no || "",
-            row.settlement_classification || "", row.debit || 0, row.credit || 0, row.running_balance ?? "", row.status || "", row.related_return_case || "", row.related_supplier_claim || "", row.notes || ""
+            row.settlement_classification || "", row.outstanding_amount || 0, row.debit || 0, row.credit || 0, row.running_balance ?? "", row.status || "", row.related_return_case || "", row.related_supplier_claim || "", this.nextActionLabel(row), row.notes || ""
         ]));
         const csv = lines.map(cols => cols.map(value => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
         const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
