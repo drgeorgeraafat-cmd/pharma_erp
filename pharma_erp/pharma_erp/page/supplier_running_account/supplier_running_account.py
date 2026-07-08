@@ -1123,3 +1123,380 @@ def _sra_payment_invoice_total(inv: dict) -> float:
     grand = _sra_flt(inv.get("grand_total"))
     return rounded if abs(rounded) > 0.005 else grand
 
+
+
+# -----------------------------------------------------------------------------
+# Supplier Running Account v0.7.43 — Draft Supplier Claim creation
+# -----------------------------------------------------------------------------
+
+def _sra_claim_period_date_expr() -> str:
+    return "COALESCE(pi.bill_date, pi.posting_date)"
+
+
+def _sra_claim_existing_link(purchase_invoice: str, exclude_claim: str | None = None) -> dict | None:
+    """Return a non-cancelled Supplier Claim that already contains this PI/credit.
+
+    This deliberately checks Draft claims as well as Submitted claims so a return
+    credit / debit note cannot be placed in two draft claims from the running
+    account flow.
+    """
+    if not purchase_invoice:
+        return None
+
+    pi_meta = frappe.get_meta("Purchase Invoice")
+    if pi_meta.has_field("custom_supplier_claim"):
+        linked = frappe.db.get_value("Purchase Invoice", purchase_invoice, "custom_supplier_claim")
+        if linked and linked != exclude_claim and frappe.db.exists("Supplier Claim", linked):
+            docstatus = cint(frappe.db.get_value("Supplier Claim", linked, "docstatus"))
+            if docstatus < 2:
+                return {"supplier_claim": linked, "docstatus": docstatus, "source": "Purchase Invoice link"}
+
+    if not (frappe.db.exists("DocType", "Supplier Claim") and frappe.db.exists("DocType", "Supplier Claim Invoice")):
+        return None
+
+    params = {"purchase_invoice": purchase_invoice, "exclude_claim": exclude_claim or ""}
+    exclude_clause = "AND sc.name != %(exclude_claim)s" if exclude_claim else ""
+    rows = frappe.db.sql(
+        f"""
+        SELECT sc.name AS supplier_claim, sc.docstatus, sc.status
+        FROM `tabSupplier Claim Invoice` sci
+        INNER JOIN `tabSupplier Claim` sc
+            ON sc.name = sci.parent
+           AND sci.parenttype = 'Supplier Claim'
+        WHERE sci.purchase_invoice = %(purchase_invoice)s
+          AND IFNULL(sc.docstatus, 0) < 2
+          {exclude_clause}
+        ORDER BY sc.modified DESC
+        LIMIT 1
+        """,
+        params,
+        as_dict=True,
+    )
+    if rows:
+        return dict(rows[0])
+    return None
+
+
+def _sra_claim_purchase_invoice_fields() -> list[str]:
+    fields = [
+        "name",
+        "company",
+        "supplier",
+        "docstatus",
+        "is_return",
+        "bill_no",
+        "bill_date",
+        "posting_date",
+        "grand_total",
+        "rounded_total",
+        "disable_rounded_total",
+        "outstanding_amount",
+        "status",
+    ]
+    for fieldname in [
+        "custom_payment_classification",
+        "custom_supplier_claim",
+        "custom_pharmacy_return_case",
+        "custom_exclude_from_supplier_claim",
+    ]:
+        if _sra_has_field("Purchase Invoice", fieldname):
+            fields.append(fieldname)
+    return fields
+
+
+def _sra_claim_invoice_snapshot(purchase_invoice: str) -> frappe._dict:
+    invoice = frappe.db.get_value(
+        "Purchase Invoice",
+        purchase_invoice,
+        _sra_claim_purchase_invoice_fields(),
+        as_dict=True,
+    )
+    if not invoice:
+        frappe.throw(_("Purchase Invoice {0} was not found.").format(frappe.bold(purchase_invoice)))
+    return frappe._dict(invoice)
+
+
+def _sra_validate_claim_invoice_candidate(
+    company: str,
+    supplier: str,
+    purchase_invoice: str,
+    included_amount: float,
+    exclude_claim: str | None = None,
+) -> frappe._dict:
+    invoice = _sra_claim_invoice_snapshot(purchase_invoice)
+    if invoice.company != company or invoice.supplier != supplier:
+        frappe.throw(_("Purchase Invoice {0} belongs to another company or supplier.").format(frappe.bold(purchase_invoice)))
+    if cint(invoice.docstatus) != 1:
+        frappe.throw(_("Purchase Invoice {0} must be submitted before it can be included in a Supplier Claim.").format(frappe.bold(purchase_invoice)))
+
+    if cint(invoice.get("custom_exclude_from_supplier_claim")):
+        frappe.throw(_("Purchase Invoice {0} is excluded from Supplier Claims.").format(frappe.bold(purchase_invoice)))
+
+    existing_link = _sra_claim_existing_link(purchase_invoice, exclude_claim=exclude_claim)
+    if existing_link:
+        frappe.throw(_("Purchase Invoice / Debit Note {0} is already used in Supplier Claim {1}.").format(
+            frappe.bold(purchase_invoice), frappe.bold(existing_link.get("supplier_claim"))
+        ))
+
+    outstanding = flt(invoice.outstanding_amount)
+    included = flt(included_amount)
+    tolerance = 0.01
+    is_return = cint(invoice.is_return)
+
+    if is_return:
+        if included >= -tolerance:
+            frappe.throw(_("Return Credit / Debit Note {0} must be included as a negative amount.").format(frappe.bold(purchase_invoice)))
+        if outstanding >= -tolerance:
+            frappe.throw(_("Return Credit / Debit Note {0} has no open supplier credit outstanding.").format(frappe.bold(purchase_invoice)))
+        if abs(included) - abs(outstanding) > tolerance:
+            frappe.throw(_("Included credit amount for {0} exceeds its open supplier credit outstanding {1}.").format(
+                frappe.bold(purchase_invoice), abs(outstanding)
+            ))
+    else:
+        if included <= tolerance:
+            frappe.throw(_("Supplier Invoice {0} must be included as a positive amount.").format(frappe.bold(purchase_invoice)))
+        if outstanding <= tolerance:
+            frappe.throw(_("Supplier Invoice {0} has no payable outstanding.").format(frappe.bold(purchase_invoice)))
+        if included - outstanding > tolerance:
+            frappe.throw(_("Included amount for {0} exceeds its payable outstanding {1}.").format(
+                frappe.bold(purchase_invoice), outstanding
+            ))
+        classification = invoice.get("custom_payment_classification") or ""
+        if _sra_has_field("Purchase Invoice", "custom_payment_classification") and classification != "Claim Invoice":
+            frappe.throw(_("Supplier Invoice {0} is classified as {1}, not Claim Invoice.").format(
+                frappe.bold(purchase_invoice), frappe.bold(classification or _("Not Set"))
+            ))
+
+    return invoice
+
+
+@frappe.whitelist()
+def get_supplier_claim_draft_candidates(
+    company: str,
+    supplier: str,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    search: str | None = None,
+    limit: int = 300,
+) -> list[dict]:
+    """Return open Claim Invoice candidates plus open return credits.
+
+    The result is read-only and excludes invoices / debit notes already present in
+    any non-cancelled Supplier Claim, including Draft claims.
+    """
+    _require_read_access()
+    if not frappe.has_permission("Purchase Invoice", "read"):
+        frappe.throw(_("You are not permitted to read Purchase Invoices."), frappe.PermissionError)
+
+    company = _sra_payment_required(company, "Company")
+    supplier = _sra_payment_required(supplier, "Supplier")
+    if from_date and to_date and getdate(from_date) > getdate(to_date):
+        frappe.throw(_("From Date cannot be after To Date."))
+
+    params: dict[str, Any] = {"company": company, "supplier": supplier, "limit": cint(limit or 300)}
+    date_expr = _sra_claim_period_date_expr()
+    conditions = [
+        "pi.company = %(company)s",
+        "pi.supplier = %(supplier)s",
+        "pi.docstatus = 1",
+        "ABS(IFNULL(pi.outstanding_amount, 0)) > 0.005",
+    ]
+
+    if from_date:
+        params["from_date"] = getdate(from_date)
+        conditions.append(f"{date_expr} >= %(from_date)s")
+    if to_date:
+        params["to_date"] = getdate(to_date)
+        conditions.append(f"{date_expr} <= %(to_date)s")
+
+    has_classification = _db_has_column("Purchase Invoice", "custom_payment_classification")
+    if has_classification:
+        classification_select = "pi.custom_payment_classification AS settlement_classification"
+        claim_candidate_condition = "IFNULL(pi.custom_payment_classification, '') = 'Claim Invoice'"
+    else:
+        classification_select = "'' AS settlement_classification"
+        claim_candidate_condition = "1 = 1"
+
+    if _db_has_column("Purchase Invoice", "custom_supplier_claim"):
+        conditions.append("IFNULL(pi.custom_supplier_claim, '') = ''")
+    if _db_has_column("Purchase Invoice", "custom_exclude_from_supplier_claim"):
+        conditions.append("IFNULL(pi.custom_exclude_from_supplier_claim, 0) = 0")
+
+    return_case_select = (
+        "pi.custom_pharmacy_return_case AS related_return_case"
+        if _db_has_column("Purchase Invoice", "custom_pharmacy_return_case")
+        else "'' AS related_return_case"
+    )
+
+    search_text = (search or "").strip()
+    if search_text:
+        params["search"] = f"%{search_text}%"
+        search_parts = ["pi.name LIKE %(search)s", "IFNULL(pi.bill_no, '') LIKE %(search)s"]
+        if _db_has_column("Purchase Invoice", "custom_pharmacy_return_case"):
+            search_parts.append("IFNULL(pi.custom_pharmacy_return_case, '') LIKE %(search)s")
+        conditions.append("(" + " OR ".join(search_parts) + ")")
+
+    if frappe.db.exists("DocType", "Supplier Claim Invoice") and frappe.db.exists("DocType", "Supplier Claim"):
+        conditions.append(
+            """
+            NOT EXISTS (
+                SELECT 1
+                FROM `tabSupplier Claim Invoice` sci
+                INNER JOIN `tabSupplier Claim` sc
+                    ON sc.name = sci.parent
+                   AND sci.parenttype = 'Supplier Claim'
+                WHERE sci.purchase_invoice = pi.name
+                  AND IFNULL(sc.docstatus, 0) < 2
+            )
+            """
+        )
+
+    conditions.append(
+        f"""
+        (
+            (IFNULL(pi.is_return, 0) = 1 AND IFNULL(pi.outstanding_amount, 0) < -0.005)
+            OR
+            (IFNULL(pi.is_return, 0) = 0 AND IFNULL(pi.outstanding_amount, 0) > 0.005 AND {claim_candidate_condition})
+        )
+        """
+    )
+
+    rows = frappe.db.sql(
+        f"""
+        SELECT
+            pi.name,
+            pi.posting_date,
+            pi.bill_no,
+            pi.bill_date,
+            pi.grand_total,
+            pi.rounded_total,
+            pi.disable_rounded_total,
+            pi.outstanding_amount,
+            pi.is_return,
+            pi.status,
+            {classification_select},
+            {return_case_select}
+        FROM `tabPurchase Invoice` pi
+        WHERE {' AND '.join(conditions)}
+        ORDER BY {date_expr} ASC, pi.posting_date ASC, pi.creation ASC
+        LIMIT %(limit)s
+        """,
+        params,
+        as_dict=True,
+    )
+
+    out: list[dict] = []
+    for row in rows:
+        outstanding = flt(row.get("outstanding_amount"))
+        is_return = cint(row.get("is_return"))
+        included_amount = -abs(outstanding) if is_return else outstanding
+        out.append({
+            "purchase_invoice": row.name,
+            "posting_date": row.posting_date,
+            "supplier_invoice_no": row.bill_no or "",
+            "supplier_invoice_date": row.bill_date or row.posting_date,
+            "grand_total": _posting_total(row),
+            "outstanding_amount": outstanding,
+            "included_amount": included_amount,
+            "is_return": is_return,
+            "candidate_type": "Return Credit / Debit Note" if is_return else "Claim Invoice",
+            "invoice_status": row.status or "",
+            "settlement_classification": row.get("settlement_classification") or "",
+            "related_return_case": row.get("related_return_case") or "",
+        })
+    return out
+
+
+@frappe.whitelist()
+def create_supplier_claim_draft(args: dict | None = None) -> dict:
+    """Create a Draft Supplier Claim from selected running-account candidates.
+
+    Safety rule: this method only inserts Draft. It never submits, never creates
+    GL, and never marks Purchase Invoices / Debit Notes as linked. Submission and
+    accounting reconciliation remain manual review steps.
+    """
+    if isinstance(args, str):
+        args = frappe.parse_json(args) or {}
+    args = frappe._dict(args or {})
+
+    company = _sra_payment_required(args.get("company"), "Company")
+    supplier = _sra_payment_required(args.get("supplier"), "Supplier")
+    period_from = args.get("period_from") or args.get("from_date") or nowdate()
+    period_to = args.get("period_to") or args.get("to_date") or nowdate()
+    if getdate(period_from) > getdate(period_to):
+        frappe.throw(_("Period From cannot be after Period To."))
+    if not frappe.has_permission("Supplier Claim", "create"):
+        frappe.throw(_("You are not permitted to create Supplier Claims."), frappe.PermissionError)
+
+    selected_rows = []
+    seen = set()
+    for raw in args.get("invoices") or []:
+        row = frappe._dict(raw)
+        purchase_invoice = (row.get("purchase_invoice") or row.get("invoice") or "").strip()
+        included_amount = flt(row.get("included_amount"))
+        if not purchase_invoice or abs(included_amount) <= 0.005:
+            continue
+        if purchase_invoice in seen:
+            frappe.throw(_("Purchase Invoice / Debit Note {0} is duplicated in the selected rows.").format(frappe.bold(purchase_invoice)))
+        seen.add(purchase_invoice)
+        invoice = _sra_validate_claim_invoice_candidate(company, supplier, purchase_invoice, included_amount)
+        selected_rows.append((invoice, included_amount))
+
+    if not selected_rows:
+        frappe.throw(_("Select at least one Claim Invoice or Return Credit / Debit Note."))
+
+    gross = sum(amount for invoice, amount in selected_rows if amount > 0)
+    returns_total = abs(sum(amount for invoice, amount in selected_rows if amount < 0))
+    system_total = gross - returns_total
+    if system_total < -0.005:
+        frappe.throw(_("Selected Return Credits exceed selected Claim Invoices. Add payable invoices first or reduce selected credit amounts."))
+
+    if args.get("net_amount_to_pay") in (None, ""):
+        net_amount_to_pay = max(0, system_total)
+    else:
+        net_amount_to_pay = flt(args.get("net_amount_to_pay"))
+    if net_amount_to_pay < -0.005 or net_amount_to_pay - system_total > 0.005:
+        frappe.throw(_("Net Amount To Pay must be between zero and the System Claim Total."))
+
+    supplier_printed_claim_total = (
+        flt(args.get("supplier_printed_claim_total"))
+        if args.get("supplier_printed_claim_total") not in (None, "")
+        else system_total
+    )
+
+    claim = frappe.new_doc("Supplier Claim")
+    claim.company = company
+    claim.supplier = supplier
+    claim.period_from = period_from
+    claim.period_to = period_to
+    claim.claim_basis = "Supplier Invoice Date"
+    claim.supplier_printed_claim_total = supplier_printed_claim_total
+    claim.net_amount_to_pay = net_amount_to_pay
+    claim.payment_due_date = args.get("payment_due_date") or None
+    claim.notes = args.get("notes") or _("Draft Supplier Claim created from Supplier Running Account. Review before Submit.")
+
+    for invoice, included_amount in selected_rows:
+        claim.append("invoices", {
+            "purchase_invoice": invoice.name,
+            "supplier_invoice_no": invoice.bill_no,
+            "supplier_invoice_date": invoice.bill_date or invoice.posting_date,
+            "posting_date": invoice.posting_date,
+            "grand_total": _posting_total(invoice),
+            "outstanding_amount": flt(invoice.outstanding_amount),
+            "included_amount": included_amount,
+            "is_return": cint(invoice.is_return),
+            "invoice_status": invoice.status,
+        })
+
+    claim.insert()
+    claim.reload()
+    return {
+        "name": claim.name,
+        "doctype": claim.doctype,
+        "docstatus": claim.docstatus,
+        "gross_claim_total": flt(claim.gross_claim_total, 2),
+        "purchase_returns_total": flt(claim.purchase_returns_total, 2),
+        "system_claim_total": flt(claim.system_claim_total, 2),
+        "settlement_discount_amount": flt(claim.settlement_discount_amount, 2),
+        "net_amount_to_pay": flt(claim.net_amount_to_pay, 2),
+    }

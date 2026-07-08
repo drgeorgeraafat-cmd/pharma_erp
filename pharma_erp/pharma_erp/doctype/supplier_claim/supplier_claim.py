@@ -9,6 +9,8 @@ class SupplierClaim(Document):
         if self.period_from and self.period_to and getdate(self.period_from) > getdate(self.period_to):
             frappe.throw(_("Period From cannot be after Period To."))
         self._calculate_totals()
+        if self.invoices:
+            self._validate_invoice_rows_are_open()
 
     def before_submit(self):
         self._calculate_totals()
@@ -108,6 +110,15 @@ class SupplierClaim(Document):
                     )
                 )
             seen.add(row.purchase_invoice)
+
+            existing_claim = self._find_existing_claim_invoice_link(row.purchase_invoice)
+            if existing_claim:
+                frappe.throw(
+                    _("Purchase Invoice / Debit Note {0} is already used in Supplier Claim {1}.").format(
+                        frappe.bold(row.purchase_invoice),
+                        frappe.bold(existing_claim.get("supplier_claim")),
+                    )
+                )
 
             fields = [
                 "name",
@@ -223,6 +234,34 @@ class SupplierClaim(Document):
                             outstanding,
                         )
                     )
+
+    def _find_existing_claim_invoice_link(self, purchase_invoice):
+        if not purchase_invoice or not frappe.db.exists("DocType", "Supplier Claim Invoice"):
+            return None
+
+        params = {"purchase_invoice": purchase_invoice}
+        exclude_clause = ""
+        if self.name:
+            params["current_claim"] = self.name
+            exclude_clause = "AND sc.name != %(current_claim)s"
+
+        rows = frappe.db.sql(
+            f"""
+            SELECT sc.name AS supplier_claim, sc.docstatus, sc.status
+            FROM `tabSupplier Claim Invoice` sci
+            INNER JOIN `tabSupplier Claim` sc
+                ON sc.name = sci.parent
+               AND sci.parenttype = 'Supplier Claim'
+            WHERE sci.purchase_invoice = %(purchase_invoice)s
+              AND IFNULL(sc.docstatus, 0) < 2
+              {exclude_clause}
+            ORDER BY sc.modified DESC
+            LIMIT 1
+            """,
+            params,
+            as_dict=True,
+        )
+        return rows[0] if rows else None
 
     def _return_case_settlement_base(self, case, row):
         note_total = abs(

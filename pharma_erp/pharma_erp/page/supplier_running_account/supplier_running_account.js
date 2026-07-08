@@ -22,6 +22,7 @@ class SupplierRunningAccountPage {
         this.page.add_inner_button(__("Export CSV"), () => this.exportCsv(), __("Actions"));
         this.page.add_inner_button(__("Open Supplier"), () => this.openSupplier(), __("Actions"));
         this.page.add_inner_button(__("Create Payment Draft"), () => this.openPaymentDraftDialog(), __("Actions"));
+        this.page.add_inner_button(__("Create Supplier Claim Draft"), () => this.openSupplierClaimDraftDialog(), __("Actions"));
         this.loadBootstrap();
     }
 
@@ -183,6 +184,28 @@ class SupplierRunningAccountPage {
                 .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="outstanding_amount"] { min-width:150px !important; }
                 .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="settlement_classification"] { min-width:150px !important; }
                 .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="allocated_amount"] { min-width:150px !important; }
+                .sra-claim-draft-dialog .modal-dialog {
+                    width:min(1260px, 97vw) !important;
+                    max-width:97vw !important;
+                }
+                .sra-claim-draft-dialog .modal-body {
+                    max-height:80vh;
+                    overflow:auto;
+                }
+                .sra-claim-summary { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:8px 0 10px; padding:9px 10px; border:1px solid var(--border-color); border-radius:10px; background:var(--control-bg); font-size:12px; }
+                .sra-claim-summary span { display:inline-flex; gap:4px; align-items:center; white-space:nowrap; }
+                .sra-claim-summary strong { color:var(--text-color); }
+                .sra-claim-summary .sra-claim-net { font-size:13px; font-weight:900; }
+                .sra-claim-help { color:var(--text-muted); font-size:12px; margin:8px 0; line-height:1.45; }
+                .sra-claim-candidate-list-wrap { margin-top:8px; border:1px solid var(--border-color); border-radius:10px; overflow:auto; max-height:360px; background:var(--card-bg); }
+                .sra-claim-candidate-list { width:100%; min-width:1120px; border-collapse:separate; border-spacing:0; }
+                .sra-claim-candidate-list th { position:sticky; top:0; z-index:1; background:var(--subtle-fg); color:var(--text-muted); font-size:11px; padding:8px 7px; border-bottom:1px solid var(--border-color); text-align:right; white-space:nowrap; }
+                .sra-claim-candidate-list td { font-size:12px; padding:7px; border-bottom:1px solid var(--border-color); vertical-align:middle; }
+                .sra-claim-candidate-list tr:last-child td { border-bottom:0; }
+                .sra-claim-candidate-list .sra-claim-doc { direction:ltr; font-weight:800; }
+                .sra-claim-candidate-list .sra-claim-money { direction:ltr; text-align:right; font-weight:800; white-space:nowrap; }
+                .sra-claim-candidate-list .sra-claim-amount-input { width:120px; direction:ltr; text-align:right; }
+                .sra-claim-empty { padding:14px; color:var(--text-muted); background:var(--control-bg); border-radius:10px; margin-top:10px; }
                 @media(max-width: 1100px) { .sra-filters, .sra-cards { grid-template-columns:repeat(2,minmax(180px,1fr)); } }
                 @media(max-width: 760px) { .sra-filters, .sra-cards { grid-template-columns:1fr; } }
             </style>
@@ -948,6 +971,261 @@ class SupplierRunningAccountPage {
         };
         dialog.show();
         renderInvoiceCandidatesHtml([]);
+    }
+
+    async openSupplierClaimDraftDialog() {
+        const supplier = this.controls.supplier.get_value();
+        const company = this.controls.company.get_value();
+        if (!company || !supplier) {
+            frappe.msgprint(__("Select Company and Supplier first."));
+            return;
+        }
+
+        const money = (value) => this.money(flt(value || 0));
+        const dialog = new frappe.ui.Dialog({
+            title: __("Create Supplier Claim Draft"),
+            fields: [
+                { fieldname: "period_from", fieldtype: "Date", label: __("Period From"), default: this.controls.from_date ? this.controls.from_date.get_value() : "", reqd: 1 },
+                { fieldname: "period_to", fieldtype: "Date", label: __("Period To"), default: this.controls.to_date ? this.controls.to_date.get_value() : frappe.datetime.get_today(), reqd: 1 },
+                { fieldname: "payment_due_date", fieldtype: "Date", label: __("Payment Due Date") },
+                { fieldname: "search", fieldtype: "Data", label: __("Invoice / Debit Note / Return Case"), description: __("Search by Purchase Invoice, Supplier Invoice No, or Return Case.") },
+                { fieldname: "load_candidates", fieldtype: "Button", label: __("Load Claim Candidates") },
+                { fieldname: "select_all", fieldtype: "Button", label: __("Select Claim Invoices") },
+                { fieldname: "clear_selection", fieldtype: "Button", label: __("Clear Selection") },
+                { fieldname: "net_amount_to_pay", fieldtype: "Currency", label: __("Net Amount To Pay"), description: __("Leave equal to System Claim Total unless there is a settlement discount.") },
+                { fieldname: "claim_candidates_html", fieldtype: "HTML" },
+                { fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), default: __("Draft Supplier Claim created from Supplier Running Account. Review before Submit.") },
+            ],
+            primary_action_label: __("Create Draft"),
+            primary_action: async () => {
+                const selected = selectedRows();
+                const summary = getSummary();
+                const values = dialog.get_values() || {};
+                if (!selected.length) {
+                    frappe.msgprint(__("Select at least one Claim Invoice or Return Credit / Debit Note."));
+                    return;
+                }
+                if (summary.system < -0.005) {
+                    frappe.msgprint(__("Selected Return Credits exceed selected Claim Invoices. Add invoices first or reduce credit amounts."));
+                    return;
+                }
+                if (summary.net < -0.005 || summary.net - summary.system > 0.005) {
+                    frappe.msgprint(__("Net Amount To Pay must be between zero and the System Claim Total."));
+                    return;
+                }
+
+                const confirmHtml = `
+                    <div style="text-align:right; direction:rtl; line-height:1.7">
+                        <b>${__("Review Supplier Claim Draft before saving")}</b><br>
+                        ${__("Gross Invoices")}: <b>${money(summary.gross)}</b><br>
+                        ${__("Returns / Credits")}: <b>${money(summary.returns)}</b><br>
+                        ${__("System Claim Total")}: <b>${money(summary.system)}</b><br>
+                        ${__("Settlement Discount")}: <b>${money(summary.discount)}</b><br>
+                        ${__("Net Amount To Pay")}: <b>${money(summary.net)}</b><br>
+                        <span class="text-muted">${__("The Supplier Claim will be saved as Draft only. No Submit, no GL, and no automatic accounting reconciliation.")}</span>
+                    </div>`;
+                frappe.confirm(confirmHtml, async () => {
+                    const r = await frappe.call({
+                        method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.create_supplier_claim_draft",
+                        args: {
+                            args: {
+                                company,
+                                supplier,
+                                period_from: values.period_from,
+                                period_to: values.period_to,
+                                payment_due_date: values.payment_due_date || "",
+                                supplier_printed_claim_total: summary.system,
+                                net_amount_to_pay: summary.net,
+                                notes: values.notes || "",
+                                invoices: selected.map(row => ({
+                                    purchase_invoice: row.purchase_invoice,
+                                    included_amount: flt(row.included_amount || 0),
+                                })),
+                            }
+                        },
+                        freeze: true,
+                        freeze_message: __("Creating draft Supplier Claim...")
+                    });
+                    const out = r.message || {};
+                    dialog.hide();
+                    frappe.show_alert({ message: __("Draft Supplier Claim created: {0}", [out.name]), indicator: "green" }, 8);
+                    frappe.set_route("Form", "Supplier Claim", out.name);
+                    this.loadStatement();
+                });
+            },
+        });
+
+        dialog.$wrapper.addClass("sra-claim-draft-dialog");
+        dialog.__sra_claim_candidates = [];
+        dialog.__sra_claim_auto_net = true;
+
+        const selectedRows = () => (dialog.__sra_claim_candidates || []).filter(row => row.__sra_selected === true && Math.abs(flt(row.included_amount || 0)) > 0.005);
+
+        const calculateClaimGrossReturns = (rows) => {
+            const gross = rows.filter(row => flt(row.included_amount) > 0).reduce((sum, row) => sum + flt(row.included_amount), 0);
+            const returns = Math.abs(rows.filter(row => flt(row.included_amount) < 0).reduce((sum, row) => sum + flt(row.included_amount), 0));
+            return { gross, returns };
+        };
+
+        const getSummary = () => {
+            const rows = selectedRows();
+            const totals = calculateClaimGrossReturns(rows);
+            const gross = totals.gross;
+            const returns = totals.returns;
+            const system = gross - returns;
+            const currentNet = dialog.get_value("net_amount_to_pay");
+            const suggestedNet = Math.max(system, 0);
+            const net = currentNet === null || currentNet === undefined || currentNet === "" ? suggestedNet : flt(currentNet);
+            const discount = Math.max(system - net, 0);
+            const excess_credit = Math.max(returns - gross, 0);
+            return { gross, returns, system, net, discount, excess_credit };
+        };
+
+        const summaryHtml = (summary) => {
+            const discountClass = summary.discount > 0.005 ? "sra-candidate-advance" : "sra-candidate-ok";
+            const systemClass = summary.system < -0.005 ? "sra-candidate-over" : "sra-candidate-ok";
+            const excessHtml = summary.excess_credit > 0.005
+                ? `<span>${__("Excess Credits")}: <strong class="sra-candidate-over">${money(summary.excess_credit)}</strong></span>`
+                : "";
+            return `
+                <span>${__("Gross Invoices")}: <strong>${money(summary.gross)}</strong></span>
+                <span>${__("Returns / Credits")}: <strong>${money(summary.returns)}</strong></span>
+                <span>${__("System Claim Total")}: <strong class="${systemClass}">${money(summary.system)}</strong></span>
+                <span>${__("Settlement Discount")}: <strong class="${discountClass}">${money(summary.discount)}</strong></span>
+                ${excessHtml}
+                <span>${__("Net Amount To Pay")}: <strong class="sra-claim-net">${money(summary.net)}</strong></span>`;
+        };
+
+        const refreshNetIfAuto = () => {
+            const rows = selectedRows();
+            const totals = calculateClaimGrossReturns(rows);
+            const system = Math.max(totals.gross - totals.returns, 0);
+            if (dialog.__sra_claim_auto_net) {
+                dialog.set_value("net_amount_to_pay", system);
+            }
+        };
+
+        const updateSummaryOnly = () => {
+            const field = dialog.fields_dict.claim_candidates_html;
+            field.$wrapper.find(".sra-claim-summary").html(summaryHtml(getSummary()));
+        };
+
+        const renderClaimCandidates = (rows) => {
+            dialog.__sra_claim_candidates = rows || [];
+            refreshNetIfAuto();
+            const field = dialog.fields_dict.claim_candidates_html;
+            const summary = getSummary();
+            if (!dialog.__sra_claim_candidates.length) {
+                field.$wrapper.html(`<div class="sra-claim-empty">${__("No loaded claim candidates yet. Choose period/search then click Load Claim Candidates.")}</div>`);
+                return;
+            }
+            const body = dialog.__sra_claim_candidates.map((row, idx) => {
+                const isReturn = cint(row.is_return);
+                const typeBadge = isReturn
+                    ? `<span class="sra-settlement-badge sra-settlement-credit">${__("Return Credit")}</span>`
+                    : `<span class="sra-settlement-badge sra-settlement-claim">${__("Claim Invoice")}</span>`;
+                return `
+                    <tr data-idx="${idx}">
+                        <td><input type="checkbox" class="sra-claim-select" data-idx="${idx}" ${row.__sra_selected === true ? "checked" : ""}></td>
+                        <td>${typeBadge}</td>
+                        <td class="sra-claim-doc">${this.docLink("Purchase Invoice", row.purchase_invoice)}</td>
+                        <td>${this.esc(row.supplier_invoice_no || "")}</td>
+                        <td>${this.esc(row.supplier_invoice_date || "")}</td>
+                        <td class="sra-claim-money">${money(row.outstanding_amount)}</td>
+                        <td><input class="form-control input-sm sra-claim-amount-input" data-idx="${idx}" value="${flt(row.included_amount || 0)}"></td>
+                        <td>${this.settlementBadge(row.settlement_classification || (isReturn ? __("Return Credit") : __("Claim Invoice")))}</td>
+                        <td>${this.docLink("Pharmacy Return Case", row.related_return_case)}</td>
+                        <td>${this.esc(row.invoice_status || "")}</td>
+                    </tr>`;
+            }).join("");
+            field.$wrapper.html(`
+                <div class="sra-claim-summary">${summaryHtml(summary)}</div>
+                <div class="sra-claim-help">${__("Loaded rows are not selected automatically. Use Select Claim Invoices for payable invoices only, then manually tick the Return Credits / Debit Notes you want to deduct. The draft will not be submitted automatically.")}</div>
+                <div class="sra-claim-candidate-list-wrap">
+                    <table class="sra-claim-candidate-list">
+                        <thead><tr>
+                            <th>${__("Use")}</th>
+                            <th>${__("Type")}</th>
+                            <th>${__("Document")}</th>
+                            <th>${__("Supplier Inv No")}</th>
+                            <th>${__("Supplier Date")}</th>
+                            <th>${__("Outstanding")}</th>
+                            <th>${__("Included")}</th>
+                            <th>${__("Classification")}</th>
+                            <th>${__("Return Case")}</th>
+                            <th>${__("Status")}</th>
+                        </tr></thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>`);
+            field.$wrapper.find(".sra-claim-select").each((idx, el) => {
+                const row = dialog.__sra_claim_candidates[cint($(el).data("idx"))];
+                el.checked = !!(row && row.__sra_selected === true);
+            });
+            field.$wrapper.find(".sra-claim-select").on("change", (e) => {
+                const idx = cint($(e.currentTarget).data("idx"));
+                const row = dialog.__sra_claim_candidates[idx];
+                if (row) row.__sra_selected = !!e.currentTarget.checked;
+                refreshNetIfAuto();
+                updateSummaryOnly();
+            });
+            field.$wrapper.find(".sra-claim-amount-input").on("change input", (e) => {
+                const idx = cint($(e.currentTarget).data("idx"));
+                const row = dialog.__sra_claim_candidates[idx];
+                if (!row) return;
+                const value = flt(e.currentTarget.value || 0);
+                row.included_amount = cint(row.is_return) ? -Math.abs(value) : Math.abs(value);
+                e.currentTarget.value = row.included_amount;
+                refreshNetIfAuto();
+                updateSummaryOnly();
+            });
+        };
+
+        const loadCandidates = async () => {
+            const values = dialog.get_values() || {};
+            const r = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.get_supplier_claim_draft_candidates",
+                args: {
+                    company,
+                    supplier,
+                    from_date: values.period_from || "",
+                    to_date: values.period_to || "",
+                    search: values.search || "",
+                    limit: 500,
+                },
+                freeze: true,
+                freeze_message: __("Loading claim candidates...")
+            });
+            const rows = (r.message || []).map(row => ({ ...row, selected: false, __sra_selected: false }));
+            dialog.__sra_claim_auto_net = true;
+            renderClaimCandidates(rows);
+            if (!rows.length) {
+                frappe.msgprint(__("No open Claim Candidates or Return Credits were found for the selected filters."));
+            } else {
+                frappe.show_alert({ message: __("Loaded {0} claim candidate(s). Select the invoices and credits you want to include.", [rows.length]), indicator: "blue" }, 6);
+            }
+        };
+
+        dialog.fields_dict.load_candidates.$input.on("click", loadCandidates);
+        dialog.fields_dict.select_all.$input.on("click", () => {
+            (dialog.__sra_claim_candidates || []).forEach(row => row.__sra_selected = flt(row.included_amount || 0) > 0);
+            dialog.__sra_claim_auto_net = true;
+            renderClaimCandidates(dialog.__sra_claim_candidates || []);
+        });
+        dialog.fields_dict.clear_selection.$input.on("click", () => {
+            (dialog.__sra_claim_candidates || []).forEach(row => row.__sra_selected = false);
+            dialog.__sra_claim_auto_net = true;
+            renderClaimCandidates(dialog.__sra_claim_candidates || []);
+        });
+        if (dialog.fields_dict.net_amount_to_pay && dialog.fields_dict.net_amount_to_pay.$input) {
+            dialog.fields_dict.net_amount_to_pay.$input.on("change input", () => {
+                dialog.__sra_claim_auto_net = false;
+                updateSummaryOnly();
+            });
+        }
+
+        dialog.show();
+        renderClaimCandidates([]);
     }
 
     openSupplier() {
