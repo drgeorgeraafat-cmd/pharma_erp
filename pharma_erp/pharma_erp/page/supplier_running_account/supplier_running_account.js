@@ -114,6 +114,75 @@ class SupplierRunningAccountPage {
                 .sra-amount { text-align:right !important; font-size:11px !important; }
                 .sra-pill, .sra-action-badge { white-space:normal !important; justify-content:center; text-align:center; line-height:1.15; padding:3px 6px !important; font-size:10px !important; }
                 .sra-doclink { max-width:100%; overflow-wrap:anywhere; }
+                .sra-payment-draft-dialog .modal-dialog {
+                    width:min(1220px, 96vw) !important;
+                    max-width:96vw !important;
+                }
+                .sra-payment-draft-dialog .modal-body {
+                    max-height:78vh;
+                    overflow:auto;
+                }
+                .sra-payment-draft-dialog .grid-heading-row,
+                .sra-payment-draft-dialog .grid-row {
+                    min-width:920px;
+                }
+                .sra-payment-draft-dialog .grid-body {
+                    overflow-x:auto;
+                }
+                .sra-payment-draft-dialog .data-row .row-index {
+                    min-width:34px;
+                }
+                .sra-payment-draft-dialog .grid-static-col,
+                .sra-payment-draft-dialog .data-row .grid-static-col {
+                    padding-left:6px !important;
+                    padding-right:6px !important;
+                }
+                .sra-payment-draft-dialog .sra-dialog-help {
+                    color:var(--text-muted);
+                    font-size:12px;
+                    margin-top:6px;
+                    margin-bottom:8px;
+                    line-height:1.35;
+                }
+                .sra-payment-selected-invoices-wide { display:block; }
+                .sra-payment-filter-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] { display:none !important; }
+                .sra-candidate-list-wrap { margin-top:10px; border:1px solid var(--border-color); border-radius:10px; overflow:auto; max-height:300px; background:var(--card-bg); }
+                .sra-candidate-list { width:100%; min-width:980px; border-collapse:separate; border-spacing:0; }
+                .sra-candidate-list th { position:sticky; top:0; z-index:1; background:var(--subtle-fg); color:var(--text-muted); font-size:11px; padding:8px 7px; border-bottom:1px solid var(--border-color); text-align:right; white-space:nowrap; }
+                .sra-candidate-list td { font-size:12px; padding:7px; border-bottom:1px solid var(--border-color); vertical-align:middle; }
+                .sra-candidate-list tr:last-child td { border-bottom:0; }
+                .sra-candidate-list .sra-pay-invoice { direction:ltr; font-weight:800; }
+                .sra-candidate-list .sra-pay-amount { direction:ltr; text-align:right; font-weight:800; white-space:nowrap; }
+                .sra-candidate-list .sra-pay-alloc-input { width:120px; direction:ltr; text-align:right; }
+                .sra-candidate-empty { padding:14px; color:var(--text-muted); background:var(--control-bg); border-radius:10px; margin-top:10px; }
+                .sra-settlement-badge { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:800; border:1px solid var(--border-color); white-space:nowrap; }
+                .sra-settlement-claim { background:#fff4df; border-color:#f4d6a1; color:#8a5a12; }
+                .sra-settlement-cash { background:#eaf8ef; border-color:#bfe1c9; color:#0b6e4f; }
+                .sra-settlement-credit { background:#e8f7ff; border-color:#b6def3; color:#0f5f8a; }
+                .sra-settlement-other { background:#eef2f7; border-color:#d8e0ea; color:#425466; }
+                .sra-candidate-summary { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:8px 0; padding:8px 10px; border:1px solid var(--border-color); border-radius:10px; background:var(--control-bg); font-size:12px; }
+                .sra-candidate-summary span { display:inline-flex; gap:4px; align-items:center; white-space:nowrap; }
+                .sra-candidate-summary strong { color:var(--text-color); }
+                .sra-candidate-advance { color:#8a5a12; font-weight:800; }
+                .sra-candidate-over { color:#b42318; font-weight:800; }
+                .sra-candidate-ok { color:#0b6e4f; font-weight:800; }
+                .sra-payment-draft-dialog [data-fieldname="invoice_search_section"] { clear:both; width:100%; }
+                .sra-payment-draft-dialog [data-fieldname="candidate_search"] input { font-weight:700; }
+                .sra-payment-draft-dialog [data-fieldname="selected_invoices_section"] { clear:both; width:100%; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] { width:100% !important; max-width:none !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-wrapper { width:100% !important; max-width:none !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-heading-row,
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-row { min-width:1120px !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-body,
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .form-grid { overflow-x:auto !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col,
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .data-row .grid-static-col { white-space:normal !important; overflow-wrap:anywhere !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="invoice"] { min-width:230px !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="supplier_invoice_no"] { min-width:160px !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="outstanding_amount"] { min-width:150px !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="settlement_classification"] { min-width:150px !important; }
+                .sra-payment-draft-dialog [data-fieldname="invoices"] .grid-static-col[data-fieldname="allocated_amount"] { min-width:150px !important; }
                 @media(max-width: 1100px) { .sra-filters, .sra-cards { grid-template-columns:repeat(2,minmax(180px,1fr)); } }
                 @media(max-width: 760px) { .sra-filters, .sra-cards { grid-template-columns:1fr; } }
             </style>
@@ -242,7 +311,8 @@ class SupplierRunningAccountPage {
         const data = r.message || {};
         this.currency = data.currency || this.currency;
         this.summary = data.summary || {};
-        this.rows = data.rows || [];
+        this.rows = this.normalizeStatementRows(data.rows);
+        this.__last_statement_rows = this.rows;
         this.renderCards();
         this.renderRows();
         this.$main.find("#sra-note").text(data.balance_note || "");
@@ -268,21 +338,49 @@ class SupplierRunningAccountPage {
         `).join(""));
     }
 
+    normalizeStatementRows(rows) {
+        if (Array.isArray(rows)) return rows;
+        if (!rows) return [];
+        if (typeof rows === "string") {
+            try {
+                const parsed = JSON.parse(rows);
+                return this.normalizeStatementRows(parsed);
+            } catch (e) {
+                console.warn("Supplier Running Account rows could not be parsed", e);
+                return [];
+            }
+        }
+        if (typeof rows === "object") {
+            return Object.values(rows);
+        }
+        return [];
+    }
+
     visibleRows() {
-        const rows = this.rows || [];
-        const view = (this.controls.statement_view && this.controls.statement_view.get_value()) || "All Movements";
+        const rows = this.normalizeStatementRows ? this.normalizeStatementRows(this.rows || []) : (Array.isArray(this.rows) ? this.rows : []);
+        const control = this.controls && this.controls.statement_view;
+        const rawView = control && control.get_value ? control.get_value() : "";
+        const view = String(rawView || "All Movements").trim();
+
+        if (!view || view === "All Movements" || view.toLowerCase().includes("all movement")) {
+            return rows;
+        }
+
         const hasOutstanding = (row) => Math.abs(flt(row.outstanding_amount || 0, 2)) > 0.005;
         const isInvoice = (row) => row.document_type === "Purchase Invoice" && !cint(row.is_purchase_return);
         const classification = (row) => String(row.settlement_classification || "").trim();
         const isLinkedToClaim = (row) => !!String(row.related_supplier_claim || "").trim();
+
         if (view === "Outstanding Invoices") {
             return rows.filter(row => isInvoice(row) && hasOutstanding(row));
         }
         if (view === "Direct Pay Candidates") {
-            return rows.filter(row => isInvoice(row) && hasOutstanding(row) && !isLinkedToClaim(row) && classification(row) !== "Claim Invoice");
+            return rows.filter(row => isInvoice(row) && hasOutstanding(row) && !isLinkedToClaim(row)
+                && classification(row) !== "Claim Invoice");
         }
         if (view === "Claim Candidates") {
-            return rows.filter(row => isInvoice(row) && hasOutstanding(row) && !isLinkedToClaim(row) && classification(row) === "Claim Invoice");
+            return rows.filter(row => isInvoice(row) && hasOutstanding(row) && !isLinkedToClaim(row)
+                && classification(row) === "Claim Invoice");
         }
         if (view === "Linked to Claim") {
             return rows.filter(row => isLinkedToClaim(row));
@@ -296,6 +394,8 @@ class SupplierRunningAccountPage {
         if (view === "Credit Outside Claim") {
             return rows.filter(row => classification(row) === "Credit Invoice Outside Claim");
         }
+
+        console.warn("Supplier Running Account: empty filtered view fallback for unknown view", view);
         return rows;
     }
 
@@ -359,94 +459,174 @@ class SupplierRunningAccountPage {
 
     renderRows() {
         const $table = this.$main.find("#sra-table");
-        const displayRows = this.visibleRows();
-        if (!this.rows.length) {
-            $table.html(`<tbody><tr><td><div class="sra-empty">${__("No rows to display.")}</div></td></tr></tbody>`);
+        const allRows = this.normalizeStatementRows ? this.normalizeStatementRows(this.rows || []) : (Array.isArray(this.rows) ? this.rows : []);
+        this.rows = allRows;
+
+        if (!allRows.length) {
+            const expectedRows = cint((this.summary || {}).displayed_rows || (this.summary || {}).official_rows || 0);
+            const msg = expectedRows > 0
+                ? __("Server returned rows but the browser did not receive them. Reload the statement.")
+                : __("No rows to display.");
+            $table.html(`<tbody><tr><td><div class="sra-empty">${msg}</div></td></tr></tbody>`);
             return;
         }
+
+        let view = "All Movements";
+        if (this.controls && this.controls.statement_view && this.controls.statement_view.get_value) {
+            view = String(this.controls.statement_view.get_value() || "All Movements").trim();
+        }
+        if (!view) view = "All Movements";
+
+        const hasOutstanding = (row) => Math.abs(flt(row.outstanding_amount || 0, 2)) > 0.005;
+        const isInvoice = (row) => row.document_type === "Purchase Invoice" && !cint(row.is_purchase_return);
+        const classification = (row) => String(row.settlement_classification || "").trim();
+        const linkedClaim = (row) => !!String(row.related_supplier_claim || "").trim();
+
+        let displayRows = allRows;
+        if (view === "Outstanding Invoices") {
+            displayRows = allRows.filter(row => isInvoice(row) && hasOutstanding(row));
+        } else if (view === "Direct Pay Candidates") {
+            displayRows = allRows.filter(row => isInvoice(row) && hasOutstanding(row) && !linkedClaim(row) && classification(row) !== "Claim Invoice");
+        } else if (view === "Claim Candidates") {
+            displayRows = allRows.filter(row => isInvoice(row) && hasOutstanding(row) && !linkedClaim(row) && classification(row) === "Claim Invoice");
+        } else if (view === "Linked to Claim") {
+            displayRows = allRows.filter(row => linkedClaim(row));
+        } else if (view === "Cash Invoices") {
+            displayRows = allRows.filter(row => classification(row) === "Cash Invoice");
+        } else if (view === "Claim Invoices") {
+            displayRows = allRows.filter(row => classification(row) === "Claim Invoice");
+        } else if (view === "Credit Outside Claim") {
+            displayRows = allRows.filter(row => classification(row) === "Credit Invoice Outside Claim");
+        } else {
+            displayRows = allRows;
+        }
+
+        // Safety net: if All Movements is selected or an unknown/stale value is selected,
+        // never hide a statement that has backend rows.
+        if ((!displayRows || !displayRows.length) && allRows.length && (!view || view === "All Movements" || ![
+            "Outstanding Invoices",
+            "Direct Pay Candidates",
+            "Claim Candidates",
+            "Linked to Claim",
+            "Cash Invoices",
+            "Claim Invoices",
+            "Credit Outside Claim"
+        ].includes(view))) {
+            displayRows = allRows;
+        }
+
         if (!displayRows.length) {
-            $table.html(`<tbody><tr><td><div class="sra-empty">${__("No rows match the selected statement view.")}</div></td></tr></tbody>`);
+            $table.html(`<tbody><tr><td><div class="sra-empty">${__("No rows match the selected statement view.")} ${this.esc(view || "")}</div></td></tr></tbody>`);
             return;
         }
+
         const header = `
             <thead><tr>
-                <th>${__("Date")}</th>
-                <th>${__("Type")}</th>
-                <th>${__("Document")}</th>
-                <th>${__("Supplier Invoice No")}</th>
-                <th>${__("Settlement Classification")}</th>
-                <th>${__("Outstanding")}</th>
-                <th>${__("Debit")}</th>
-                <th>${__("Credit")}</th>
-                <th>${__("Net Supplier Balance / صافي المورد")}</th>
-                <th>${__("Status")}</th>
-                <th>${__("Return Case")}</th>
-                <th>${__("Supplier Claim")}</th>
-                <th>${__("Next Action")}</th>
                 <th>${__("Notes")}</th>
+                <th>${__("Next Action")}</th>
+                <th>${__("Supplier Claim")}</th>
+                <th>${__("Return Case")}</th>
+                <th>${__("Status")}</th>
+                <th>${__("صافي المورد / Net Supplier Balance")}</th>
+                <th>${__("Credit")}</th>
+                <th>${__("Debit")}</th>
+                <th>${__("Outstanding")}</th>
+                <th>${__("Settlement Classification")}</th>
+                <th>${__("Supplier Invoice No")}</th>
+                <th>${__("Document")}</th>
+                <th>${__("Type")}</th>
+                <th>${__("Date")}</th>
             </tr></thead>`;
-        const body = [
-            this.renderBalanceRow(__("Opening Supplier Net / رصيد أول المدة"), this.summary.opening_balance, this.controls.from_date.get_value()),
-            displayRows.map(row => this.renderRow(row)).join(""),
-            this.renderBalanceRow(__("Closing Supplier Net / صافي المورد النهائي"), this.summary.closing_balance, this.controls.to_date.get_value(), true),
-        ].join("");
-        $table.html(`${this.renderColgroup()}${header}<tbody>${body}</tbody>`);
-        $table.find("[data-doctype][data-name]").on("click", (event) => {
+
+        const body = displayRows.map(row => this.renderRow(row)).join("");
+        const colgroup = this.renderColgroup ? this.renderColgroup() : "";
+        $table.html(`${colgroup}${header}<tbody>${body}</tbody>`);
+
+        $table.find("[data-doctype][data-name]").off("click").on("click", (event) => {
             event.preventDefault();
             const $link = $(event.currentTarget);
             frappe.set_route("Form", $link.data("doctype"), $link.data("name"));
         });
+
+        this.$main.find("#sra-note").text(
+            `${this.summary && this.summary.balance_note ? this.summary.balance_note : ""} ` +
+            __("Displayed rows: {0}", [displayRows.length])
+        );
     }
 
-
     rowTypeKey(row) {
-        const text = String((row && row.type) || '').toLowerCase();
-        if (!row || !row.affects_balance) return 'context';
-        if (text.includes('purchase return') || text.includes('debit note') || text.includes('return')) return 'return';
-        if (text.includes('supplier refund') || text.includes('refund')) return 'refund';
-        if (text.includes('payment')) return 'payment';
-        if (text.includes('journal') || text.includes('adjustment')) return 'journal';
-        if (text.includes('invoice')) return 'invoice';
-        return '';
+        const text = String((row && (row.type || row.document_type || row.voucher_type)) || "").toLowerCase();
+        if (!row) return "other";
+        if (!row.affects_balance) return "context";
+        if (text.includes("purchase return") || text.includes("debit note") || text.includes("credit note") || text.includes("return")) return "return";
+        if (text.includes("supplier refund") || text.includes("refund")) return "refund";
+        if (text.includes("payment")) {
+            const paymentType = String(row.payment_type || "").toLowerCase();
+            return paymentType === "receive" ? "refund" : "payment";
+        }
+        if (text.includes("journal") || text.includes("adjustment")) return "journal";
+        if (text.includes("claim")) return "claim";
+        if (text.includes("invoice")) return "invoice";
+        return "other";
     }
 
     rowTypeClass(row) {
         const key = this.rowTypeKey(row);
-        return key ? `sra-row-${key}` : '';
+        return key ? `sra-row-${key}` : "";
     }
 
     rowPillClass(row) {
         const key = this.rowTypeKey(row);
-        return key ? `sra-pill-${key}` : '';
+        return key ? `sra-pill-${key}` : "";
     }
 
     balanceClass(value) {
         const amount = flt(value || 0, 2);
-        if (amount < 0) return 'sra-balance-negative';
-        return 'sra-balance-positive';
+        if (amount < -0.005) return "sra-balance-negative";
+        return "sra-balance-positive";
     }
 
-    renderBalanceRow(label, value, dateValue, isClosing=false) {
-        const note = isClosing
-            ? __("Final net after all displayed official movements.")
-            : __("Net before the first displayed movement.");
-        return `<tr class="sra-balance-row sra-row-balance">
-            <td>${dateValue ? frappe.datetime.str_to_user(dateValue) : ""}</td>
-            <td><span class="sra-pill sra-pill-balance">${this.esc(label)}</span></td>
-            <td colspan="6"><span class="sra-balance-label">${this.esc(note)}</span></td>
-            <td class="sra-amount ${this.balanceClass(value || 0)}">${this.money(value || 0)}</td>
-            <td colspan="5">${isClosing ? this.esc(__("Positive = payable to supplier; negative = credit/refund due to pharmacy.")) : ""}</td>
-        </tr>`;
+    settlementBadge(classification) {
+        const value = String(classification || "");
+        const lower = value.toLowerCase();
+        let cls = "sra-settlement-other";
+        if (lower.includes("claim")) cls = "sra-settlement-claim";
+        else if (lower.includes("cash")) cls = "sra-settlement-cash";
+        else if (lower.includes("credit")) cls = "sra-settlement-credit";
+        return `<span class="sra-settlement-badge ${cls}">${this.esc(value || __("Not Set"))}</span>`;
     }
 
     renderRow(row) {
-        const classes = [this.rowTypeClass(row), !row.affects_balance ? "sra-row-context" : "", row.is_cancelled ? "sra-row-cancelled" : ""].filter(Boolean).join(" ");
+        const safeRowTypeClass = (r) => {
+            if (typeof this.rowTypeClass === "function") {
+                return this.rowTypeClass(r);
+            }
+            const docType = String(r.document_type || r.voucher_type || "").trim().toLowerCase();
+            const type = String(r.type || "").trim().toLowerCase();
+            const paymentType = String(r.payment_type || "").trim().toLowerCase();
+
+            if (docType === "purchase invoice" && cint(r.is_purchase_return)) return "sra-row-return";
+            if (type.includes("return") || type.includes("debit note") || type.includes("credit note")) return "sra-row-return";
+
+            if (docType === "payment entry" || type.includes("payment entry")) {
+                if (paymentType === "receive" || type.includes("refund")) return "sra-row-refund";
+                return "sra-row-payment";
+            }
+            if (type.includes("supplier refund")) return "sra-row-refund";
+
+            if (docType === "journal entry" || type.includes("journal entry")) return "sra-row-journal";
+            if (docType === "supplier claim" || type.includes("supplier claim")) return "sra-row-claim";
+            if (docType === "purchase invoice" || type.includes("purchase invoice")) return "sra-row-invoice";
+
+            return "sra-row-other";
+        };
+        const classes = [safeRowTypeClass(row), !row.affects_balance ? "sra-row-context" : "", row.is_cancelled ? "sra-row-cancelled" : ""].filter(Boolean).join(" ");
         return `<tr class="${classes}">
             <td>${frappe.datetime.str_to_user(row.posting_date || "")}</td>
-            <td><span class="sra-pill ${this.rowPillClass(row)}">${this.esc(row.type || "")}</span></td>
+            <td><span class="sra-pill ${(typeof this.rowPillClass === "function" ? this.rowPillClass(row) : "")}">${this.esc(row.type || "")}</span></td>
             <td>${this.docLink(row.document_type, row.document)}</td>
             <td>${this.esc(row.supplier_invoice_no || "")}</td>
-            <td>${this.esc(row.settlement_classification || "")}</td>
+            <td>${this.settlementBadge(row.settlement_classification)}</td>
             <td class="sra-amount ${this.outstandingClass(row)}">${this.money(row.outstanding_amount || 0)}</td>
             <td class="sra-amount sra-debit-amount">${this.money(row.debit || 0)}</td>
             <td class="sra-amount sra-credit-amount">${this.money(row.credit || 0)}</td>
@@ -503,7 +683,17 @@ class SupplierRunningAccountPage {
                 { fieldname: "allocation_mode", fieldtype: "Select", label: __("Allocation Mode"), default: "Oldest Outstanding First", options: ["Oldest Outstanding First", "Selected Invoices", "Unallocated Advance"].join("\n"), reqd: 1 },
                 { fieldtype: "Section Break", label: __("Allocation") },
                 { fieldname: "include_claim_linked", fieldtype: "Check", label: __("Include invoices already linked to Supplier Claim"), default: 0, description: __("Keep off unless you intentionally want to pay invoices already tied to a claim.") },
-                { fieldname: "load_candidates", fieldtype: "Button", label: __("Load Invoice Candidates") },
+                { fieldtype: "Section Break", fieldname: "invoice_search_section", label: __("Find Invoices") },
+                { fieldname: "candidate_from_date", fieldtype: "Date", label: __("From Invoice Date"), default: this.controls.from_date ? this.controls.from_date.get_value() : "" },
+                { fieldname: "candidate_to_date", fieldtype: "Date", label: __("To Invoice Date"), default: this.controls.to_date ? this.controls.to_date.get_value() : "" },
+                { fieldtype: "Column Break" },
+                { fieldname: "candidate_search", fieldtype: "Data", label: __("Invoice No / Supplier Invoice No"), description: __("Search by ERPNext Purchase Invoice number or supplier invoice number.") },
+                { fieldname: "load_candidates", fieldtype: "Button", label: __("Load / Add Matching Invoices") },
+                { fieldtype: "Column Break" },
+                { fieldname: "auto_allocate_candidates", fieldtype: "Button", label: __("Auto Allocate Amount") },
+                { fieldname: "clear_allocations", fieldtype: "Button", label: __("Clear Allocations") },
+                { fieldname: "set_amount_allocated", fieldtype: "Button", label: __("Set Amount = Allocated") },
+                { fieldtype: "Section Break", fieldname: "selected_invoices_section", label: __("Selected Invoices") },
                 {
                     fieldname: "invoices",
                     fieldtype: "Table",
@@ -512,14 +702,15 @@ class SupplierRunningAccountPage {
                     in_place_edit: true,
                     depends_on: "eval:doc.allocation_mode=='Selected Invoices'",
                     fields: [
-                        { fieldtype: "Link", fieldname: "invoice", label: __("Invoice"), options: "Purchase Invoice", in_list_view: 1, read_only: 1, columns: 2 },
-                        { fieldtype: "Data", fieldname: "supplier_invoice_no", label: __("Supplier Inv No"), in_list_view: 1, read_only: 1, columns: 1 },
-                        { fieldtype: "Currency", fieldname: "outstanding_amount", label: __("Outstanding"), in_list_view: 1, read_only: 1, columns: 1 },
-                        { fieldtype: "Data", fieldname: "settlement_classification", label: __("Class"), in_list_view: 1, read_only: 1, columns: 1 },
-                        { fieldtype: "Currency", fieldname: "allocated_amount", label: __("Allocate"), in_list_view: 1, columns: 1 },
+                        { fieldtype: "Link", fieldname: "invoice", label: __("Invoice"), options: "Purchase Invoice", in_list_view: 1, read_only: 1, columns: 3 },
+                        { fieldtype: "Data", fieldname: "supplier_invoice_no", label: __("Supplier Inv No"), in_list_view: 1, read_only: 1, columns: 2 },
+                        { fieldtype: "Currency", fieldname: "outstanding_amount", label: __("Outstanding"), in_list_view: 1, read_only: 1, columns: 2 },
+                        { fieldtype: "Data", fieldname: "settlement_classification", label: __("Settlement Type"), in_list_view: 1, read_only: 1, columns: 2 },
+                        { fieldtype: "Currency", fieldname: "allocated_amount", label: __("Allocate"), in_list_view: 1, columns: 2 },
                     ],
                     data: []
                 },
+                { fieldname: "invoice_candidates_html", fieldtype: "HTML" },
                 { fieldtype: "Section Break", label: __("Reference / Notes") },
                 { fieldname: "reference_no", fieldtype: "Data", label: __("Reference No") },
                 { fieldname: "remarks", fieldtype: "Small Text", label: __("Remarks") },
@@ -530,7 +721,7 @@ class SupplierRunningAccountPage {
                     frappe.msgprint(__("Enter a valid payment amount."));
                     return;
                 }
-                const rows = (values.invoices || []).filter(row => flt(row.allocated_amount || 0) > 0);
+                const rows = dialog.__sra_get_selected_rows ? dialog.__sra_get_selected_rows() : (values.invoices || []).filter(row => flt(row.allocated_amount || 0) > 0);
                 dialog.hide();
                 const r = await frappe.call({
                     method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.create_supplier_payment_draft",
@@ -546,6 +737,116 @@ class SupplierRunningAccountPage {
             }
         });
 
+        dialog.$wrapper.addClass("sra-payment-draft-dialog");
+        dialog.$wrapper.addClass("sra-payment-selected-invoices-wide");
+        if (dialog.fields_dict.invoices && dialog.fields_dict.invoices.$wrapper) {
+            dialog.fields_dict.invoices.$wrapper.before(
+                `<div class="sra-dialog-help">${__("For Selected Invoices, load invoices by date range or invoice number, then enter Allocated Amount. Use Auto Allocate to fill oldest loaded invoices up to the entered amount.")}</div>`
+            );
+        }
+
+        dialog.__sra_invoice_candidates = [];
+        dialog.__sra_get_selected_rows = () => {
+            return (dialog.__sra_invoice_candidates || [])
+                .map(row => ({
+                    invoice: row.invoice,
+                    supplier_invoice_no: row.supplier_invoice_no || "",
+                    outstanding_amount: row.outstanding_amount || 0,
+                    settlement_classification: row.settlement_classification || "",
+                    allocated_amount: flt(row.allocated_amount || 0),
+                }))
+                .filter(row => flt(row.allocated_amount || 0) > 0);
+        };
+
+        const candidateSummaryHtml = (rows) => {
+            rows = rows || [];
+            const loadedOutstanding = rows.reduce((sum, row) => sum + flt(row.outstanding_amount || 0), 0);
+            const allocated = rows.reduce((sum, row) => sum + flt(row.allocated_amount || 0), 0);
+            const paymentAmount = flt(dialog.get_value("amount") || 0);
+            const difference = paymentAmount - allocated;
+            let diffClass = "sra-candidate-ok";
+            let diffLabel = __("Unallocated Difference");
+            if (difference > 0.005) {
+                diffClass = "sra-candidate-advance";
+                diffLabel = __("Unallocated / Advance");
+            } else if (difference < -0.005) {
+                diffClass = "sra-candidate-over";
+                diffLabel = __("Over Allocated");
+            }
+            return `
+                <span><strong>${__("Loaded Outstanding")}:</strong> ${this.money(loadedOutstanding)}</span>
+                <span><strong>${__("Allocated Total")}:</strong> ${this.money(allocated)}</span>
+                <span class="${diffClass}"><strong>${diffLabel}:</strong> ${this.money(difference)}</span>
+            `;
+        };
+
+        const updateCandidateTotals = () => {
+            const field = dialog.fields_dict.invoice_candidates_html;
+            if (!field || !field.$wrapper) return;
+            const rows = dialog.__sra_invoice_candidates || [];
+            field.$wrapper.find(".sra-candidate-summary").html(candidateSummaryHtml(rows));
+        };
+
+        const renderInvoiceCandidatesHtml = (rows) => {
+            rows = rows || [];
+            dialog.__sra_invoice_candidates = rows;
+            const field = dialog.fields_dict.invoice_candidates_html;
+            if (!field || !field.$wrapper) return;
+            if (!rows.length) {
+                field.$wrapper.html(`<div class="sra-candidate-empty">${__("No loaded invoice candidates yet. Use date range or invoice number, then click Load / Add Matching Invoices.")}</div>`);
+                return;
+            }
+            const settlementBadge = (classification) => {
+                const value = String(classification || "");
+                const lower = value.toLowerCase();
+                let cls = "sra-settlement-other";
+                if (lower.includes("claim")) cls = "sra-settlement-claim";
+                else if (lower.includes("cash")) cls = "sra-settlement-cash";
+                else if (lower.includes("credit")) cls = "sra-settlement-credit";
+                return `<span class="sra-settlement-badge ${cls}">${this.esc(value || __("Not Set"))}</span>`;
+            };
+            const html = `
+                <div class="sra-candidate-summary">${candidateSummaryHtml(rows)}</div>
+                <div class="sra-dialog-help">${__("Settlement Type shows Claim / Cash / Credit classification. Enter Allocate amount only for invoices you want to pay. If Amount is greater than Allocated Total, the difference will remain unallocated / advance on the supplier draft payment.")}</div>
+                <div class="sra-candidate-list-wrap">
+                    <table class="sra-candidate-list">
+                        <thead><tr>
+                            <th>${__("Invoice")}</th>
+                            <th>${__("Supplier Inv No")}</th>
+                            <th>${__("Date")}</th>
+                            <th>${__("Outstanding")}</th>
+                            <th>${__("Settlement Type")}</th>
+                            <th>${__("Allocate")}</th>
+                        </tr></thead>
+                        <tbody>
+                            ${rows.map((row, idx) => `
+                                <tr>
+                                    <td class="sra-pay-invoice">${this.esc(row.invoice || "")}</td>
+                                    <td>${this.esc(row.supplier_invoice_no || "")}</td>
+                                    <td>${row.posting_date ? frappe.datetime.str_to_user(row.posting_date) : ""}</td>
+                                    <td class="sra-pay-amount">${this.money(row.outstanding_amount || 0)}</td>
+                                    <td>${this.esc(row.settlement_classification || "")}</td>
+                                    <td><input class="form-control sra-pay-alloc-input" data-idx="${idx}" value="${flt(row.allocated_amount || 0) || ""}" /></td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>`;
+            field.$wrapper.html(html);
+        };
+
+        dialog.$wrapper.on("change input", ".sra-pay-alloc-input", (event) => {
+            const idx = cint($(event.currentTarget).data("idx"));
+            const row = (dialog.__sra_invoice_candidates || [])[idx];
+            if (!row) return;
+            let value = flt($(event.currentTarget).val() || 0);
+            const outstanding = flt(row.outstanding_amount || 0);
+            if (value < 0) value = 0;
+            if (value > outstanding) value = outstanding;
+            row.allocated_amount = value;
+            updateCandidateTotals();
+        });
+
         const loadCandidates = async () => {
             const values = dialog.get_values() || {};
             const r = await frappe.call({
@@ -554,7 +855,10 @@ class SupplierRunningAccountPage {
                     company,
                     supplier,
                     include_claim_linked: values.include_claim_linked ? 1 : 0,
-                    limit: 200,
+                    from_date: values.candidate_from_date || "",
+                    to_date: values.candidate_to_date || "",
+                    search: values.candidate_search || "",
+                    limit: 500,
                 },
                 freeze: true,
                 freeze_message: __("Loading invoice candidates...")
@@ -567,17 +871,83 @@ class SupplierRunningAccountPage {
                 allocated_amount: 0,
             }));
             dialog.fields_dict.invoices.df.data = rows;
+            dialog.fields_dict.invoices.df.hidden = true;
+            dialog.fields_dict.invoices.refresh();
             dialog.fields_dict.invoices.grid.refresh();
+            renderInvoiceCandidatesHtml(rows);
+            if (!rows.length) {
+                frappe.msgprint(__("No matching outstanding invoices found for the selected filters."));
+            } else {
+                frappe.show_alert({ message: __("Loaded {0} invoice candidate(s).", [rows.length]), indicator: "blue" });
+            }
         };
 
+        const autoAllocateCandidates = () => {
+            const values = dialog.get_values() || {};
+            const amount = flt(values.amount || 0);
+            if (amount <= 0) {
+                frappe.msgprint(__("Enter Amount first."));
+                return;
+            }
+            const grid = dialog.fields_dict.invoices;
+            const rows = (grid.df.data || []);
+            if (!rows.length) {
+                frappe.msgprint(__("Load invoice candidates first."));
+                return;
+            }
+            let remaining = amount;
+            rows.forEach(row => {
+                const outstanding = flt(row.outstanding_amount || 0);
+                const allocated = remaining > 0 ? Math.min(outstanding, remaining) : 0;
+                row.allocated_amount = allocated;
+                remaining -= allocated;
+            });
+            dialog.__sra_invoice_candidates = rows;
+            grid.grid.refresh();
+            renderInvoiceCandidatesHtml(rows);
+            if (remaining > 0.005) {
+                frappe.show_alert({
+                    message: __("Amount exceeds loaded outstanding by {0}", [format_currency(remaining)]),
+                    indicator: "orange"
+                });
+            }
+        };
+
+        const clearAllocations = () => {
+            const grid = dialog.fields_dict.invoices;
+            (grid.df.data || []).forEach(row => row.allocated_amount = 0);
+            dialog.__sra_invoice_candidates = grid.df.data || [];
+            grid.grid.refresh();
+            renderInvoiceCandidatesHtml(grid.df.data || []);
+        };
+
+        if (dialog.fields_dict.amount && dialog.fields_dict.amount.$input) {
+            dialog.fields_dict.amount.$input.on("change input", () => updateCandidateTotals());
+        }
         dialog.fields_dict.load_candidates.$input.on("click", loadCandidates);
+        dialog.fields_dict.auto_allocate_candidates.$input.on("click", autoAllocateCandidates);
+        dialog.fields_dict.clear_allocations.$input.on("click", clearAllocations);
+        dialog.fields_dict.set_amount_allocated.$input.on("click", () => {
+            const rows = dialog.__sra_invoice_candidates || [];
+            const allocated = rows.reduce((sum, row) => sum + flt(row.allocated_amount || 0), 0);
+            if (allocated <= 0.005) {
+                frappe.msgprint(__("Enter allocated amounts first or click Auto Allocate Amount."));
+                return;
+            }
+            dialog.set_value("amount", allocated);
+            updateCandidateTotals();
+        });
         dialog.fields_dict.allocation_mode.df.onchange = () => {
             const mode = dialog.get_value("allocation_mode");
             dialog.fields_dict.invoices.df.hidden = mode !== "Selected Invoices";
             dialog.fields_dict.invoices.refresh();
-            if (mode === "Selected Invoices") loadCandidates();
+            if (mode === "Selected Invoices") {
+                dialog.fields_dict.invoices.df.hidden = false;
+                dialog.fields_dict.invoices.refresh();
+            }
         };
         dialog.show();
+        renderInvoiceCandidatesHtml([]);
     }
 
     openSupplier() {
@@ -608,3 +978,70 @@ class SupplierRunningAccountPage {
         URL.revokeObjectURL(url);
     }
 }
+
+// Safety fallback for older cached page instances / patched renderRow calls.
+SupplierRunningAccountPage.prototype.rowTypeClass = SupplierRunningAccountPage.prototype.rowTypeClass || function (row) {
+    const docType = String(row.document_type || row.voucher_type || "").trim().toLowerCase();
+    const type = String(row.type || "").trim().toLowerCase();
+    const paymentType = String(row.payment_type || "").trim().toLowerCase();
+
+    if (docType === "purchase invoice" && cint(row.is_purchase_return)) return "sra-row-return";
+    if (type.includes("return") || type.includes("debit note") || type.includes("credit note")) return "sra-row-return";
+
+    if (docType === "payment entry" || type.includes("payment entry")) {
+        if (paymentType === "receive" || type.includes("refund")) return "sra-row-refund";
+        return "sra-row-payment";
+    }
+    if (type.includes("supplier refund")) return "sra-row-refund";
+
+    if (docType === "journal entry" || type.includes("journal entry")) return "sra-row-journal";
+    if (docType === "supplier claim" || type.includes("supplier claim")) return "sra-row-claim";
+    if (docType === "purchase invoice" || type.includes("purchase invoice")) return "sra-row-invoice";
+
+    return "sra-row-other";
+};
+
+// Safety fallbacks for older cached page instances / patched renderRow calls.
+SupplierRunningAccountPage.prototype.rowTypeKey = SupplierRunningAccountPage.prototype.rowTypeKey || function (row) {
+    const text = String((row && (row.type || row.document_type || row.voucher_type)) || "").toLowerCase();
+    if (!row) return "other";
+    if (!row.affects_balance) return "context";
+    if (text.includes("purchase return") || text.includes("debit note") || text.includes("credit note") || text.includes("return")) return "return";
+    if (text.includes("supplier refund") || text.includes("refund")) return "refund";
+    if (text.includes("payment")) {
+        const paymentType = String(row.payment_type || "").toLowerCase();
+        return paymentType === "receive" ? "refund" : "payment";
+    }
+    if (text.includes("journal") || text.includes("adjustment")) return "journal";
+    if (text.includes("claim")) return "claim";
+    if (text.includes("invoice")) return "invoice";
+    return "other";
+};
+
+SupplierRunningAccountPage.prototype.rowTypeClass = SupplierRunningAccountPage.prototype.rowTypeClass || function (row) {
+    const key = this.rowTypeKey(row);
+    return key ? `sra-row-${key}` : "";
+};
+
+SupplierRunningAccountPage.prototype.rowPillClass = SupplierRunningAccountPage.prototype.rowPillClass || function (row) {
+    const key = this.rowTypeKey(row);
+    return key ? `sra-pill-${key}` : "";
+};
+
+SupplierRunningAccountPage.prototype.balanceClass = SupplierRunningAccountPage.prototype.balanceClass || function (value) {
+    const amount = flt(value || 0, 2);
+    if (amount < -0.005) return "sra-balance-negative";
+    return "sra-balance-positive";
+};
+
+// Safety fallback for main statement settlement badges.
+SupplierRunningAccountPage.prototype.settlementBadge = SupplierRunningAccountPage.prototype.settlementBadge || function (classification) {
+    const value = String(classification || "");
+    const lower = value.toLowerCase();
+    let cls = "sra-settlement-other";
+    if (lower.includes("claim")) cls = "sra-settlement-claim";
+    else if (lower.includes("cash")) cls = "sra-settlement-cash";
+    else if (lower.includes("credit")) cls = "sra-settlement-credit";
+    return `<span class="sra-settlement-badge ${cls}">${this.esc(value || __("Not Set"))}</span>`;
+};
+

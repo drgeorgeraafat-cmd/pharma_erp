@@ -871,22 +871,46 @@ def get_supplier_payment_defaults(company: str, supplier: str | None = None) -> 
 
 
 @frappe.whitelist()
-def get_supplier_payment_candidates(company: str, supplier: str, include_claim_linked: int = 0, limit: int = 200) -> list[dict]:
+def get_supplier_payment_candidates(
+    company: str,
+    supplier: str,
+    include_claim_linked: int = 0,
+    limit: int = 200,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    search: str | None = None,
+) -> list[dict]:
     """Outstanding submitted Purchase Invoices that can be used for payment allocation.
 
-    This is read-only and intentionally returns one unified supplier view. Linked claim
-    invoices are excluded by default for safety, but can be included explicitly.
+    Read-only. Supports date range and invoice-number search so the user can add
+    invoices intentionally to a payment list instead of scrolling a long table.
     """
+    from frappe.utils import getdate
+
     company = _sra_payment_required(company, "Company")
     supplier = _sra_payment_required(supplier, "Supplier")
+
+    filters = [
+        ["company", "=", company],
+        ["supplier", "=", supplier],
+        ["docstatus", "=", 1],
+        ["is_return", "=", 0],
+    ]
+    if from_date:
+        filters.append(["posting_date", ">=", getdate(from_date)])
+    if to_date:
+        filters.append(["posting_date", "<=", getdate(to_date)])
+
+    query = (search or "").strip()
+    or_filters = []
+    if query:
+        like = f"%{query}%"
+        or_filters = [["name", "like", like], ["bill_no", "like", like]]
+
     rows = frappe.get_all(
         "Purchase Invoice",
-        filters={
-            "company": company,
-            "supplier": supplier,
-            "docstatus": 1,
-            "is_return": 0,
-        },
+        filters=filters,
+        or_filters=or_filters or None,
         fields=[
             "name",
             "posting_date",
