@@ -1833,6 +1833,150 @@ def _procurement_response(doc) -> dict[str, Any]:
     }
 
 
+def _match_first_number(row, candidates: list[str]) -> float:
+    for fieldname in candidates:
+        value = row.get(fieldname)
+        if value is not None:
+            return flt(value)
+    return 0.0
+
+
+def _match_item_bucket(item_map: dict[str, dict[str, Any]], item_code: str, item_name: str | None = None) -> dict[str, Any]:
+    if not item_code:
+        item_code = "__missing_item__"
+    if item_code not in item_map:
+        item_map[item_code] = {
+            "item_code": item_code,
+            "item_name": item_name or item_code,
+            "requested_qty": 0.0,
+            "ordered_qty": 0.0,
+            "received_qty": 0.0,
+            "invoiced_qty": 0.0,
+            "requested_amount": 0.0,
+            "ordered_amount": 0.0,
+            "received_amount": 0.0,
+            "invoiced_amount": 0.0,
+        }
+    elif item_name and not item_map[item_code].get("item_name"):
+        item_map[item_code]["item_name"] = item_name
+    return item_map[item_code]
+
+
+def _match_add_doc_items(item_map: dict[str, dict[str, Any]], doc, kind: str) -> None:
+    qty_fields = {
+        "purchase_request": ["qty", "stock_qty"],
+        "purchase_order": ["qty", "stock_qty"],
+        "purchase_receipt": ["qty", "received_qty", "accepted_qty", "stock_qty"],
+        "purchase_invoice": ["qty", "stock_qty"],
+    }
+    qty_key = {
+        "purchase_request": "requested_qty",
+        "purchase_order": "ordered_qty",
+        "purchase_receipt": "received_qty",
+        "purchase_invoice": "invoiced_qty",
+    }[kind]
+    amount_key = {
+        "purchase_request": "requested_amount",
+        "purchase_order": "ordered_amount",
+        "purchase_receipt": "received_amount",
+        "purchase_invoice": "invoiced_amount",
+    }[kind]
+
+    for row in doc.get("items") or []:
+        item_code = row.get("item_code") or row.get("item") or ""
+        bucket = _match_item_bucket(item_map, item_code, row.get("item_name"))
+        qty = _match_first_number(row, qty_fields[kind])
+        amount = flt(row.get("amount") or row.get("base_amount"))
+        if not amount:
+            amount = qty * flt(row.get("rate") or row.get("base_rate"))
+        bucket[qty_key] += qty
+        bucket[amount_key] += amount
+
+
+def _match_doc_summary(doc) -> dict[str, Any]:
+    return {
+        "doctype": doc.doctype,
+        "name": doc.name,
+        "docstatus": cint(doc.docstatus),
+        "status": doc.get("status") or ("Draft" if cint(doc.docstatus) == 0 else "Submitted"),
+        "supplier": doc.get("supplier") or "",
+        "posting_date": doc.get("posting_date") or doc.get("transaction_date") or doc.get("schedule_date"),
+        "total_qty": flt(doc.get("total_qty") or sum(flt(row.get("qty")) for row in (doc.get("items") or []))),
+        "grand_total": flt(doc.get("grand_total") or doc.get("rounded_total") or doc.get("net_total") or 0),
+        "items_count": len(doc.get("items") or []),
+        "route": f"/app/{doc.doctype.lower().replace(' ', '-')}/{doc.name}",
+    }
+
+
+@frappe.whitelist()
+def get_procurement_match_preview(links):
+    """Return a lightweight procurement match preview for linked PR/PO/Receipt/Invoice drafts.
+
+    This is a read-only foundation for Three-Way Match. It does not submit or modify any
+    official ERPNext document.
+    """
+    _require_read_access()
+    links = _parse_payload(links or {})
+
+    requested = {
+        "purchase_request": ("Material Request", links.get("purchase_request") or links.get("material_request")),
+        "purchase_order": ("Purchase Order", links.get("purchase_order")),
+        "purchase_receipt": ("Purchase Receipt", links.get("purchase_receipt")),
+        "purchase_invoice": ("Purchase Invoice", links.get("purchase_invoice")),
+    }
+
+    docs = {}
+    missing = []
+    for kind, (doctype, name) in requested.items():
+        if not name:
+            continue
+        if not frappe.has_permission(doctype, "read"):
+            missing.append({"kind": kind, "doctype": doctype, "name": name, "reason": "no_permission"})
+            continue
+        if not frappe.db.exists(doctype, name):
+            missing.append({"kind": kind, "doctype": doctype, "name": name, "reason": "not_found"})
+            continue
+        docs[kind] = frappe.get_doc(doctype, name)
+
+    item_map: dict[str, dict[str, Any]] = {}
+    for kind, doc in docs.items():
+        _match_add_doc_items(item_map, doc, kind)
+
+    rows = []
+    for item_code, bucket in sorted(item_map.items(), key=lambda item: item[0]):
+        ordered_qty = flt(bucket.get("ordered_qty"))
+        received_qty = flt(bucket.get("received_qty"))
+        invoiced_qty = flt(bucket.get("invoiced_qty"))
+        ordered_amount = flt(bucket.get("ordered_amount"))
+        received_amount = flt(bucket.get("received_amount"))
+        invoiced_amount = flt(bucket.get("invoiced_amount"))
+        bucket["ordered_vs_received_qty"] = ordered_qty - received_qty
+        bucket["received_vs_invoiced_qty"] = received_qty - invoiced_qty
+        bucket["ordered_vs_invoiced_amount"] = ordered_amount - invoiced_amount
+        rows.append(bucket)
+
+    summary = {
+        "requested_qty": sum(flt(row.get("requested_qty")) for row in rows),
+        "ordered_qty": sum(flt(row.get("ordered_qty")) for row in rows),
+        "received_qty": sum(flt(row.get("received_qty")) for row in rows),
+        "invoiced_qty": sum(flt(row.get("invoiced_qty")) for row in rows),
+        "ordered_amount": sum(flt(row.get("ordered_amount")) for row in rows),
+        "received_amount": sum(flt(row.get("received_amount")) for row in rows),
+        "invoiced_amount": sum(flt(row.get("invoiced_amount")) for row in rows),
+        "rows_count": len(rows),
+    }
+    summary["ordered_vs_received_qty"] = summary["ordered_qty"] - summary["received_qty"]
+    summary["received_vs_invoiced_qty"] = summary["received_qty"] - summary["invoiced_qty"]
+    summary["ordered_vs_invoiced_amount"] = summary["ordered_amount"] - summary["invoiced_amount"]
+
+    return {
+        "documents": {kind: _match_doc_summary(doc) for kind, doc in docs.items()},
+        "missing": missing,
+        "summary": summary,
+        "rows": rows,
+    }
+
+
 @frappe.whitelist()
 def create_purchase_request_draft(payload):
     """Create an ERPNext Material Request with type Purchase as a Draft only."""

@@ -37,6 +37,8 @@ class PurchaseInvoiceManagementPageV1 {
         this.lastCameraBarcode = "";
         this.lastCameraBarcodeAt = 0;
         this.loadingInvoice = false;
+        this.procurementLinks = this.loadProcurementLinks();
+        this.procurementMatchPreview = null;
 
         this.addStyles();
         this.setupLayoutControls();
@@ -114,6 +116,16 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-card-label { color: var(--text-muted); font-size: 12px; }
                 .pimv1-card-value { font-size: 22px; font-weight: 800; margin-top: 8px; word-break: break-word; }
                 .pimv1-card-note { color: var(--text-muted); font-size: 11px; margin-top: 5px; }
+                .pimv1-match-docs { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+                .pimv1-match-doc { border: 1px solid var(--border-color); border-radius: 999px; padding: 6px 10px; background: var(--control-bg); font-size: 12px; }
+                .pimv1-match-doc strong { margin-inline-start: 4px; }
+                .pimv1-match-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }
+                .pimv1-match-box { border: 1px solid var(--border-color); border-radius: 12px; padding: 10px; background: var(--card-bg); }
+                .pimv1-match-label { color: var(--text-muted); font-size: 11px; }
+                .pimv1-match-value { font-weight: 800; font-size: 16px; margin-top: 4px; }
+                .pimv1-match-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+                .pimv1-match-table th, .pimv1-match-table td { border-bottom: 1px solid var(--border-color); padding: 6px; text-align: right; }
+                .pimv1-match-muted { color: var(--text-muted); }
                 .pimv1-section { padding: 16px; margin-top: 14px; }
                 .pimv1-section-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 13px; }
                 .pimv1-section-title h4 { margin: 0; font-weight: 800; }
@@ -399,6 +411,17 @@ class PurchaseInvoiceManagementPageV1 {
                     <div class="pimv1-card"><div class="pimv1-card-label">${__("Saved Tax / Grand Total")}</div><div class="pimv1-card-value" data-role="saved-grand">—</div><div class="pimv1-card-note" data-role="saved-status">${__("Not saved yet")}</div></div>
                 </div>
 
+                <div class="pimv1-section" data-role="procurement-match-preview">
+                    <div class="pimv1-section-title">
+                        <h4>${__("Procurement Match Preview")}</h4>
+                        <div class="pimv1-actions">
+                            <button type="button" class="btn btn-default btn-sm" data-action="refresh-procurement-match">${__("Refresh Match")}</button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="clear-procurement-links">${__("Clear Links")}</button>
+                        </div>
+                    </div>
+                    <div class="pimv1-match-content" data-role="procurement-match-content"></div>
+                </div>
+
                 <div class="pimv1-section">
                     <div class="pimv1-section-title"><h4>${__("Invoice Header")}</h4><span class="text-muted">${__("Quick Invoice & Receipt")}</span></div>
                     <div class="pimv1-grid pimv1-grid-4">
@@ -489,6 +512,8 @@ class PurchaseInvoiceManagementPageV1 {
         this.renderRows();
         this.renderRecentInvoices(this.bootstrap.recent_invoices || []);
         this.refreshCards();
+        this.renderProcurementMatchPreview();
+        this.fetchProcurementMatchPreview();
         this.offerLocalDraftRestore();
         this.initialRenderComplete = true;
     }
@@ -587,6 +612,9 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.on("click.pimv1", "[data-action='create-purchase-order-draft']", () => this.createPurchaseOrderDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-receipt-draft']", () => this.createPurchaseReceiptDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-invoice-draft']", () => this.createPurchaseInvoiceDraft());
+        this.$main.on("click.pimv1", "[data-action='refresh-procurement-match']", () => this.fetchProcurementMatchPreview(true));
+        this.$main.on("click.pimv1", "[data-action='clear-procurement-links']", () => this.clearProcurementLinks());
+        this.$main.on("click.pimv1", "[data-action='open-procurement-doc']", (event) => this.openLinkedProcurementDoc(event));
         this.$main.on("click.pimv1", "[data-action='create-purchase-return']", (event) => {
             frappe.route_options = {
                 return_type: "Return Against Invoice",
@@ -2122,6 +2150,163 @@ class PurchaseInvoiceManagementPageV1 {
         return !issues.errors.length;
     }
 
+
+    procurementStorageKey() {
+        return "pharma_erp_purchase_management_procurement_links_v0_7_51";
+    }
+
+    loadProcurementLinks() {
+        try {
+            const raw = window.localStorage.getItem(this.procurementStorageKey());
+            return raw ? JSON.parse(raw) || {} : {};
+        } catch (error) {
+            console.warn("Unable to load procurement links", error);
+            return {};
+        }
+    }
+
+    saveProcurementLinks() {
+        try {
+            window.localStorage.setItem(this.procurementStorageKey(), JSON.stringify(this.procurementLinks || {}));
+        } catch (error) {
+            console.warn("Unable to save procurement links", error);
+        }
+    }
+
+    recordProcurementLink(kind, document) {
+        if (!document || !document.name) return;
+        const mapping = {
+            purchase_request: "purchase_request",
+            purchase_order: "purchase_order",
+            purchase_receipt: "purchase_receipt",
+            purchase_invoice: "purchase_invoice",
+        };
+        const key = mapping[kind];
+        if (!key) return;
+        this.procurementLinks = this.procurementLinks || {};
+        this.procurementLinks[key] = document.name;
+        this.procurementLinks[`${key}_doctype`] = document.doctype;
+        this.procurementLinks.updated_at = frappe.datetime.now_datetime();
+        this.saveProcurementLinks();
+        this.renderProcurementMatchPreview();
+    }
+
+    clearProcurementLinks() {
+        this.procurementLinks = {};
+        this.procurementMatchPreview = null;
+        this.saveProcurementLinks();
+        this.renderProcurementMatchPreview();
+        frappe.show_alert({ message: __("Procurement links cleared."), indicator: "green" }, 4);
+    }
+
+    openLinkedProcurementDoc(event) {
+        const doctype = $(event.currentTarget).data("doctype");
+        const name = $(event.currentTarget).data("name");
+        if (doctype && name) frappe.set_route("Form", doctype, name);
+    }
+
+    async fetchProcurementMatchPreview(showAlert) {
+        const links = this.procurementLinks || {};
+        const hasLinks = ["purchase_request", "purchase_order", "purchase_receipt", "purchase_invoice"].some((key) => links[key]);
+        if (!hasLinks) {
+            this.procurementMatchPreview = null;
+            this.renderProcurementMatchPreview();
+            return null;
+        }
+        try {
+            const response = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.get_procurement_match_preview",
+                args: { links: JSON.stringify(links) },
+            });
+            this.procurementMatchPreview = response.message || null;
+            this.renderProcurementMatchPreview();
+            if (showAlert) frappe.show_alert({ message: __("Procurement match preview refreshed."), indicator: "green" }, 4);
+            return this.procurementMatchPreview;
+        } catch (error) {
+            console.error("Unable to load procurement match preview", error);
+            if (showAlert) {
+                frappe.msgprint({
+                    title: __("Procurement Match Preview"),
+                    message: this.escape(error.message || error),
+                    indicator: "red",
+                });
+            }
+            return null;
+        }
+    }
+
+    renderProcurementMatchPreview() {
+        const $target = this.$main.find("[data-role='procurement-match-content']");
+        if (!$target.length) return;
+        const links = this.procurementLinks || {};
+        const docTypes = {
+            purchase_request: "Material Request",
+            purchase_order: "Purchase Order",
+            purchase_receipt: "Purchase Receipt",
+            purchase_invoice: "Purchase Invoice",
+        };
+        const labels = {
+            purchase_request: __("Purchase Request"),
+            purchase_order: __("Purchase Order"),
+            purchase_receipt: __("Purchase Receipt"),
+            purchase_invoice: __("Purchase Invoice"),
+        };
+        const keys = ["purchase_request", "purchase_order", "purchase_receipt", "purchase_invoice"];
+        const hasLinks = keys.some((key) => links[key]);
+        if (!hasLinks) {
+            $target.html(`<div class="pimv1-help">${__("No linked procurement documents yet. Create Purchase Request / Order / Receipt / Invoice drafts from this page to build the matching preview.")}</div>`);
+            return;
+        }
+
+        const docsHtml = keys.map((key) => {
+            const name = links[key];
+            const doctype = links[`${key}_doctype`] || docTypes[key];
+            if (!name) return `<span class="pimv1-match-doc pimv1-match-muted">${labels[key]}: —</span>`;
+            return `<button type="button" class="btn btn-xs btn-default pimv1-match-doc" data-action="open-procurement-doc" data-doctype="${this.escape(doctype)}" data-name="${this.escape(name)}">${labels[key]} <strong>${this.escape(name)}</strong></button>`;
+        }).join("");
+
+        const preview = this.procurementMatchPreview;
+        if (!preview) {
+            $target.html(`<div class="pimv1-match-docs">${docsHtml}</div><div class="pimv1-help" style="margin-top:10px;">${__("Click Refresh Match to load quantities and amounts from the linked official drafts.")}</div>`);
+            return;
+        }
+
+        const summary = preview.summary || {};
+        const rows = preview.rows || [];
+        const rowsHtml = rows.length ? rows.map((row) => `
+            <tr>
+                <td>${this.escape(row.item_name || row.item_code)}</td>
+                <td>${this.number(row.ordered_qty)}</td>
+                <td>${this.number(row.received_qty)}</td>
+                <td>${this.number(row.invoiced_qty)}</td>
+                <td>${this.number(row.ordered_vs_received_qty)}</td>
+                <td>${this.number(row.received_vs_invoiced_qty)}</td>
+                <td>${this.money(row.ordered_amount)}</td>
+                <td>${this.money(row.invoiced_amount)}</td>
+            </tr>`).join("") : `<tr><td colspan="8" class="pimv1-match-muted">${__("No item rows loaded yet.")}</td></tr>`;
+
+        const missing = (preview.missing || []).length
+            ? `<div class="text-warning" style="margin-top:8px;">${__("Some linked documents could not be loaded. Clear links or recreate drafts if needed.")}</div>`
+            : "";
+
+        $target.html(`
+            <div class="pimv1-match-docs">${docsHtml}</div>
+            <div class="pimv1-match-grid">
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Received Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Invoiced Qty")}</div><div class="pimv1-match-value">${this.number(summary.invoiced_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Receipt Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_vs_received_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Receipt vs Invoice Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_vs_invoiced_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Invoice Amount")}</div><div class="pimv1-match-value">${this.money(summary.ordered_vs_invoiced_amount)}</div></div>
+            </div>
+            <table class="pimv1-match-table">
+                <thead><tr><th>${__("Item")}</th><th>${__("Ordered")}</th><th>${__("Received")}</th><th>${__("Invoiced")}</th><th>${__("PO-Receipt")}</th><th>${__("Receipt-Invoice")}</th><th>${__("PO Amount")}</th><th>${__("Invoice Amount")}</th></tr></thead>
+                <tbody>${rowsHtml}</tbody>
+            </table>
+            ${missing}
+        `);
+    }
+
     procurementDraftPayload() {
         const payload = this.payload();
         payload.required_by_date = this.value("due_date") || this.value("posting_date") || frappe.datetime.get_today();
@@ -2210,6 +2395,8 @@ class PurchaseInvoiceManagementPageV1 {
                 message: __("Created {0}: {1}", [label, document.name]),
                 indicator: "green",
             }, 7);
+            this.recordProcurementLink(kind, document);
+            await this.fetchProcurementMatchPreview();
             frappe.set_route("Form", document.doctype, document.name);
             return document;
         } catch (error) {
