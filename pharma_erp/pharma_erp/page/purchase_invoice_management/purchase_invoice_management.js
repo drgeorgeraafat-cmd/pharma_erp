@@ -48,6 +48,16 @@ class PurchaseInvoiceManagementPageV1 {
             __("Invoice")
         );
         this.$openButton.prop("disabled", true);
+        this.$purchaseRequestButton = this.page.add_inner_button(
+            __("Create Purchase Request Draft"),
+            () => this.createPurchaseRequestDraft(),
+            __("Procurement")
+        );
+        this.$purchaseOrderButton = this.page.add_inner_button(
+            __("Create Purchase Order Draft"),
+            () => this.createPurchaseOrderDraft(),
+            __("Procurement")
+        );
         this.$validateButton = this.page.add_inner_button(__("Validate Invoice"), () => this.validateAndReport(), __("Actions"));
         this.$saveSubmitButton = this.page.add_inner_button(__("Save & Submit"), () => this.saveAndSubmit(), __("Invoice"));
         this.$submitButton = this.page.add_inner_button(__("Submit Saved Draft"), () => this.submitInvoice(), __("Invoice"));
@@ -348,6 +358,12 @@ class PurchaseInvoiceManagementPageV1 {
                             <button type="button" class="btn btn-default btn-sm" data-action="returns-management">
                                 ${__("Returns Management")}
                             </button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-request-draft">
+                                ${__("Purchase Request Draft")}
+                            </button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-order-draft">
+                                ${__("Purchase Order Draft")}
+                            </button>
                             <button type="button" class="btn btn-default btn-sm" data-action="page-save-draft">
                                 ${__("Save Draft")}
                             </button>
@@ -551,6 +567,8 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
         this.$main.on("click.pimv1", "[data-action='supplier-running-account']", () => this.openSupplierRunningAccount());
         this.$main.on("click.pimv1", "[data-action='returns-management']", () => this.openReturnsManagement());
+        this.$main.on("click.pimv1", "[data-action='create-purchase-request-draft']", () => this.createPurchaseRequestDraft());
+        this.$main.on("click.pimv1", "[data-action='create-purchase-order-draft']", () => this.createPurchaseOrderDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-return']", (event) => {
             frappe.route_options = {
                 return_type: "Return Against Invoice",
@@ -2084,6 +2102,96 @@ class PurchaseInvoiceManagementPageV1 {
         const issues = this.renderValidationPanel();
         frappe.show_alert({ message: issues.errors.length ? __("Fix validation errors before saving.") : __("Validation completed."), indicator: issues.errors.length ? "red" : (issues.warnings.length ? "orange" : "green") }, 5);
         return !issues.errors.length;
+    }
+
+    procurementDraftPayload() {
+        const payload = this.payload();
+        payload.required_by_date = this.value("due_date") || this.value("posting_date") || frappe.datetime.get_today();
+        payload.items = (this.rows || [])
+            .filter((row) => row && row.item_code && flt(row.qty) > 0)
+            .map((row) => ({ ...row }));
+        return payload;
+    }
+
+    validateProcurementDraft(kind) {
+        const isPurchaseOrder = kind === "purchase_order";
+        const title = isPurchaseOrder ? __("Purchase Order Draft") : __("Purchase Request Draft");
+        const errors = [];
+
+        if (!this.value("company")) errors.push(__("Company is required."));
+        if (isPurchaseOrder && !this.value("supplier")) errors.push(__("Supplier is required for Purchase Order."));
+        if (!this.value("warehouse")) errors.push(__("Receiving Warehouse is required."));
+        if (!this.rows.length) errors.push(__("Add at least one purchase item."));
+
+        (this.rows || []).forEach((row, index) => {
+            if (!row.item_code) errors.push(__("Item is required on row {0}.", [index + 1]));
+            if (flt(row.qty) <= 0) errors.push(__("Quantity must be greater than zero on row {0}.", [index + 1]));
+            if (isPurchaseOrder && !cint(row.is_bonus) && flt(row.net_rate || row.supplier_base_price) <= 0) {
+                errors.push(__("Purchase rate is required on row {0} for Purchase Order.", [index + 1]));
+            }
+        });
+
+        if (errors.length) {
+            frappe.msgprint({
+                title,
+                message: `<ul>${errors.map((message) => `<li>${this.escape(message)}</li>`).join("")}</ul>`,
+                indicator: "orange",
+            });
+            return false;
+        }
+        return true;
+    }
+
+    async createProcurementDraft(kind) {
+        const isPurchaseOrder = kind === "purchase_order";
+        const label = isPurchaseOrder ? __("Purchase Order Draft") : __("Purchase Request Draft");
+        const method = isPurchaseOrder
+            ? "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_order_draft"
+            : "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_request_draft";
+
+        if (!this.validateProcurementDraft(kind)) return null;
+
+        try {
+            const response = await frappe.call({
+                method,
+                args: { payload: JSON.stringify(this.procurementDraftPayload()) },
+                freeze: true,
+                freeze_message: __("Creating {0}...", [label]),
+            });
+            const message = response.message || {};
+            const document = message.document || {};
+            if (!document.name) {
+                frappe.msgprint({
+                    title: label,
+                    message: __("Draft was not created. No document name was returned."),
+                    indicator: "red",
+                });
+                return null;
+            }
+            frappe.show_alert({
+                message: __("Created {0}: {1}", [label, document.name]),
+                indicator: "green",
+            }, 7);
+            frappe.set_route("Form", document.doctype, document.name);
+            return document;
+        } catch (error) {
+            console.error("Purchase procurement draft creation failed", error);
+            const message = error && error.message ? error.message : __("Draft creation failed. Check the browser console/server log for details.");
+            frappe.msgprint({
+                title: label,
+                message: this.escape(message),
+                indicator: "red",
+            });
+            return null;
+        }
+    }
+
+    createPurchaseRequestDraft() {
+        return this.createProcurementDraft("purchase_request");
+    }
+
+    createPurchaseOrderDraft() {
+        return this.createProcurementDraft("purchase_order");
     }
 
     validatePage() {

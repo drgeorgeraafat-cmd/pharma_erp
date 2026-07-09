@@ -1648,6 +1648,218 @@ def validate_purchase_invoice_risk_before_submit(doc, method=None):
     _validate_purchase_risk_before_submit(doc)
 
 
+
+def _require_document_create_access(doctype: str, label: str | None = None) -> None:
+    _require_read_access()
+    if not frappe.db.exists("DocType", doctype):
+        frappe.throw(_("{0} is not available on this site.").format(label or doctype))
+    if not frappe.has_permission(doctype, "create"):
+        frappe.throw(
+            _("You are not permitted to create {0}.").format(label or doctype),
+            frappe.PermissionError,
+        )
+
+
+def _doc_fieldnames(doctype: str) -> set[str]:
+    return _meta_fieldnames(doctype)
+
+
+def _child_values(doctype: str, values: dict[str, Any]) -> dict[str, Any]:
+    available = _doc_fieldnames(doctype)
+    return {key: value for key, value in values.items() if key in available}
+
+
+def _procurement_schedule_date(payload: frappe._dict):
+    return (
+        _parse_flexible_date(payload.get("required_by_date") or payload.get("due_date"), _("Required By"))
+        or _parse_flexible_date(payload.get("posting_date"), _("Posting Date"))
+        or getdate(nowdate())
+    )
+
+
+def _validate_procurement_payload(payload: frappe._dict, *, require_supplier: bool = True) -> None:
+    if not payload.get("company") or not frappe.db.exists("Company", payload.get("company")):
+        frappe.throw(_("Select a valid company."))
+    if require_supplier and (not payload.get("supplier") or not frappe.db.exists("Supplier", payload.get("supplier"))):
+        frappe.throw(_("Select a valid supplier."))
+    if not payload.get("warehouse") or not frappe.db.exists("Warehouse", payload.get("warehouse")):
+        frappe.throw(_("Select a valid receiving warehouse."))
+    warehouse_company = frappe.db.get_value("Warehouse", payload.get("warehouse"), "company")
+    if warehouse_company and warehouse_company != payload.get("company"):
+        frappe.throw(_("The selected warehouse belongs to another company."))
+    if not (payload.get("items") or []):
+        frappe.throw(_("Add at least one purchase item."))
+
+
+def _procurement_item_base(row: frappe._dict, default_warehouse: str) -> frappe._dict:
+    item_code = row.get("item_code")
+    if not item_code or not frappe.db.exists("Item", item_code):
+        frappe.throw(_("Invalid item in purchase rows."))
+    item = frappe.db.get_value(
+        "Item",
+        item_code,
+        ["item_name", "description", "stock_uom", "purchase_uom", "disabled", "is_purchase_item"],
+        as_dict=True,
+    ) or frappe._dict()
+    if cint(item.get("disabled")) or not cint(item.get("is_purchase_item", 1)):
+        frappe.throw(_("Item {0} cannot be purchased.").format(frappe.bold(item_code)))
+    qty = flt(row.get("qty"))
+    if qty <= 0:
+        frappe.throw(_("Quantity must be greater than zero for item {0}.").format(item_code))
+    uom = row.get("uom") or item.get("purchase_uom") or item.get("stock_uom")
+    conversion_factor = flt(row.get("conversion_factor")) or _uom_conversion_factor(item_code, uom, item.get("stock_uom"))
+    return frappe._dict(
+        item_code=item_code,
+        item_name=item.get("item_name") or item_code,
+        description=item.get("description") or item.get("item_name") or item_code,
+        stock_uom=item.get("stock_uom"),
+        uom=uom,
+        qty=qty,
+        conversion_factor=conversion_factor,
+        warehouse=row.get("warehouse") or default_warehouse,
+    )
+
+
+def _build_material_request_item(row: frappe._dict, default_warehouse: str, schedule_date) -> dict[str, Any]:
+    base = _procurement_item_base(row, default_warehouse)
+    values = {
+        "item_code": base.item_code,
+        "item_name": base.item_name,
+        "description": base.description,
+        "qty": base.qty,
+        "stock_qty": base.qty * base.conversion_factor,
+        "uom": base.uom,
+        "stock_uom": base.stock_uom,
+        "conversion_factor": base.conversion_factor,
+        "warehouse": base.warehouse,
+        "schedule_date": schedule_date,
+    }
+    return _child_values("Material Request Item", values)
+
+
+def _build_purchase_order_item(row: frappe._dict, default_warehouse: str, schedule_date) -> dict[str, Any]:
+    base = _procurement_item_base(row, default_warehouse)
+    calc = _calculate_row(row, 1)
+    rate = flt(calc.final_rate)
+    values = {
+        "item_code": base.item_code,
+        "item_name": base.item_name,
+        "description": base.description,
+        "qty": base.qty,
+        "stock_qty": base.qty * base.conversion_factor,
+        "uom": base.uom,
+        "stock_uom": base.stock_uom,
+        "conversion_factor": base.conversion_factor,
+        "warehouse": base.warehouse,
+        "schedule_date": schedule_date,
+        "price_list_rate": rate,
+        "rate": rate,
+        "base_rate": rate,
+        "amount": base.qty * rate,
+        "base_amount": base.qty * rate,
+        "discount_percentage": 0,
+        "discount_amount": 0,
+        "item_tax_template": row.get("item_tax_template") or None,
+    }
+    return _child_values("Purchase Order Item", values)
+
+
+def _procurement_response(doc) -> dict[str, Any]:
+    route_doctype = doc.doctype.lower().replace(" ", "-")
+    return {
+        "doctype": doc.doctype,
+        "name": doc.name,
+        "docstatus": doc.docstatus,
+        "status": doc.get("status") or "Draft",
+        "supplier": doc.get("supplier") or "",
+        "transaction_date": doc.get("transaction_date") or doc.get("posting_date"),
+        "grand_total": flt(doc.get("grand_total")),
+        "items_count": len(doc.get("items") or []),
+        "route": f"/app/{route_doctype}/{doc.name}",
+    }
+
+
+@frappe.whitelist()
+def create_purchase_request_draft(payload):
+    """Create an ERPNext Material Request with type Purchase as a Draft only."""
+    _require_document_create_access("Material Request", _("Purchase Request"))
+    payload = _parse_payload(payload)
+    _validate_procurement_payload(payload, require_supplier=False)
+    schedule_date = _procurement_schedule_date(payload)
+
+    doc = frappe.new_doc("Material Request")
+    doc.material_request_type = "Purchase"
+    doc.company = payload.get("company")
+    doc.transaction_date = payload.get("posting_date") or nowdate()
+    if doc.meta.has_field("schedule_date"):
+        doc.schedule_date = schedule_date
+    if doc.meta.has_field("set_warehouse"):
+        doc.set_warehouse = payload.get("warehouse")
+    if doc.meta.has_field("title"):
+        doc.title = _("Purchase Request from Purchase Management")
+    if doc.meta.has_field("custom_source_supplier"):
+        doc.custom_source_supplier = payload.get("supplier") or ""
+    if doc.meta.has_field("custom_source_purchase_invoice_draft"):
+        doc.custom_source_purchase_invoice_draft = payload.get("name") or ""
+    doc.set("items", [])
+    for source in payload.get("items") or []:
+        doc.append("items", _build_material_request_item(frappe._dict(source), payload.get("warehouse"), schedule_date))
+    doc.flags.ignore_mandatory = False
+    doc.insert()
+    doc.reload()
+    return {"document": _procurement_response(doc)}
+
+
+@frappe.whitelist()
+def create_purchase_order_draft(payload):
+    """Create an ERPNext Purchase Order Draft from the current Purchase Management rows."""
+    _require_document_create_access("Purchase Order")
+    payload = _parse_payload(payload)
+    _validate_procurement_payload(payload, require_supplier=True)
+    schedule_date = _procurement_schedule_date(payload)
+
+    doc = frappe.new_doc("Purchase Order")
+    doc.company = payload.get("company")
+    doc.supplier = payload.get("supplier")
+    doc.transaction_date = payload.get("posting_date") or nowdate()
+    doc.schedule_date = schedule_date
+    if doc.meta.has_field("set_warehouse"):
+        doc.set_warehouse = payload.get("warehouse")
+    if doc.meta.has_field("buying_price_list"):
+        doc.buying_price_list = payload.get("buying_price_list") or _default_buying_price_list()
+    if doc.meta.has_field("custom_source_purchase_invoice_draft"):
+        doc.custom_source_purchase_invoice_draft = payload.get("name") or ""
+    if doc.meta.has_field("custom_purchase_management_source"):
+        doc.custom_purchase_management_source = "Purchase & Invoice Management"
+    if doc.meta.has_field("remarks"):
+        doc.remarks = payload.get("remarks") or _("Draft created from Purchase & Invoice Management.")
+
+    doc.set("items", [])
+    for source in payload.get("items") or []:
+        doc.append("items", _build_purchase_order_item(frappe._dict(source), payload.get("warehouse"), schedule_date))
+
+    _copy_tax_template(doc, payload.get("taxes_and_charges"), 1)
+    _ensure_item_tax_rows(doc, payload)
+    _apply_item_tax_overrides(doc, payload)
+    _append_additional_charge(
+        doc,
+        payload.get("additional_charge_account"),
+        flt(payload.get("additional_charge_amount")),
+        payload.get("additional_charge_description"),
+    )
+    invoice_discount = max(0.0, min(100.0, flt(payload.get("invoice_discount_percentage"))))
+    if invoice_discount:
+        doc.apply_discount_on = "Net Total"
+        doc.additional_discount_percentage = invoice_discount
+    if hasattr(doc, "set_missing_values"):
+        doc.set_missing_values()
+    if hasattr(doc, "calculate_taxes_and_totals"):
+        doc.calculate_taxes_and_totals()
+    doc.insert()
+    doc.reload()
+    return {"document": _procurement_response(doc)}
+
+
 @frappe.whitelist()
 def submit_invoice(name: str):
     _require_create_access()
