@@ -33,6 +33,16 @@
   "claim_control_section",
   "claim_cycle_basis",
   "claim_settlement_discount_account",
+  "print_identity_section",
+  "show_company_name",
+  "show_pharmacy_name",
+  "print_identity_column_break",
+  "pharmacy_english_name",
+  "pharmacy_arabic_name",
+  "pharmacy_logo",
+  "pharmacy_phone",
+  "pharmacy_address",
+  "print_footer_note",
   "tax_input_section",
   "default_tax_entry_mode",
   "manual_vat_difference_tolerance",
@@ -231,6 +241,57 @@
    "options": "Account"
   },
   {
+   "fieldname": "print_identity_section",
+   "fieldtype": "Section Break",
+   "label": "Pharmacy / Company Print Settings"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_company_name",
+   "fieldtype": "Check",
+   "label": "Show Company Name"
+  },
+  {
+   "default": "1",
+   "fieldname": "show_pharmacy_name",
+   "fieldtype": "Check",
+   "label": "Show Pharmacy Name"
+  },
+  {
+   "fieldname": "print_identity_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pharmacy_english_name",
+   "fieldtype": "Data",
+   "label": "Pharmacy English Name"
+  },
+  {
+   "fieldname": "pharmacy_arabic_name",
+   "fieldtype": "Data",
+   "label": "Pharmacy Arabic Name"
+  },
+  {
+   "fieldname": "pharmacy_logo",
+   "fieldtype": "Attach Image",
+   "label": "Pharmacy Logo"
+  },
+  {
+   "fieldname": "pharmacy_phone",
+   "fieldtype": "Data",
+   "label": "Phone Number"
+  },
+  {
+   "fieldname": "pharmacy_address",
+   "fieldtype": "Small Text",
+   "label": "Address"
+  },
+  {
+   "fieldname": "print_footer_note",
+   "fieldtype": "Small Text",
+   "label": "Print Footer Note"
+  },
+  {
    "fieldname": "shortcuts_section",
    "fieldtype": "Section Break",
    "label": "Purchase Page Keyboard Shortcuts"
@@ -390,7 +451,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-06-28 14:00:00.000000",
+ "modified": "2026-07-09 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Pharmacy Purchase Settings",

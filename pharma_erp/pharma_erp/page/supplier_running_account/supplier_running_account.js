@@ -15,10 +15,12 @@ class SupplierRunningAccountPage {
         this.controls = {};
         this.rows = [];
         this.summary = {};
+        this.printIdentityCache = {};
         this.currency = null;
         this.addStyles();
         this.render();
         this.page.set_primary_action(__("Load Statement"), () => this.loadStatement(), "refresh");
+        this.page.add_inner_button(__("Print Summary"), () => this.printStatementSummary(), __("Actions"));
         this.page.add_inner_button(__("Export CSV"), () => this.exportCsv(), __("Actions"));
         this.page.add_inner_button(__("Open Supplier"), () => this.openSupplier(), __("Actions"));
         this.page.add_inner_button(__("Create Payment Draft"), () => this.openPaymentDraftDialog(), __("Actions"));
@@ -1493,6 +1495,99 @@ class SupplierRunningAccountPage {
     openSupplier() {
         const supplier = this.controls.supplier.get_value();
         if (supplier) frappe.set_route("Form", "Supplier", supplier);
+    }
+
+    async getPrintIdentity(company) {
+        const key = company || "__default__";
+        if (this.printIdentityCache && this.printIdentityCache[key]) return this.printIdentityCache[key];
+        if (!this.printIdentityCache) this.printIdentityCache = {};
+        try {
+            const r = await frappe.call({
+                method: "pharma_erp.pharma_erp.print_settings.get_print_identity",
+                args: { company: company || "" }
+            });
+            this.printIdentityCache[key] = r.message || {};
+        } catch (e) {
+            console.warn("Could not load dynamic print identity", e);
+            this.printIdentityCache[key] = { company: company || "", name_lines: [company || ""], display_title: company || "" };
+        }
+        return this.printIdentityCache[key];
+    }
+
+    printHeaderHtml(identity = {}, receipt = false) {
+        const company = this.controls && this.controls.company ? this.controls.company.get_value() : "";
+        const nameLines = Array.isArray(identity.name_lines) && identity.name_lines.length
+            ? identity.name_lines
+            : [identity.display_title || company].filter(Boolean);
+        const logo = identity.logo || "";
+        const phone = identity.phone || "";
+        const address = identity.address || "";
+        const footer = identity.footer_note || "";
+        const logoHtml = logo ? `<img class="print-logo" src="${this.esc(logo)}" alt="">` : "";
+        const namesHtml = nameLines.map(line => `<div class="print-name">${this.esc(line)}</div>`).join("");
+        const contactHtml = [
+            phone ? `${__("Phone")}: ${this.esc(phone)}` : "",
+            address ? this.esc(address) : "",
+        ].filter(Boolean).map(line => `<div class="print-contact">${line}</div>`).join("");
+        const footerHtml = footer ? `<div class="print-footer-note">${this.esc(footer)}</div>` : "";
+        return `<div class="print-identity ${receipt ? "receipt" : "a4"}">${logoHtml}<div class="print-identity-text">${namesHtml}${contactHtml}${footerHtml}</div></div>`;
+    }
+
+    async printStatementSummary() {
+        if (!this.rows.length) {
+            frappe.msgprint(__("Load a statement first."));
+            return;
+        }
+        const company = this.controls.company.get_value();
+        const supplier = this.controls.supplier.get_value();
+        const rows = this.visibleRows();
+        const identity = await this.getPrintIdentity(company);
+        const w = window.open("", "_blank");
+        if (!w) {
+            frappe.msgprint(__("Please allow popups to print."));
+            return;
+        }
+        const s = this.summary || {};
+        const cards = [
+            [__("Opening Balance"), s.opening_balance],
+            [__("Total Invoices"), s.total_invoices],
+            [__("Total Payments"), s.total_payments],
+            [__("Returns / Credits"), s.total_returns_credits],
+            [__("Claim Deductions"), s.total_claim_deductions],
+            [__("Supplier Refunds"), s.total_refunds],
+            [__("Unallocated Advances"), s.total_unallocated_advances],
+            [__("Closing Balance"), s.closing_balance],
+        ].map(([label, value]) => `<div class="box"><b>${this.esc(label)}</b><br>${this.money(value || 0)}</div>`).join("");
+        const rowHtml = rows.map(row => `<tr>
+            <td>${this.esc(frappe.datetime.str_to_user(row.posting_date || ""))}</td>
+            <td>${this.esc(row.type || "")}</td>
+            <td>${this.esc(row.document || "")}</td>
+            <td>${this.esc(row.supplier_invoice_no || "")}</td>
+            <td>${this.esc(row.settlement_classification || "")}</td>
+            <td class="amount">${this.money(row.outstanding_amount || 0)}</td>
+            <td class="amount">${this.money(row.debit || 0)}</td>
+            <td class="amount">${this.money(row.credit || 0)}</td>
+            <td class="amount">${row.running_balance === null || row.running_balance === undefined ? this.esc(__("Context")) : this.money(row.running_balance || 0)}</td>
+            <td>${this.esc(row.status || "")}</td>
+            <td>${this.esc(row.related_supplier_claim || "")}</td>
+        </tr>`).join("");
+        const period = [this.controls.from_date.get_value(), this.controls.to_date.get_value()].filter(Boolean).join(" → ");
+        const view = this.controls.statement_view.get_value() || "All Movements";
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${this.esc(supplier || "Supplier Running Account")}</title><style>
+            @page{size:A4 landscape;margin:10mm;}html,body{font-family:Arial,sans-serif;color:#111;margin:0;font-size:11px}.print-identity{display:flex;align-items:center;gap:12px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #ddd}.print-logo{max-width:32mm;max-height:24mm;object-fit:contain}.print-name{font-weight:800;font-size:18px;line-height:1.25}.print-contact,.print-footer-note{color:#555;font-size:11px;line-height:1.25}.print-footer-note{margin-top:3px}
+            h2,h3{margin:0 0 7px}.muted{color:#666}.line{border-top:1px solid #ddd;margin:7px 0}.meta,.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}.box{border:1px solid #ddd;border-radius:6px;padding:6px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #ddd;padding:4px;vertical-align:top;word-break:break-word}th{background:#f5f5f5}.amount{text-align:right;direction:ltr;white-space:nowrap}
+            @media print{.print-paper-note{display:none}}
+        </style></head><body onload="setTimeout(function(){window.focus();window.print();},300)">
+            ${this.printHeaderHtml(identity)}
+            <h3>${this.esc(__("Supplier Running Account Summary"))}</h3>
+            <div class="meta"><div class="box"><b>${this.esc(__("Supplier"))}</b><br>${this.esc(supplier || "")}</div><div class="box"><b>${this.esc(__("Company"))}</b><br>${this.esc(company || "")}</div><div class="box"><b>${this.esc(__("Period"))}</b><br>${this.esc(period || __("All"))}</div><div class="box"><b>${this.esc(__("View"))}</b><br>${this.esc(view)}</div></div>
+            <div class="cards">${cards}</div>
+            <div class="line"></div><div class="muted">${this.esc((this.summary && this.summary.balance_note) || "")} ${this.esc(__("Displayed rows: {0}", [rows.length]))}</div>
+            <table><thead><tr><th>${this.esc(__("Date"))}</th><th>${this.esc(__("Type"))}</th><th>${this.esc(__("Document"))}</th><th>${this.esc(__("Supplier Invoice No"))}</th><th>${this.esc(__("Classification"))}</th><th>${this.esc(__("Outstanding"))}</th><th>${this.esc(__("Debit"))}</th><th>${this.esc(__("Credit"))}</th><th>${this.esc(__("Net Balance"))}</th><th>${this.esc(__("Status"))}</th><th>${this.esc(__("Supplier Claim"))}</th></tr></thead><tbody>${rowHtml}</tbody></table>
+        </body></html>`;
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
     }
 
     exportCsv() {

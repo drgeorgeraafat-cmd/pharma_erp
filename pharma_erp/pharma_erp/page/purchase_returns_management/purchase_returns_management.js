@@ -20,6 +20,7 @@ class PharmacyPurchaseReturnsManagement {
         this.recentToDate = "";
         this.printPaperSize = "A4";
         this.printMode = "Case Summary";
+        this.printIdentityCache = {};
         this.recentDateControls = {};
         this.recentExpanded = false;
         this.caseName = null;
@@ -468,7 +469,13 @@ class PharmacyPurchaseReturnsManagement {
         return this.controlValue(name);
     }
     async setValue(name,value){if(this.controls[name]) await this.controls[name].set_value(value||"");}
-    money(value){return format_currency(flt(value), this.currency);}
+    money(value){
+        const amount = flt(value || 0, 2);
+        const abs = Math.abs(amount);
+        const formatted = abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const suffix = this.currency === "EGP" || !this.currency ? " ج.م" : ` ${this.currency}`;
+        return `${amount < 0 ? "-" : ""}${formatted}${suffix}`;
+    }
     esc(value){return frappe.utils.escape_html(String(value??""));}
     showControl(name, show){if(this.controls[name]?.$host)this.controls[name].$host.toggle(Boolean(show));}
 
@@ -2625,13 +2632,15 @@ class PharmacyPurchaseReturnsManagement {
                 {fieldtype:"HTML",fieldname:"printer_note",options:`<div class="prm-print-note">${__("This prints a short operational summary, not the full ERPNext form. Printer selection still happens in the browser print dialog.")}</div>`},
                 {label:__("Document"),fieldname:"document_label",fieldtype:"Data",read_only:1,default:`${row.name || name}`},
                 {label:__("Summary Type"),fieldname:"print_mode",fieldtype:"Select",options:"Case Summary\nSupplier Handover Receipt\nSupplier Decision Summary\nFinancial Summary",default:(this.printMode && this.printMode!=="Official ERPNext Print View")?this.printMode:"Case Summary"},
-                {label:__("Paper Size"),fieldname:"paper_size",fieldtype:"Select",options:"A4\nReceipt 80mm",default:this.printPaperSize||"A4"},
+                {label:__("Paper Size"),fieldname:"paper_size",fieldtype:"Select",options:"A4\nReceipt 80mm",default:"A4"},
                 {fieldtype:"HTML",fieldname:"official_hint",options:`<div class="prm-muted">${__("Use Open Document if you need the full official ERPNext print format.")}</div>`},
             ],
             primary_action_label:__("Print Summary"),
-            primary_action:(values)=>{
-                this.printPaperSize=values.paper_size||"A4";
+            primary_action: async (values)=>{
+                // Keep A4 as the safe default for each new print. Receipt 80mm remains selectable per print.
+                this.printPaperSize="A4";
                 this.printMode=values.print_mode||"Case Summary";
+                values.print_identity = await this.getPrintIdentity((row && row.company) || this.value("company"));
                 dialog.hide();
                 this.printCaseSummary(row,values);
             }
@@ -2664,6 +2673,41 @@ class PharmacyPurchaseReturnsManagement {
         return this.value("company") || (row&&row.company) || (frappe.boot&&frappe.boot.sysdefaults&&frappe.boot.sysdefaults.company) || "";
     }
 
+    async getPrintIdentity(company){
+        const key = company || "__default__";
+        if(this.printIdentityCache && this.printIdentityCache[key]) return this.printIdentityCache[key];
+        if(!this.printIdentityCache) this.printIdentityCache = {};
+        try{
+            const r = await frappe.call({
+                method:"pharma_erp.pharma_erp.print_settings.get_print_identity",
+                args:{company: company || ""}
+            });
+            this.printIdentityCache[key] = r.message || {};
+        }catch(e){
+            console.warn("Could not load dynamic print identity", e);
+            this.printIdentityCache[key] = {company: company || "", name_lines:[company || ""], display_title: company || ""};
+        }
+        return this.printIdentityCache[key];
+    }
+
+    printHeaderHtml(identity={}, row={}, receipt=false){
+        const nameLines = Array.isArray(identity.name_lines) && identity.name_lines.length
+            ? identity.name_lines
+            : [identity.display_title || this.printHeaderTitle(row)].filter(Boolean);
+        const logo = identity.logo || "";
+        const phone = identity.phone || "";
+        const address = identity.address || "";
+        const footer = identity.footer_note || "";
+        const logoHtml = logo ? `<img class="print-logo" src="${this.esc(logo)}" alt="">` : "";
+        const namesHtml = nameLines.map(line => `<div class="print-name">${this.esc(line)}</div>`).join("");
+        const contactHtml = [
+            phone ? `${__("Phone")}: ${this.esc(phone)}` : "",
+            address ? this.esc(address) : "",
+        ].filter(Boolean).map(line => `<div class="print-contact">${line}</div>`).join("");
+        const footerHtml = footer ? `<div class="print-footer-note">${this.esc(footer)}</div>` : "";
+        return `<div class="print-identity ${receipt ? "receipt" : "a4"}">${logoHtml}<div class="print-identity-text">${namesHtml}${contactHtml}${footerHtml}</div></div>`;
+    }
+
     printRowsForCurrentCase(){
         return (this.caseName && Array.isArray(this.rows)) ? this.rows : [];
     }
@@ -2674,7 +2718,8 @@ class PharmacyPurchaseReturnsManagement {
         const mode=opts.print_mode||"Case Summary";
         const w=window.open("","_blank");
         if(!w){frappe.msgprint(__("Please allow popups to print."));return;}
-        const header=this.printHeaderTitle(row);
+        const identity=opts.print_identity||{};
+        const headerHtml=this.printHeaderHtml(identity,row,receipt);
         const items=(this.caseName===row.name ? this.printRowsForCurrentCase() : []);
         const qtyOf=(r)=>flt(r.return_qty)||flt(r.delivered_qty)||flt(r.accepted_qty)||flt(r.recall_qty)||0;
         const compactItems=items.map((r,i)=>`<tr><td>${i+1}</td><td>${this.esc(r.item_name||r.item_code)}<div class="muted">${this.esc(r.item_code||"")}</div></td><td>${this.esc(r.batch_no||"—")}</td><td>${this.esc(r.expiry_date||"—")}</td><td>${qtyOf(r)}</td></tr>`).join("");
@@ -2710,12 +2755,13 @@ class PharmacyPurchaseReturnsManagement {
             html,body{font-family:Arial,sans-serif;color:#111;margin:0;font-size:${receipt?"10.5px":"13px"};width:${receipt?"74mm":"auto"};max-width:${receipt?"74mm":"none"};}
             body{padding:${receipt?"2mm":"0"};box-sizing:border-box;}
             h2,h3{margin:0 0 7px;line-height:1.2}.muted{color:#666;font-size:${receipt?"9px":"12px"}}.section{margin-top:${receipt?"8px":"12px"}}.line{border-top:1px solid #ddd;margin:7px 0}
+            .print-identity{display:flex;align-items:center;gap:${receipt?"6px":"12px"};margin-bottom:${receipt?"6px":"10px"};padding-bottom:${receipt?"5px":"8px"};border-bottom:1px solid #ddd}.print-logo{max-width:${receipt?"18mm":"32mm"};max-height:${receipt?"16mm":"24mm"};object-fit:contain}.print-identity-text{flex:1}.print-name{font-weight:800;font-size:${receipt?"12px":"18px"};line-height:1.25}.print-contact,.print-footer-note{color:#555;font-size:${receipt?"9px":"11px"};line-height:1.25}.print-footer-note{margin-top:3px}
             table{width:100%;border-collapse:collapse;margin-top:5px;table-layout:${receipt?"fixed":"auto"}}th,td{border:1px solid #ddd;padding:${receipt?"2px":"6px"};text-align:left;vertical-align:top;word-break:break-word}th{background:#f5f5f5}
             .meta{display:grid;grid-template-columns:${receipt?"1fr":"repeat(4,1fr)"};gap:${receipt?"4px":"6px"}}.box{border:1px solid #ddd;padding:${receipt?"4px":"6px"};border-radius:6px}.signature{display:grid;grid-template-columns:${receipt?"1fr":"1fr 1fr"};gap:24px;margin-top:22px}
             @media screen{body{margin:${receipt?"0 auto":"0"};}.print-paper-note{display:block;color:#777;font-size:11px;margin-bottom:6px}}@media print{.print-paper-note{display:none}}
         </style></head><body onload="setTimeout(function(){window.focus();window.print();},300)">
             ${receipt?`<div class="print-paper-note">${this.esc(__("Receipt 80mm layout. In the browser print dialog, choose the 80mm receipt printer/paper if it is not selected automatically."))}</div>`:""}
-            <h2>${this.esc(header)}</h2><h3>${title}</h3><div class="muted">${this.esc(this.formatDateDisplay(row.posting_date)||"")}</div><div class="line"></div>${body}
+            ${headerHtml}<h3>${title}</h3><div class="muted">${this.esc(this.formatDateDisplay(row.posting_date)||"")}</div><div class="line"></div>${body}
         </body></html>`;
         w.document.open();w.document.write(html);w.document.close();
     }
