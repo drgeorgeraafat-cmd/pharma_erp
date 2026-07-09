@@ -754,6 +754,7 @@ def _build_statement(
         "total_returns_credits": 0,
         "total_claim_deductions": 0,
         "total_refunds": 0,
+        "total_unallocated_advances": 0,
         "adjustments_rounding": 0,
         "closing_balance": closing,
         "official_rows": len(official_rows),
@@ -769,6 +770,8 @@ def _build_statement(
             summary["total_refunds"] += max(abs(flt(row.get("debit"))), abs(flt(row.get("credit"))))
         elif row.get("document_type") == "Payment Entry":
             summary["total_payments"] += max(abs(flt(row.get("debit"))), abs(flt(row.get("credit"))))
+            if flt(row.get("outstanding_amount")) > MONEY_TOLERANCE:
+                summary["total_unallocated_advances"] += flt(row.get("outstanding_amount"))
         elif row.get("document_type") == "Journal Entry":
             summary["adjustments_rounding"] += max(abs(flt(row.get("debit"))), abs(flt(row.get("credit"))))
 
@@ -1500,3 +1503,243 @@ def create_supplier_claim_draft(args: dict | None = None) -> dict:
         "settlement_discount_amount": flt(claim.settlement_discount_amount, 2),
         "net_amount_to_pay": flt(claim.net_amount_to_pay, 2),
     }
+
+# -----------------------------------------------------------------------------
+# Supplier Running Account v0.7.44 — Existing supplier advance allocation helper
+# -----------------------------------------------------------------------------
+
+@frappe.whitelist()
+def get_supplier_unallocated_advances(
+    company: str,
+    supplier: str,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    search: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Return submitted supplier Payment Entries with unallocated amount.
+
+    Read-only helper for the SRA advance allocation dialog. It only lists
+    official submitted Payment Entries; it does not mutate accounting.
+    """
+    _require_read_access()
+    if not frappe.has_permission("Payment Entry", "read"):
+        frappe.throw(_("You are not permitted to read Payment Entries."), frappe.PermissionError)
+
+    company = _sra_payment_required(company, "Company")
+    supplier = _sra_payment_required(supplier, "Supplier")
+    params: dict[str, Any] = {"company": company, "supplier": supplier, "limit": cint(limit or 100)}
+    conditions = [
+        "pe.company = %(company)s",
+        "pe.party_type = 'Supplier'",
+        "pe.party = %(supplier)s",
+        "pe.docstatus = 1",
+        "pe.payment_type = 'Pay'",
+        "IFNULL(pe.unallocated_amount, 0) > 0.005",
+    ]
+    if from_date:
+        params["from_date"] = getdate(from_date)
+        conditions.append("pe.posting_date >= %(from_date)s")
+    if to_date:
+        params["to_date"] = getdate(to_date)
+        conditions.append("pe.posting_date <= %(to_date)s")
+    search_text = (search or "").strip()
+    if search_text:
+        params["search"] = f"%{search_text}%"
+        conditions.append("(pe.name LIKE %(search)s OR IFNULL(pe.reference_no, '') LIKE %(search)s OR IFNULL(pe.remarks, '') LIKE %(search)s)")
+
+    rows = frappe.db.sql(
+        f"""
+        SELECT
+            pe.name,
+            pe.posting_date,
+            pe.mode_of_payment,
+            pe.paid_from,
+            pe.paid_amount,
+            pe.unallocated_amount,
+            pe.reference_no,
+            pe.reference_date,
+            pe.remarks
+        FROM `tabPayment Entry` pe
+        WHERE {' AND '.join(conditions)}
+        ORDER BY pe.posting_date ASC, pe.creation ASC
+        LIMIT %(limit)s
+        """,
+        params,
+        as_dict=True,
+    )
+    return [
+        {
+            "payment_entry": row.name,
+            "posting_date": row.posting_date,
+            "mode_of_payment": row.mode_of_payment or "",
+            "paid_from": row.paid_from or "",
+            "paid_amount": flt(row.paid_amount, 2),
+            "unallocated_amount": flt(row.unallocated_amount, 2),
+            "reference_no": row.reference_no or "",
+            "reference_date": row.reference_date,
+            "remarks": row.remarks or "",
+        }
+        for row in rows
+    ]
+
+
+def _sra_validate_supplier_advance(company: str, supplier: str, payment_entry: str) -> frappe._dict:
+    pe = frappe.db.get_value(
+        "Payment Entry",
+        payment_entry,
+        ["name", "company", "party_type", "party", "docstatus", "payment_type", "unallocated_amount", "paid_amount", "posting_date"],
+        as_dict=True,
+    )
+    if not pe:
+        frappe.throw(_("Payment Entry {0} was not found.").format(frappe.bold(payment_entry)))
+    if pe.company != company or pe.party_type != "Supplier" or pe.party != supplier:
+        frappe.throw(_("Payment Entry {0} belongs to another company or supplier.").format(frappe.bold(payment_entry)))
+    if cint(pe.docstatus) != 1 or pe.payment_type != "Pay":
+        frappe.throw(_("Payment Entry {0} must be a submitted supplier payment.").format(frappe.bold(payment_entry)))
+    if flt(pe.unallocated_amount) <= MONEY_TOLERANCE:
+        frappe.throw(_("Payment Entry {0} has no unallocated advance amount.").format(frappe.bold(payment_entry)))
+    return frappe._dict(pe)
+
+
+def _sra_get_payment_reconciliation_doc(company: str, supplier: str, payment_entry: str | None = None):
+    from erpnext.accounts.doctype.payment_reconciliation.payment_reconciliation import PaymentReconciliation  # noqa: F401
+
+    pr = frappe.new_doc("Payment Reconciliation")
+    pr.company = company
+    pr.party_type = "Supplier"
+    pr.party = supplier
+    pr.receivable_payable_account = _sra_get_supplier_party_account(company, supplier)
+    pr.payment_limit = 1000
+    pr.invoice_limit = 1000
+    if payment_entry:
+        pr.payment_name = payment_entry
+    pr.get_unreconciled_entries()
+    return pr
+
+
+def _sra_find_reconciliation_payment(pr, payment_entry: str) -> frappe._dict | None:
+    for payment in pr.get("payments") or []:
+        if payment.get("reference_type") == "Payment Entry" and payment.get("reference_name") == payment_entry:
+            return frappe._dict(payment.as_dict() if hasattr(payment, "as_dict") else payment)
+    return None
+
+
+def _sra_find_reconciliation_invoice(pr, purchase_invoice: str) -> frappe._dict | None:
+    for invoice in pr.get("invoices") or []:
+        if invoice.get("invoice_type") == "Purchase Invoice" and invoice.get("invoice_number") == purchase_invoice:
+            return frappe._dict(invoice.as_dict() if hasattr(invoice, "as_dict") else invoice)
+    return None
+
+
+@frappe.whitelist()
+def preview_supplier_advance_allocation(args: dict | None = None) -> dict:
+    """Validate and preview applying an existing supplier advance to invoices.
+
+    This method is read-only. It does not call Payment Reconciliation.reconcile().
+    """
+    if isinstance(args, str):
+        args = frappe.parse_json(args) or {}
+    args = frappe._dict(args or {})
+
+    company = _sra_payment_required(args.get("company"), "Company")
+    supplier = _sra_payment_required(args.get("supplier"), "Supplier")
+    payment_entry = _sra_payment_required(args.get("payment_entry"), "Payment Entry")
+    include_claim_linked = cint(args.get("include_claim_linked") or 0)
+    pe = _sra_validate_supplier_advance(company, supplier, payment_entry)
+
+    allocations = []
+    total_allocated = 0.0
+    seen = set()
+    for raw in args.get("invoices") or []:
+        row = frappe._dict(raw)
+        invoice = (row.get("invoice") or row.get("purchase_invoice") or "").strip()
+        amount = flt(row.get("allocated_amount"))
+        if not invoice or amount <= MONEY_TOLERANCE:
+            continue
+        if invoice in seen:
+            frappe.throw(_("Purchase Invoice {0} is duplicated in the allocation rows.").format(frappe.bold(invoice)))
+        seen.add(invoice)
+        _sra_validate_invoice_candidate(company, supplier, invoice, amount, include_claim_linked=include_claim_linked)
+        inv = frappe.db.get_value("Purchase Invoice", invoice, ["name", "bill_no", "posting_date", "outstanding_amount"], as_dict=True) or {}
+        allocations.append({
+            "payment_entry": payment_entry,
+            "purchase_invoice": invoice,
+            "supplier_invoice_no": inv.get("bill_no") or "",
+            "posting_date": inv.get("posting_date"),
+            "invoice_outstanding": flt(inv.get("outstanding_amount"), 2),
+            "allocated_amount": flt(amount, 2),
+        })
+        total_allocated += flt(amount)
+
+    if not allocations:
+        frappe.throw(_("Select at least one invoice and enter allocation amount."))
+    if total_allocated - flt(pe.unallocated_amount) > MONEY_TOLERANCE:
+        frappe.throw(_("Allocated amount {0} exceeds unallocated advance {1} for Payment Entry {2}.").format(
+            flt(total_allocated, 2), flt(pe.unallocated_amount, 2), frappe.bold(payment_entry)
+        ))
+
+    return {
+        "payment_entry": payment_entry,
+        "available_advance": flt(pe.unallocated_amount, 2),
+        "allocated_total": flt(total_allocated, 2),
+        "remaining_advance": flt(flt(pe.unallocated_amount) - total_allocated, 2),
+        "allocations": allocations,
+        "read_only": 1,
+    }
+
+
+@frappe.whitelist()
+def reconcile_supplier_advance_against_invoices(args: dict | None = None) -> dict:
+    """Apply an existing supplier advance against selected Purchase Invoices.
+
+    This is an explicit accounting action using ERPNext Payment Reconciliation.
+    It does not create new GL on its own for normal Payment Entry vs Purchase
+    Invoice reconciliation, but it mutates allocation/payment-ledger state.
+    """
+    if isinstance(args, str):
+        args = frappe.parse_json(args) or {}
+    args = frappe._dict(args or {})
+
+    if not ({"Accounts Manager", "System Manager"}.intersection(set(frappe.get_roles())) or frappe.has_permission("Payment Entry", "write")):
+        frappe.throw(_("You are not permitted to reconcile supplier advances."), frappe.PermissionError)
+
+    preview = preview_supplier_advance_allocation(args)
+    company = _sra_payment_required(args.get("company"), "Company")
+    supplier = _sra_payment_required(args.get("supplier"), "Supplier")
+    payment_entry = _sra_payment_required(args.get("payment_entry"), "Payment Entry")
+
+    pr = _sra_get_payment_reconciliation_doc(company, supplier, payment_entry=payment_entry)
+    payment_row = _sra_find_reconciliation_payment(pr, payment_entry)
+    if not payment_row:
+        frappe.throw(_("Payment Entry {0} is not available in ERPNext Payment Reconciliation. Refresh and try again.").format(frappe.bold(payment_entry)))
+
+    invoice_rows = []
+    for alloc in preview.get("allocations") or []:
+        invoice_row = _sra_find_reconciliation_invoice(pr, alloc.get("purchase_invoice"))
+        if not invoice_row:
+            frappe.throw(_("Purchase Invoice {0} is not available in ERPNext Payment Reconciliation. Refresh and try again.").format(
+                frappe.bold(alloc.get("purchase_invoice"))
+            ))
+        invoice_row = frappe._dict(invoice_row)
+        # Limit each invoice copy to the amount explicitly selected in SRA.
+        invoice_row.outstanding_amount = flt(alloc.get("allocated_amount"))
+        invoice_rows.append(invoice_row)
+
+    # Let ERPNext build the exact allocation rows for this Payment Entry and the
+    # selected invoice portions, then reconcile explicitly.
+    payment_copy = frappe._dict(payment_row)
+    payment_copy.amount = flt(payment_row.get("amount") or payment_row.get("unreconciled_amount") or preview.get("available_advance"))
+    pr.allocate_entries({"payments": [payment_copy], "invoices": invoice_rows})
+    if not pr.get("allocation"):
+        frappe.throw(_("ERPNext did not create any allocation rows. No reconciliation was applied."))
+    pr.reconcile()
+
+    return {
+        "payment_entry": payment_entry,
+        "allocated_total": preview.get("allocated_total"),
+        "remaining_advance_before_refresh": preview.get("remaining_advance"),
+        "reconciled": 1,
+        "allocations": preview.get("allocations"),
+    }
+

@@ -22,6 +22,7 @@ class SupplierRunningAccountPage {
         this.page.add_inner_button(__("Export CSV"), () => this.exportCsv(), __("Actions"));
         this.page.add_inner_button(__("Open Supplier"), () => this.openSupplier(), __("Actions"));
         this.page.add_inner_button(__("Create Payment Draft"), () => this.openPaymentDraftDialog(), __("Actions"));
+        this.page.add_inner_button(__("Use Existing Advance"), () => this.openUseExistingAdvanceDialog(), __("Actions"));
         this.page.add_inner_button(__("Create Supplier Claim Draft"), () => this.openSupplierClaimDraftDialog(), __("Actions"));
         this.loadBootstrap();
     }
@@ -259,6 +260,7 @@ class SupplierRunningAccountPage {
                 "Direct Pay Candidates",
                 "Claim Candidates",
                 "Linked to Claim",
+                "Unallocated Advances",
                 "Cash Invoices",
                 "Claim Invoices",
                 "Credit Outside Claim",
@@ -350,6 +352,7 @@ class SupplierRunningAccountPage {
             [__("Returns / Credits"), s.total_returns_credits],
             [__("Claim Deductions"), s.total_claim_deductions],
             [__("Supplier Refunds"), s.total_refunds],
+            [__("Unallocated Advances"), s.total_unallocated_advances],
             [__("Adjustments / Rounding"), s.adjustments_rounding],
             [__("Closing Balance"), s.closing_balance],
         ];
@@ -504,6 +507,7 @@ class SupplierRunningAccountPage {
         const isInvoice = (row) => row.document_type === "Purchase Invoice" && !cint(row.is_purchase_return);
         const classification = (row) => String(row.settlement_classification || "").trim();
         const linkedClaim = (row) => !!String(row.related_supplier_claim || "").trim();
+        const isUnallocatedAdvance = (row) => row.document_type === "Payment Entry" && flt(row.outstanding_amount || 0) > 0.005;
 
         let displayRows = allRows;
         if (view === "Outstanding Invoices") {
@@ -514,6 +518,8 @@ class SupplierRunningAccountPage {
             displayRows = allRows.filter(row => isInvoice(row) && hasOutstanding(row) && !linkedClaim(row) && classification(row) === "Claim Invoice");
         } else if (view === "Linked to Claim") {
             displayRows = allRows.filter(row => linkedClaim(row));
+        } else if (view === "Unallocated Advances") {
+            displayRows = allRows.filter(row => isUnallocatedAdvance(row));
         } else if (view === "Cash Invoices") {
             displayRows = allRows.filter(row => classification(row) === "Cash Invoice");
         } else if (view === "Claim Invoices") {
@@ -531,6 +537,7 @@ class SupplierRunningAccountPage {
             "Direct Pay Candidates",
             "Claim Candidates",
             "Linked to Claim",
+            "Unallocated Advances",
             "Cash Invoices",
             "Claim Invoices",
             "Credit Outside Claim"
@@ -971,6 +978,240 @@ class SupplierRunningAccountPage {
         };
         dialog.show();
         renderInvoiceCandidatesHtml([]);
+    }
+
+
+    async openUseExistingAdvanceDialog() {
+        const supplier = this.controls.supplier.get_value();
+        const company = this.controls.company.get_value();
+        if (!company || !supplier) {
+            frappe.msgprint(__("Select Company and Supplier first."));
+            return;
+        }
+
+        const money = (value) => this.money(flt(value || 0));
+        const dialog = new frappe.ui.Dialog({
+            title: __("Use Existing Supplier Advance"),
+            fields: [
+                { fieldname: "company", fieldtype: "Link", label: __("Company"), options: "Company", default: company, reqd: 1, read_only: 1 },
+                { fieldname: "supplier", fieldtype: "Link", label: __("Supplier"), options: "Supplier", default: supplier, reqd: 1, read_only: 1 },
+                { fieldname: "payment_entry", fieldtype: "Link", label: __("Advance Payment Entry"), options: "Payment Entry", reqd: 1, description: __("Select a submitted supplier Payment Entry with unallocated amount."), get_query: () => ({ filters: { company, party_type: "Supplier", party: supplier, docstatus: 1, payment_type: "Pay" } }) },
+                { fieldname: "available_advance", fieldtype: "Currency", label: __("Available Advance"), read_only: 1 },
+                { fieldtype: "Column Break" },
+                { fieldname: "advance_from_date", fieldtype: "Date", label: __("Advance From"), default: this.controls.from_date ? this.controls.from_date.get_value() : "" },
+                { fieldname: "advance_to_date", fieldtype: "Date", label: __("Advance To"), default: this.controls.to_date ? this.controls.to_date.get_value() : "" },
+                { fieldname: "advance_search", fieldtype: "Data", label: __("Advance Search") },
+                { fieldname: "load_advances", fieldtype: "Button", label: __("Load Advances") },
+                { fieldtype: "Section Break", label: __("Outstanding Invoices") },
+                { fieldname: "include_claim_linked", fieldtype: "Check", label: __("Include invoices already linked to Supplier Claim"), default: 0 },
+                { fieldname: "candidate_from_date", fieldtype: "Date", label: __("From Invoice Date"), default: this.controls.from_date ? this.controls.from_date.get_value() : "" },
+                { fieldname: "candidate_to_date", fieldtype: "Date", label: __("To Invoice Date"), default: this.controls.to_date ? this.controls.to_date.get_value() : "" },
+                { fieldtype: "Column Break" },
+                { fieldname: "candidate_search", fieldtype: "Data", label: __("Invoice No / Supplier Invoice No") },
+                { fieldname: "load_invoices", fieldtype: "Button", label: __("Load Invoices") },
+                { fieldname: "auto_allocate", fieldtype: "Button", label: __("Auto Allocate Advance") },
+                { fieldname: "clear_allocations", fieldtype: "Button", label: __("Clear Allocations") },
+                { fieldtype: "Section Break", label: __("Allocation Review") },
+                { fieldname: "advance_allocation_html", fieldtype: "HTML" },
+            ],
+            primary_action_label: __("Apply Reconciliation"),
+            primary_action: async () => {
+                const values = dialog.get_values() || {};
+                const rows = getSelectedInvoiceRows();
+                if (!values.payment_entry) {
+                    frappe.msgprint(__("Select an Advance Payment Entry first."));
+                    return;
+                }
+                if (!rows.length) {
+                    frappe.msgprint(__("Select at least one invoice and enter allocation amount."));
+                    return;
+                }
+                const preview = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.preview_supplier_advance_allocation",
+                    args: { args: { company, supplier, payment_entry: values.payment_entry, include_claim_linked: values.include_claim_linked ? 1 : 0, invoices: rows } },
+                    freeze: true,
+                    freeze_message: __("Validating advance allocation...")
+                });
+                const p = preview.message || {};
+                await new Promise((resolve) => {
+                    frappe.confirm(
+                        `<b>${__("Apply Supplier Advance Reconciliation?")}</b><br><br>` +
+                        `${__("Payment Entry")}: <b>${frappe.utils.escape_html(values.payment_entry)}</b><br>` +
+                        `${__("Allocated Total")}: <b>${money(p.allocated_total)}</b><br>` +
+                        `${__("Remaining Advance")}: <b>${money(p.remaining_advance)}</b><br><br>` +
+                        `<span class="text-muted">${__("This uses ERPNext Payment Reconciliation. No new payment draft is created, but invoice/payment allocation state will be updated immediately.")}</span>`,
+                        () => resolve(true),
+                        () => resolve(false)
+                    );
+                }).then(async (confirmed) => {
+                    if (!confirmed) return;
+                    dialog.hide();
+                    const r = await frappe.call({
+                        method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.reconcile_supplier_advance_against_invoices",
+                        args: { args: { company, supplier, payment_entry: values.payment_entry, include_claim_linked: values.include_claim_linked ? 1 : 0, invoices: rows } },
+                        freeze: true,
+                        freeze_message: __("Applying ERPNext Payment Reconciliation...")
+                    });
+                    const out = r.message || {};
+                    frappe.show_alert({ message: __("Supplier advance reconciled: {0}", [values.payment_entry]), indicator: "green" }, 8);
+                    this.loadStatement();
+                    if (out.payment_entry) frappe.set_route("Form", "Payment Entry", out.payment_entry);
+                });
+            }
+        });
+
+        dialog.$wrapper.addClass("sra-payment-draft-dialog");
+        dialog.__sra_advances = [];
+        dialog.__sra_invoice_candidates = [];
+
+        const getSelectedInvoiceRows = () => (dialog.__sra_invoice_candidates || [])
+            .map(row => ({
+                invoice: row.invoice,
+                supplier_invoice_no: row.supplier_invoice_no || "",
+                outstanding_amount: row.outstanding_amount || 0,
+                settlement_classification: row.settlement_classification || "",
+                allocated_amount: flt(row.allocated_amount || 0),
+            }))
+            .filter(row => flt(row.allocated_amount || 0) > 0.005);
+
+        const summaryHtml = () => {
+            const advance = flt(dialog.get_value("available_advance") || 0);
+            const loadedOutstanding = (dialog.__sra_invoice_candidates || []).reduce((sum, row) => sum + flt(row.outstanding_amount || 0), 0);
+            const allocated = getSelectedInvoiceRows().reduce((sum, row) => sum + flt(row.allocated_amount || 0), 0);
+            const remaining = advance - allocated;
+            const cls = remaining < -0.005 ? "sra-candidate-over" : (remaining > 0.005 ? "sra-candidate-advance" : "sra-candidate-ok");
+            return `<div class="sra-candidate-summary">
+                <span><strong>${__("Available Advance")}:</strong> ${money(advance)}</span>
+                <span><strong>${__("Loaded Outstanding")}:</strong> ${money(loadedOutstanding)}</span>
+                <span><strong>${__("Allocated Total")}:</strong> ${money(allocated)}</span>
+                <span class="${cls}"><strong>${__("Remaining Advance")}:</strong> ${money(remaining)}</span>
+            </div>`;
+        };
+
+        const render = () => {
+            const field = dialog.fields_dict.advance_allocation_html;
+            if (!field || !field.$wrapper) return;
+            const advances = dialog.__sra_advances || [];
+            const invoices = dialog.__sra_invoice_candidates || [];
+            const advancesHtml = advances.length ? `
+                <div class="sra-dialog-help">${__("Choose one unallocated Payment Entry advance, then allocate it against outstanding supplier invoices.")}</div>
+                <div class="sra-candidate-list-wrap"><table class="sra-candidate-list">
+                    <thead><tr><th>${__("Use")}</th><th>${__("Payment Entry")}</th><th>${__("Date")}</th><th>${__("Paid")}</th><th>${__("Unallocated")}</th><th>${__("Reference")}</th></tr></thead>
+                    <tbody>${advances.map((row, idx) => `
+                        <tr>
+                            <td><button class="btn btn-xs btn-default sra-use-advance" data-idx="${idx}">${__("Use")}</button></td>
+                            <td>${this.docLink("Payment Entry", row.payment_entry)}</td>
+                            <td>${row.posting_date ? frappe.datetime.str_to_user(row.posting_date) : ""}</td>
+                            <td class="sra-pay-amount">${money(row.paid_amount)}</td>
+                            <td class="sra-pay-amount sra-candidate-advance">${money(row.unallocated_amount)}</td>
+                            <td>${this.esc(row.reference_no || "")}</td>
+                        </tr>`).join("")}</tbody>
+                </table></div>` : `<div class="sra-candidate-empty">${__("No loaded advances yet. Click Load Advances.")}</div>`;
+            const invoicesHtml = invoices.length ? `
+                <div class="sra-candidate-list-wrap"><table class="sra-candidate-list">
+                    <thead><tr><th>${__("Invoice")}</th><th>${__("Supplier Inv No")}</th><th>${__("Date")}</th><th>${__("Outstanding")}</th><th>${__("Settlement Type")}</th><th>${__("Allocate")}</th></tr></thead>
+                    <tbody>${invoices.map((row, idx) => `
+                        <tr>
+                            <td>${this.docLink("Purchase Invoice", row.invoice)}</td>
+                            <td>${this.esc(row.supplier_invoice_no || "")}</td>
+                            <td>${row.posting_date ? frappe.datetime.str_to_user(row.posting_date) : ""}</td>
+                            <td class="sra-pay-amount">${money(row.outstanding_amount || 0)}</td>
+                            <td>${this.settlementBadge(row.settlement_classification || "")}</td>
+                            <td><input class="form-control sra-adv-alloc-input" data-idx="${idx}" value="${flt(row.allocated_amount || 0) || ""}" /></td>
+                        </tr>`).join("")}</tbody>
+                </table></div>` : `<div class="sra-candidate-empty">${__("No loaded invoices yet. Click Load Invoices.")}</div>`;
+            field.$wrapper.html(`${summaryHtml()}${advancesHtml}<hr>${invoicesHtml}`);
+        };
+
+        dialog.$wrapper.on("click", ".sra-use-advance", (e) => {
+            const idx = cint($(e.currentTarget).data("idx"));
+            const row = (dialog.__sra_advances || [])[idx];
+            if (!row) return;
+            dialog.set_value("payment_entry", row.payment_entry);
+            dialog.set_value("available_advance", flt(row.unallocated_amount || 0));
+            render();
+        });
+        dialog.$wrapper.on("change input", ".sra-adv-alloc-input", (e) => {
+            const idx = cint($(e.currentTarget).data("idx"));
+            const row = (dialog.__sra_invoice_candidates || [])[idx];
+            if (!row) return;
+            let value = flt($(e.currentTarget).val() || 0);
+            const outstanding = flt(row.outstanding_amount || 0);
+            if (value < 0) value = 0;
+            if (value > outstanding) value = outstanding;
+            row.allocated_amount = value;
+            render();
+        });
+
+        const loadAdvances = async () => {
+            const values = dialog.get_values() || {};
+            const r = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.get_supplier_unallocated_advances",
+                args: { company, supplier, from_date: values.advance_from_date || "", to_date: values.advance_to_date || "", search: values.advance_search || "", limit: 200 },
+                freeze: true,
+                freeze_message: __("Loading supplier advances...")
+            });
+            dialog.__sra_advances = r.message || [];
+            render();
+            if (!dialog.__sra_advances.length) frappe.msgprint(__("No unallocated supplier advances found for the selected filters."));
+        };
+        const loadInvoices = async () => {
+            const values = dialog.get_values() || {};
+            const r = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.get_supplier_payment_candidates",
+                args: { company, supplier, include_claim_linked: values.include_claim_linked ? 1 : 0, from_date: values.candidate_from_date || "", to_date: values.candidate_to_date || "", search: values.candidate_search || "", limit: 500 },
+                freeze: true,
+                freeze_message: __("Loading invoice candidates...")
+            });
+            dialog.__sra_invoice_candidates = (r.message || []).map(row => ({
+                invoice: row.name,
+                supplier_invoice_no: row.supplier_invoice_no || "",
+                posting_date: row.posting_date,
+                outstanding_amount: row.outstanding_amount || 0,
+                settlement_classification: row.settlement_classification || "",
+                allocated_amount: 0,
+            }));
+            render();
+            if (!dialog.__sra_invoice_candidates.length) frappe.msgprint(__("No matching outstanding invoices found for the selected filters."));
+        };
+        const autoAllocate = () => {
+            const advance = flt(dialog.get_value("available_advance") || 0);
+            if (advance <= 0.005) {
+                frappe.msgprint(__("Select an advance first."));
+                return;
+            }
+            if (!(dialog.__sra_invoice_candidates || []).length) {
+                frappe.msgprint(__("Load invoices first."));
+                return;
+            }
+            let remaining = advance;
+            (dialog.__sra_invoice_candidates || []).forEach(row => {
+                const outstanding = flt(row.outstanding_amount || 0);
+                const allocated = remaining > 0 ? Math.min(outstanding, remaining) : 0;
+                row.allocated_amount = allocated;
+                remaining -= allocated;
+            });
+            render();
+        };
+
+        dialog.fields_dict.load_advances.$input.on("click", loadAdvances);
+        dialog.fields_dict.load_invoices.$input.on("click", loadInvoices);
+        dialog.fields_dict.auto_allocate.$input.on("click", autoAllocate);
+        dialog.fields_dict.clear_allocations.$input.on("click", () => {
+            (dialog.__sra_invoice_candidates || []).forEach(row => row.allocated_amount = 0);
+            render();
+        });
+        dialog.fields_dict.payment_entry.df.onchange = async () => {
+            const pe = dialog.get_value("payment_entry");
+            const found = (dialog.__sra_advances || []).find(row => row.payment_entry === pe);
+            if (found) {
+                dialog.set_value("available_advance", flt(found.unallocated_amount || 0));
+                render();
+            }
+        };
+
+        dialog.show();
+        render();
     }
 
     async openSupplierClaimDraftDialog() {
