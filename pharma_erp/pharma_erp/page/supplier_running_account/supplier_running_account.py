@@ -1649,6 +1649,7 @@ def preview_supplier_advance_allocation(args: dict | None = None) -> dict:
     pe = _sra_validate_supplier_advance(company, supplier, payment_entry)
 
     allocations = []
+    linked_claims = []
     total_allocated = 0.0
     seen = set()
     for raw in args.get("invoices") or []:
@@ -1661,6 +1662,9 @@ def preview_supplier_advance_allocation(args: dict | None = None) -> dict:
             frappe.throw(_("Purchase Invoice {0} is duplicated in the allocation rows.").format(frappe.bold(invoice)))
         seen.add(invoice)
         _sra_validate_invoice_candidate(company, supplier, invoice, amount, include_claim_linked=include_claim_linked)
+        linked_claim = _sra_find_claim_for_invoice(invoice) or ""
+        if linked_claim:
+            linked_claims.append({"purchase_invoice": invoice, "supplier_claim": linked_claim, "allocated_amount": flt(amount, 2)})
         inv = frappe.db.get_value("Purchase Invoice", invoice, ["name", "bill_no", "posting_date", "outstanding_amount"], as_dict=True) or {}
         allocations.append({
             "payment_entry": payment_entry,
@@ -1668,6 +1672,7 @@ def preview_supplier_advance_allocation(args: dict | None = None) -> dict:
             "supplier_invoice_no": inv.get("bill_no") or "",
             "posting_date": inv.get("posting_date"),
             "invoice_outstanding": flt(inv.get("outstanding_amount"), 2),
+            "related_supplier_claim": linked_claim,
             "allocated_amount": flt(amount, 2),
         })
         total_allocated += flt(amount)
@@ -1685,6 +1690,8 @@ def preview_supplier_advance_allocation(args: dict | None = None) -> dict:
         "allocated_total": flt(total_allocated, 2),
         "remaining_advance": flt(flt(pe.unallocated_amount) - total_allocated, 2),
         "allocations": allocations,
+        "linked_claims": linked_claims,
+        "linked_claim_count": len(linked_claims),
         "read_only": 1,
     }
 
@@ -1705,6 +1712,12 @@ def reconcile_supplier_advance_against_invoices(args: dict | None = None) -> dic
         frappe.throw(_("You are not permitted to reconcile supplier advances."), frappe.PermissionError)
 
     preview = preview_supplier_advance_allocation(args)
+    if preview.get("linked_claims") and not cint(args.get("confirm_claim_linked") or 0):
+        linked_text = ", ".join(
+            "{0} → {1}".format(row.get("purchase_invoice"), row.get("supplier_claim"))
+            for row in preview.get("linked_claims")[:8]
+        )
+        frappe.throw(_("Some selected invoices are already linked to Supplier Claims. Confirm linked-claim reconciliation explicitly before applying: {0}").format(linked_text))
     company = _sra_payment_required(args.get("company"), "Company")
     supplier = _sra_payment_required(args.get("supplier"), "Supplier")
     payment_entry = _sra_payment_required(args.get("payment_entry"), "Payment Entry")

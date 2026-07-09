@@ -169,6 +169,9 @@ class SupplierRunningAccountPage {
                 .sra-candidate-advance { color:#8a5a12; font-weight:800; }
                 .sra-candidate-over { color:#b42318; font-weight:800; }
                 .sra-candidate-ok { color:#0b6e4f; font-weight:800; }
+                .sra-candidate-warning { color:#b54708; font-weight:800; }
+                .sra-claim-linked-row td { background:#fff7ed !important; }
+                .sra-advance-safety-note { margin:8px 0; padding:8px 10px; border:1px solid #fed7aa; border-radius:10px; background:#fff7ed; color:#9a3412; font-size:12px; font-weight:700; line-height:1.4; }
                 .sra-payment-draft-dialog [data-fieldname="invoice_search_section"] { clear:both; width:100%; }
                 .sra-payment-draft-dialog [data-fieldname="candidate_search"] input { font-weight:700; }
                 .sra-payment-draft-dialog [data-fieldname="selected_invoices_section"] { clear:both; width:100%; }
@@ -1003,7 +1006,7 @@ class SupplierRunningAccountPage {
                 { fieldname: "advance_search", fieldtype: "Data", label: __("Advance Search") },
                 { fieldname: "load_advances", fieldtype: "Button", label: __("Load Advances") },
                 { fieldtype: "Section Break", label: __("Outstanding Invoices") },
-                { fieldname: "include_claim_linked", fieldtype: "Check", label: __("Include invoices already linked to Supplier Claim"), default: 0 },
+                { fieldname: "include_claim_linked", fieldtype: "Check", label: __("Include invoices already linked to Supplier Claim"), default: 0, description: __("Safety warning: linked claim invoices are hidden by default. Enable only when intentionally paying original invoices outside a Supplier Claim.") },
                 { fieldname: "candidate_from_date", fieldtype: "Date", label: __("From Invoice Date"), default: this.controls.from_date ? this.controls.from_date.get_value() : "" },
                 { fieldname: "candidate_to_date", fieldtype: "Date", label: __("To Invoice Date"), default: this.controls.to_date ? this.controls.to_date.get_value() : "" },
                 { fieldtype: "Column Break" },
@@ -1018,6 +1021,7 @@ class SupplierRunningAccountPage {
             primary_action: async () => {
                 const values = dialog.get_values() || {};
                 const rows = getSelectedInvoiceRows();
+                const claimLinkedRows = rows.filter(row => String(row.related_supplier_claim || "").trim());
                 if (!values.payment_entry) {
                     frappe.msgprint(__("Select an Advance Payment Entry first."));
                     return;
@@ -1028,7 +1032,7 @@ class SupplierRunningAccountPage {
                 }
                 const preview = await frappe.call({
                     method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.preview_supplier_advance_allocation",
-                    args: { args: { company, supplier, payment_entry: values.payment_entry, include_claim_linked: values.include_claim_linked ? 1 : 0, invoices: rows } },
+                    args: { args: { company, supplier, payment_entry: values.payment_entry, include_claim_linked: values.include_claim_linked ? 1 : 0, confirm_claim_linked: claimLinkedRows.length ? 1 : 0, invoices: rows } },
                     freeze: true,
                     freeze_message: __("Validating advance allocation...")
                 });
@@ -1038,8 +1042,9 @@ class SupplierRunningAccountPage {
                         `<b>${__("Apply Supplier Advance Reconciliation?")}</b><br><br>` +
                         `${__("Payment Entry")}: <b>${frappe.utils.escape_html(values.payment_entry)}</b><br>` +
                         `${__("Allocated Total")}: <b>${money(p.allocated_total)}</b><br>` +
-                        `${__("Remaining Advance")}: <b>${money(p.remaining_advance)}</b><br><br>` +
-                        `<span class="text-muted">${__("This uses ERPNext Payment Reconciliation. No new payment draft is created, but invoice/payment allocation state will be updated immediately.")}</span>`,
+                        `${__("Remaining Advance")}: <b>${money(p.remaining_advance)}</b><br>` +
+                        (claimLinkedRows.length ? `<br><span class="sra-candidate-over">${__("Warning")}: ${__("Some selected invoices are already linked to Supplier Claims. This will reconcile the original Purchase Invoices directly and may bypass claim-level payment review.")}</span><br>${claimLinkedRows.slice(0, 6).map(row => `${frappe.utils.escape_html(row.invoice)} → ${frappe.utils.escape_html(row.related_supplier_claim)}`).join("<br>")}<br>` : "") +
+                        `<br><span class="text-muted">${__("This uses ERPNext Payment Reconciliation. No new payment draft is created, but invoice/payment allocation state will be updated immediately.")}</span>`,
                         () => resolve(true),
                         () => resolve(false)
                     );
@@ -1048,7 +1053,7 @@ class SupplierRunningAccountPage {
                     dialog.hide();
                     const r = await frappe.call({
                         method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.reconcile_supplier_advance_against_invoices",
-                        args: { args: { company, supplier, payment_entry: values.payment_entry, include_claim_linked: values.include_claim_linked ? 1 : 0, invoices: rows } },
+                        args: { args: { company, supplier, payment_entry: values.payment_entry, include_claim_linked: values.include_claim_linked ? 1 : 0, confirm_claim_linked: claimLinkedRows.length ? 1 : 0, invoices: rows } },
                         freeze: true,
                         freeze_message: __("Applying ERPNext Payment Reconciliation...")
                     });
@@ -1070,6 +1075,7 @@ class SupplierRunningAccountPage {
                 supplier_invoice_no: row.supplier_invoice_no || "",
                 outstanding_amount: row.outstanding_amount || 0,
                 settlement_classification: row.settlement_classification || "",
+                related_supplier_claim: row.related_supplier_claim || "",
                 allocated_amount: flt(row.allocated_amount || 0),
             }))
             .filter(row => flt(row.allocated_amount || 0) > 0.005);
@@ -1080,12 +1086,14 @@ class SupplierRunningAccountPage {
             const allocated = getSelectedInvoiceRows().reduce((sum, row) => sum + flt(row.allocated_amount || 0), 0);
             const remaining = advance - allocated;
             const cls = remaining < -0.005 ? "sra-candidate-over" : (remaining > 0.005 ? "sra-candidate-advance" : "sra-candidate-ok");
+            const linkedAllocated = getSelectedInvoiceRows().filter(row => String(row.related_supplier_claim || "").trim()).length;
+            const linkedWarning = linkedAllocated ? `<div class="sra-advance-safety-note">${__("Safety warning")}: ${linkedAllocated} ${__("allocated invoice(s) are already linked to Supplier Claims. Reconcile only if this is intentional and reviewed.")}</div>` : "";
             return `<div class="sra-candidate-summary">
                 <span><strong>${__("Available Advance")}:</strong> ${money(advance)}</span>
                 <span><strong>${__("Loaded Outstanding")}:</strong> ${money(loadedOutstanding)}</span>
                 <span><strong>${__("Allocated Total")}:</strong> ${money(allocated)}</span>
                 <span class="${cls}"><strong>${__("Remaining Advance")}:</strong> ${money(remaining)}</span>
-            </div>`;
+            </div>${linkedWarning}`;
         };
 
         const render = () => {
@@ -1109,14 +1117,15 @@ class SupplierRunningAccountPage {
                 </table></div>` : `<div class="sra-candidate-empty">${__("No loaded advances yet. Click Load Advances.")}</div>`;
             const invoicesHtml = invoices.length ? `
                 <div class="sra-candidate-list-wrap"><table class="sra-candidate-list">
-                    <thead><tr><th>${__("Invoice")}</th><th>${__("Supplier Inv No")}</th><th>${__("Date")}</th><th>${__("Outstanding")}</th><th>${__("Settlement Type")}</th><th>${__("Allocate")}</th></tr></thead>
+                    <thead><tr><th>${__("Invoice")}</th><th>${__("Supplier Inv No")}</th><th>${__("Date")}</th><th>${__("Outstanding")}</th><th>${__("Settlement Type")}</th><th>${__("Supplier Claim")}</th><th>${__("Allocate")}</th></tr></thead>
                     <tbody>${invoices.map((row, idx) => `
-                        <tr>
+                        <tr class="${String(row.related_supplier_claim || "").trim() ? "sra-claim-linked-row" : ""}">
                             <td>${this.docLink("Purchase Invoice", row.invoice)}</td>
                             <td>${this.esc(row.supplier_invoice_no || "")}</td>
                             <td>${row.posting_date ? frappe.datetime.str_to_user(row.posting_date) : ""}</td>
                             <td class="sra-pay-amount">${money(row.outstanding_amount || 0)}</td>
                             <td>${this.settlementBadge(row.settlement_classification || "")}</td>
+                            <td>${row.related_supplier_claim ? this.docLink("Supplier Claim", row.related_supplier_claim) : `<span class="sra-pill sra-pill-muted">${__("None")}</span>`}</td>
                             <td><input class="form-control sra-adv-alloc-input" data-idx="${idx}" value="${flt(row.allocated_amount || 0) || ""}" /></td>
                         </tr>`).join("")}</tbody>
                 </table></div>` : `<div class="sra-candidate-empty">${__("No loaded invoices yet. Click Load Invoices.")}</div>`;
@@ -1169,10 +1178,14 @@ class SupplierRunningAccountPage {
                 posting_date: row.posting_date,
                 outstanding_amount: row.outstanding_amount || 0,
                 settlement_classification: row.settlement_classification || "",
+                related_supplier_claim: row.related_supplier_claim || "",
                 allocated_amount: 0,
             }));
             render();
             if (!dialog.__sra_invoice_candidates.length) frappe.msgprint(__("No matching outstanding invoices found for the selected filters."));
+            else if ((values.include_claim_linked ? 1 : 0) && dialog.__sra_invoice_candidates.some(row => String(row.related_supplier_claim || "").trim())) {
+                frappe.msgprint(__("Linked Supplier Claim invoices were loaded because Include linked claims is enabled. Review the Supplier Claim column before applying reconciliation."));
+            }
         };
         const autoAllocate = () => {
             const advance = flt(dialog.get_value("available_advance") || 0);
@@ -1185,13 +1198,21 @@ class SupplierRunningAccountPage {
                 return;
             }
             let remaining = advance;
-            (dialog.__sra_invoice_candidates || []).forEach(row => {
+            (dialog.__sra_invoice_candidates || []).forEach(row => row.allocated_amount = 0);
+            const ordered = [
+                ...(dialog.__sra_invoice_candidates || []).filter(row => !String(row.related_supplier_claim || "").trim()),
+                ...(dialog.__sra_invoice_candidates || []).filter(row => String(row.related_supplier_claim || "").trim()),
+            ];
+            ordered.forEach(row => {
                 const outstanding = flt(row.outstanding_amount || 0);
                 const allocated = remaining > 0 ? Math.min(outstanding, remaining) : 0;
                 row.allocated_amount = allocated;
                 remaining -= allocated;
             });
             render();
+            if (getSelectedInvoiceRows().some(row => String(row.related_supplier_claim || "").trim())) {
+                frappe.msgprint(__("Auto allocation reached invoices linked to Supplier Claims. Review the Supplier Claim column before applying reconciliation."));
+            }
         };
 
         dialog.fields_dict.load_advances.$input.on("click", loadAdvances);
