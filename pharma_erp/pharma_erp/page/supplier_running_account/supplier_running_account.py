@@ -8,12 +8,14 @@ Entry, Supplier Claim, and Pharmacy Return Case links where available.
 
 from __future__ import annotations
 
+import json
 import re
+from html import escape as _html_escape
 from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import add_months, cint, flt, get_first_day, getdate, nowdate
+from frappe.utils import add_months, cint, flt, get_first_day, getdate, now, nowdate
 
 READ_ROLES = {
     "Purchase User",
@@ -23,6 +25,87 @@ READ_ROLES = {
     "System Manager",
 }
 MONEY_TOLERANCE = 0.01
+
+ACTION_ROLES = {
+    "create_supplier_payment_draft": {"Purchase Manager", "Accounts User", "Accounts Manager", "System Manager"},
+    "create_supplier_claim_draft": {"Purchase Manager", "Accounts User", "Accounts Manager", "System Manager"},
+    "reconcile_supplier_advance": {"Accounts Manager", "System Manager"},
+}
+
+
+def _sra_roles() -> set[str]:
+    return set(frappe.get_roles())
+
+
+def _sra_require_action_permission(action: str, doctype: str | None = None, perm: str = "write") -> None:
+    """Central action gate for SRA write/mutation actions.
+
+    Read access remains broad, but creating drafts and applying reconciliation are
+    explicit operational actions. We allow either the configured operational
+    roles or native ERPNext permission on the target doctype.
+    """
+    roles_allowed = ACTION_ROLES.get(action, set())
+    if roles_allowed.intersection(_sra_roles()):
+        return
+    if doctype and frappe.has_permission(doctype, perm):
+        return
+    frappe.throw(_("You are not permitted to perform this Supplier Running Account action: {0}.").format(_(action)), frappe.PermissionError)
+
+
+def _sra_audit_payload(data: dict | None = None) -> str:
+    payload = {
+        "user": frappe.session.user,
+        "timestamp": now(),
+        "source": "Supplier Running Account",
+    }
+    if data:
+        payload.update(data)
+    return json.dumps(payload, default=str, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _sra_add_audit_comment(reference_doctype: str, reference_name: str, action: str, message: str, data: dict | None = None) -> None:
+    """Write a non-blocking audit Comment on the affected ERPNext document.
+
+    This avoids adding a new DocType while still leaving a visible, searchable
+    audit trail on Payment Entry, Supplier Claim, and affected Purchase Invoices.
+    Audit failure must never rollback the business action.
+    """
+    try:
+        if not reference_doctype or not reference_name or not frappe.db.exists(reference_doctype, reference_name):
+            return
+        content = (
+            "<b>Supplier Running Account Audit — {0}</b><br>"
+            "{1}<br>"
+            "<small><pre>{2}</pre></small>"
+        ).format(
+            _html_escape(str(action)),
+            _html_escape(str(message)),
+            _html_escape(_sra_audit_payload(data)),
+        )
+        frappe.get_doc({
+            "doctype": "Comment",
+            "comment_type": "Info",
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+            "content": content,
+        }).insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Supplier Running Account Audit Comment Failed")
+
+
+def _sra_add_audit_comments_for_invoices(invoices: list[dict], action: str, message: str, extra: dict | None = None, limit: int = 50) -> None:
+    for row in (invoices or [])[:limit]:
+        invoice = row.get("invoice") or row.get("purchase_invoice")
+        if not invoice:
+            continue
+        data = dict(extra or {})
+        data.update({
+            "purchase_invoice": invoice,
+            "allocated_amount": row.get("allocated_amount"),
+            "included_amount": row.get("included_amount"),
+            "related_supplier_claim": row.get("related_supplier_claim"),
+        })
+        _sra_add_audit_comment("Purchase Invoice", invoice, action, message, data)
 
 
 def _has_role_access() -> bool:
@@ -967,6 +1050,7 @@ def create_supplier_payment_draft(args: dict | None = None) -> dict:
     amount = _sra_flt(args.get("amount"))
     if amount <= 0:
         frappe.throw(_("Payment amount must be greater than zero."))
+    _sra_require_action_permission("create_supplier_payment_draft", "Payment Entry", "create")
 
     allocation_mode = args.get("allocation_mode") or "Oldest Outstanding First"
     include_claim_linked = int(args.get("include_claim_linked") or 0)
@@ -1049,6 +1133,30 @@ def create_supplier_payment_draft(args: dict | None = None) -> dict:
         pass
     pe.flags.ignore_permissions = False
     pe.insert()
+    audit_allocations = [dict(row) for row in allocations]
+    _sra_add_audit_comment(
+        "Payment Entry",
+        pe.name,
+        "Create Supplier Payment Draft",
+        _("Draft Payment Entry was created from Supplier Running Account. It was not submitted automatically."),
+        {
+            "company": company,
+            "supplier": supplier,
+            "posting_date": posting_date,
+            "amount": flt(amount, 2),
+            "allocated_amount": flt(total_allocated, 2),
+            "unallocated_amount": flt(amount - total_allocated, 2),
+            "allocation_mode": allocation_mode,
+            "invoice_count": len(audit_allocations),
+            "invoices": audit_allocations[:30],
+        },
+    )
+    _sra_add_audit_comments_for_invoices(
+        audit_allocations,
+        "Supplier Payment Draft Allocation",
+        _("This invoice was selected in a draft Supplier Payment created from Supplier Running Account."),
+        {"payment_entry": pe.name, "supplier": supplier},
+    )
     return {"name": pe.name, "doctype": pe.doctype, "allocated_amount": total_allocated, "unallocated_amount": amount - total_allocated}
 
 
@@ -1430,6 +1538,7 @@ def create_supplier_claim_draft(args: dict | None = None) -> dict:
         frappe.throw(_("Period From cannot be after Period To."))
     if not frappe.has_permission("Supplier Claim", "create"):
         frappe.throw(_("You are not permitted to create Supplier Claims."), frappe.PermissionError)
+    _sra_require_action_permission("create_supplier_claim_draft", "Supplier Claim", "create")
 
     selected_rows = []
     seen = set()
@@ -1493,6 +1602,39 @@ def create_supplier_claim_draft(args: dict | None = None) -> dict:
 
     claim.insert()
     claim.reload()
+    audit_rows = [
+        {
+            "purchase_invoice": invoice.name,
+            "included_amount": flt(included_amount, 2),
+            "is_return": cint(invoice.is_return),
+            "outstanding_amount": flt(invoice.outstanding_amount, 2),
+        }
+        for invoice, included_amount in selected_rows
+    ]
+    _sra_add_audit_comment(
+        "Supplier Claim",
+        claim.name,
+        "Create Supplier Claim Draft",
+        _("Draft Supplier Claim was created from Supplier Running Account. It was not submitted automatically."),
+        {
+            "company": company,
+            "supplier": supplier,
+            "period_from": period_from,
+            "period_to": period_to,
+            "gross_claim_total": flt(claim.gross_claim_total, 2),
+            "purchase_returns_total": flt(claim.purchase_returns_total, 2),
+            "system_claim_total": flt(claim.system_claim_total, 2),
+            "net_amount_to_pay": flt(claim.net_amount_to_pay, 2),
+            "invoice_count": len(audit_rows),
+            "invoices": audit_rows[:50],
+        },
+    )
+    _sra_add_audit_comments_for_invoices(
+        audit_rows,
+        "Supplier Claim Draft Inclusion",
+        _("This Purchase Invoice / Debit Note was included in a draft Supplier Claim created from Supplier Running Account."),
+        {"supplier_claim": claim.name, "supplier": supplier},
+    )
     return {
         "name": claim.name,
         "doctype": claim.doctype,
@@ -1708,8 +1850,7 @@ def reconcile_supplier_advance_against_invoices(args: dict | None = None) -> dic
         args = frappe.parse_json(args) or {}
     args = frappe._dict(args or {})
 
-    if not ({"Accounts Manager", "System Manager"}.intersection(set(frappe.get_roles())) or frappe.has_permission("Payment Entry", "write")):
-        frappe.throw(_("You are not permitted to reconcile supplier advances."), frappe.PermissionError)
+    _sra_require_action_permission("reconcile_supplier_advance", "Payment Entry", "write")
 
     preview = preview_supplier_advance_allocation(args)
     if preview.get("linked_claims") and not cint(args.get("confirm_claim_linked") or 0):
@@ -1747,6 +1888,28 @@ def reconcile_supplier_advance_against_invoices(args: dict | None = None) -> dic
     if not pr.get("allocation"):
         frappe.throw(_("ERPNext did not create any allocation rows. No reconciliation was applied."))
     pr.reconcile()
+
+    _sra_add_audit_comment(
+        "Payment Entry",
+        payment_entry,
+        "Apply Existing Supplier Advance",
+        _("Existing supplier advance was reconciled against selected Purchase Invoices from Supplier Running Account."),
+        {
+            "company": company,
+            "supplier": supplier,
+            "allocated_total": preview.get("allocated_total"),
+            "remaining_advance_before_refresh": preview.get("remaining_advance"),
+            "linked_claim_count": preview.get("linked_claim_count"),
+            "confirm_claim_linked": cint(args.get("confirm_claim_linked") or 0),
+            "allocations": (preview.get("allocations") or [])[:50],
+        },
+    )
+    _sra_add_audit_comments_for_invoices(
+        preview.get("allocations") or [],
+        "Existing Supplier Advance Allocation",
+        _("Existing supplier advance was reconciled against this Purchase Invoice from Supplier Running Account."),
+        {"payment_entry": payment_entry, "supplier": supplier},
+    )
 
     return {
         "payment_entry": payment_entry,

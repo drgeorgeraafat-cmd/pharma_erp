@@ -764,7 +764,7 @@ class SupplierRunningAccountPage {
                 });
                 const out = r.message || {};
                 if (out.name) {
-                    frappe.show_alert({ message: __("Draft Payment Entry created: {0}", [out.name]), indicator: "green" });
+                    frappe.show_alert({ message: __("Draft Payment Entry created with audit log: {0}", [out.name]), indicator: "green" });
                     frappe.set_route("Form", "Payment Entry", out.name);
                 }
             }
@@ -1058,7 +1058,7 @@ class SupplierRunningAccountPage {
                         freeze_message: __("Applying ERPNext Payment Reconciliation...")
                     });
                     const out = r.message || {};
-                    frappe.show_alert({ message: __("Supplier advance reconciled: {0}", [values.payment_entry]), indicator: "green" }, 8);
+                    frappe.show_alert({ message: __("Supplier advance reconciled with audit log: {0}", [values.payment_entry]), indicator: "green" }, 8);
                     this.loadStatement();
                     if (out.payment_entry) frappe.set_route("Form", "Payment Entry", out.payment_entry);
                 });
@@ -1284,7 +1284,7 @@ class SupplierRunningAccountPage {
                         ${__("System Claim Total")}: <b>${money(summary.system)}</b><br>
                         ${__("Settlement Discount")}: <b>${money(summary.discount)}</b><br>
                         ${__("Net Amount To Pay")}: <b>${money(summary.net)}</b><br>
-                        <span class="text-muted">${__("The Supplier Claim will be saved as Draft only. No Submit, no GL, and no automatic accounting reconciliation.")}</span>
+                        <span class="text-muted">${__("The Supplier Claim will be saved as Draft only. No Submit, no GL, no automatic accounting reconciliation. Audit comments will be recorded on the Supplier Claim and selected invoices.")}</span>
                     </div>`;
                 frappe.confirm(confirmHtml, async () => {
                     const r = await frappe.call({
@@ -1310,7 +1310,7 @@ class SupplierRunningAccountPage {
                     });
                     const out = r.message || {};
                     dialog.hide();
-                    frappe.show_alert({ message: __("Draft Supplier Claim created: {0}", [out.name]), indicator: "green" }, 8);
+                    frappe.show_alert({ message: __("Draft Supplier Claim created with audit log: {0}", [out.name]), indicator: "green" }, 8);
                     frappe.set_route("Form", "Supplier Claim", out.name);
                     this.loadStatement();
                 });
