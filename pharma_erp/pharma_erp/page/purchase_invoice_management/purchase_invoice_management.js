@@ -63,6 +63,11 @@ class PurchaseInvoiceManagementPageV1 {
             () => this.createPurchaseReceiptDraft(),
             __("Procurement")
         );
+        this.$purchaseInvoiceButton = this.page.add_inner_button(
+            __("Create Purchase Invoice Draft"),
+            () => this.createPurchaseInvoiceDraft(),
+            __("Procurement")
+        );
         this.$validateButton = this.page.add_inner_button(__("Validate Invoice"), () => this.validateAndReport(), __("Actions"));
         this.$saveSubmitButton = this.page.add_inner_button(__("Save & Submit"), () => this.saveAndSubmit(), __("Invoice"));
         this.$submitButton = this.page.add_inner_button(__("Submit Saved Draft"), () => this.submitInvoice(), __("Invoice"));
@@ -372,6 +377,9 @@ class PurchaseInvoiceManagementPageV1 {
                             <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-receipt-draft">
                                 ${__("Purchase Receipt Draft")}
                             </button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-invoice-draft">
+                                ${__("Purchase Invoice Draft")}
+                            </button>
                             <button type="button" class="btn btn-default btn-sm" data-action="page-save-draft">
                                 ${__("Save Draft")}
                             </button>
@@ -578,6 +586,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.on("click.pimv1", "[data-action='create-purchase-request-draft']", () => this.createPurchaseRequestDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-order-draft']", () => this.createPurchaseOrderDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-receipt-draft']", () => this.createPurchaseReceiptDraft());
+        this.$main.on("click.pimv1", "[data-action='create-purchase-invoice-draft']", () => this.createPurchaseInvoiceDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-return']", (event) => {
             frappe.route_options = {
                 return_type: "Return Against Invoice",
@@ -2127,10 +2136,11 @@ class PurchaseInvoiceManagementPageV1 {
             purchase_request: __("Purchase Request Draft"),
             purchase_order: __("Purchase Order Draft"),
             purchase_receipt: __("Purchase Receipt Draft"),
+            purchase_invoice: __("Purchase Invoice Draft"),
         };
         const title = titleByKind[kind] || __("Procurement Draft");
-        const needsSupplier = kind === "purchase_order" || kind === "purchase_receipt";
-        const needsRate = kind === "purchase_order" || kind === "purchase_receipt";
+        const needsSupplier = kind === "purchase_order" || kind === "purchase_receipt" || kind === "purchase_invoice";
+        const needsRate = kind === "purchase_order" || kind === "purchase_receipt" || kind === "purchase_invoice";
         const errors = [];
 
         if (!this.value("company")) errors.push(__("Company is required."));
@@ -2162,11 +2172,13 @@ class PurchaseInvoiceManagementPageV1 {
             purchase_request: __("Purchase Request Draft"),
             purchase_order: __("Purchase Order Draft"),
             purchase_receipt: __("Purchase Receipt Draft"),
+            purchase_invoice: __("Purchase Invoice Draft"),
         };
         const methodByKind = {
             purchase_request: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_request_draft",
             purchase_order: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_order_draft",
             purchase_receipt: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_receipt_draft",
+            purchase_invoice: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_invoice_draft",
         };
         const label = labelByKind[kind] || __("Procurement Draft");
         const method = methodByKind[kind];
@@ -2222,6 +2234,10 @@ class PurchaseInvoiceManagementPageV1 {
 
     createPurchaseReceiptDraft() {
         return this.createProcurementDraft("purchase_receipt");
+    }
+
+    createPurchaseInvoiceDraft() {
+        return this.createProcurementDraft("purchase_invoice");
     }
 
     validatePage() {

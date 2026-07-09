@@ -1964,6 +1964,100 @@ def create_purchase_receipt_draft(payload):
 
 
 @frappe.whitelist()
+def create_purchase_invoice_draft(payload):
+    """Create an ERPNext Purchase Invoice Draft from the current Purchase Management rows.
+
+    This draft is intended for invoicing after a Purchase Receipt / Purchase Order review.
+    It does not submit, does not create GL Entries, and keeps update_stock disabled so stock
+    is not received twice when a Purchase Receipt is used.
+    """
+    _require_document_create_access("Purchase Invoice")
+    payload = _parse_payload(payload)
+    _validate_procurement_payload(payload, require_supplier=True)
+    settings = get_purchase_settings()
+    _validate_near_expiry_confirmation_before_save(payload, settings)
+
+    bill_no = (payload.get("bill_no") or "").strip()
+    if bill_no:
+        duplicate = frappe.db.exists(
+            "Purchase Invoice",
+            {
+                "supplier": payload.get("supplier"),
+                "bill_no": bill_no,
+                "docstatus": ["<", 2],
+            },
+        )
+        if duplicate:
+            frappe.throw(
+                _("Supplier Invoice Number {0} already exists in {1}.").format(
+                    frappe.bold(bill_no),
+                    frappe.get_desk_link("Purchase Invoice", duplicate),
+                )
+            )
+
+    doc = frappe.new_doc("Purchase Invoice")
+    doc.company = payload.get("company")
+    doc.supplier = payload.get("supplier")
+    doc.posting_date = payload.get("posting_date") or nowdate()
+    doc.set_posting_time = 1
+    doc.bill_no = bill_no
+    doc.bill_date = payload.get("bill_date") or doc.posting_date
+    doc.due_date = payload.get("due_date") or doc.posting_date
+    doc.update_stock = 0
+    doc.set_warehouse = payload.get("warehouse")
+    doc.buying_price_list = payload.get("buying_price_list") or _default_buying_price_list()
+
+    claim_period = _claim_period_for_date(doc.supplier, doc.bill_date)
+    if doc.meta.has_field("custom_claim_basis_date"):
+        doc.custom_claim_basis_date = claim_period.get("basis_date") or doc.bill_date
+    if doc.meta.has_field("custom_expected_claim_period_from"):
+        doc.custom_expected_claim_period_from = claim_period.get("period_from")
+    if doc.meta.has_field("custom_expected_claim_period_to"):
+        doc.custom_expected_claim_period_to = claim_period.get("period_to")
+    if doc.meta.has_field("custom_purchase_entry_mode"):
+        doc.custom_purchase_entry_mode = "Against Purchase Order"
+    if doc.meta.has_field("custom_payment_classification"):
+        doc.custom_payment_classification = payload.get("payment_classification") or ""
+    if doc.meta.has_field("custom_exclude_from_supplier_claim"):
+        doc.custom_exclude_from_supplier_claim = cint(payload.get("exclude_from_claim"))
+    if doc.meta.has_field("custom_supplier_invoice_attachment"):
+        doc.custom_supplier_invoice_attachment = payload.get("attachment") or ""
+    if doc.meta.has_field("custom_source_purchase_invoice_draft"):
+        doc.custom_source_purchase_invoice_draft = payload.get("name") or ""
+    if doc.meta.has_field("custom_purchase_management_source"):
+        doc.custom_purchase_management_source = "Purchase & Invoice Management"
+
+    doc.remarks = payload.get("remarks") or _("Draft created from Purchase & Invoice Management.")
+    doc.set("items", [])
+    for source in payload.get("items") or []:
+        row = frappe._dict(source)
+        doc.append("items", _build_item_row(doc, row, payload.get("warehouse"), 1))
+
+    if hasattr(doc, "set_missing_values"):
+        doc.set_missing_values()
+
+    _copy_tax_template(doc, payload.get("taxes_and_charges"), 1)
+    _ensure_item_tax_rows(doc, payload)
+    _apply_item_tax_overrides(doc, payload)
+    _append_additional_charge(
+        doc,
+        payload.get("additional_charge_account"),
+        flt(payload.get("additional_charge_amount")),
+        payload.get("additional_charge_description"),
+    )
+
+    invoice_discount = max(0.0, min(100.0, flt(payload.get("invoice_discount_percentage"))))
+    doc.apply_discount_on = "Net Total"
+    doc.additional_discount_percentage = invoice_discount
+    _apply_exact_supplier_total(doc, payload, settings)
+
+    doc.insert()
+    _attach_file(payload.get("attachment"), doc.name)
+    doc.reload()
+    return {"document": _procurement_response(doc), "invoice": _invoice_response(doc)}
+
+
+@frappe.whitelist()
 def submit_invoice(name: str):
     _require_create_access()
     doc = frappe.get_doc("Purchase Invoice", name)
