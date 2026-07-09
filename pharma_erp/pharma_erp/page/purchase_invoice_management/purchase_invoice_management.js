@@ -126,6 +126,17 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-match-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
                 .pimv1-match-table th, .pimv1-match-table td { border-bottom: 1px solid var(--border-color); padding: 6px; text-align: right; }
                 .pimv1-match-muted { color: var(--text-muted); }
+                .pimv1-match-status { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 7px 12px; font-weight: 800; font-size: 12px; }
+                .pimv1-status-matched { background: #eaf7ee; color: #1f7a3f; border: 1px solid #bde5c8; }
+                .pimv1-status-warning { background: #fff7e6; color: #9a6500; border: 1px solid #ffd58a; }
+                .pimv1-status-mismatch { background: #fdecec; color: #b42318; border: 1px solid #f5b5b0; }
+                .pimv1-issues { margin-top: 10px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
+                .pimv1-issue { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-bottom: 1px solid var(--border-color); background: var(--card-bg); }
+                .pimv1-issue:last-child { border-bottom: 0; }
+                .pimv1-issue-severity { font-weight: 800; min-width: 72px; }
+                .pimv1-issue.warning .pimv1-issue-severity { color: #9a6500; }
+                .pimv1-issue.mismatch .pimv1-issue-severity { color: #b42318; }
+                .pimv1-row-status { font-weight: 800; border-radius: 999px; padding: 3px 8px; font-size: 11px; white-space: nowrap; }
                 .pimv1-section { padding: 16px; margin-top: 14px; }
                 .pimv1-section-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 13px; }
                 .pimv1-section-title h4 { margin: 0; font-weight: 800; }
@@ -2273,24 +2284,48 @@ class PurchaseInvoiceManagementPageV1 {
 
         const summary = preview.summary || {};
         const rows = preview.rows || [];
+        const status = (summary.match_status || "matched").toLowerCase();
+        const statusLabel = summary.status_label || (status === "mismatch" ? __("Mismatch") : status === "warning" ? __("Warning") : __("Matched"));
+        const statusIcon = status === "mismatch" ? "✖" : status === "warning" ? "⚠" : "✓";
+        const statusHtml = `<span class="pimv1-match-status pimv1-status-${this.escape(status)}">${statusIcon} ${this.escape(statusLabel)}</span>`;
+        const issues = summary.issues || [];
+        const issuesHtml = issues.length ? `
+            <div class="pimv1-issues" data-role="three-way-match-issues">
+                ${issues.map((issue) => `
+                    <div class="pimv1-issue ${this.escape(issue.severity || "warning")}">
+                        <div class="pimv1-issue-severity">${this.escape((issue.severity || "warning").toUpperCase())}</div>
+                        <div><strong>${this.escape(issue.item_name || issue.item_code || "")}</strong><br>${this.escape(issue.message || issue.code || "")}</div>
+                    </div>
+                `).join("")}
+            </div>` : `<div class="pimv1-help" style="margin-top:10px;">${__("All linked Purchase Order / Receipt / Invoice quantities and amounts are currently matched.")}</div>`;
+
+        const rowStatus = (row) => {
+            const rowStatus = (row.status || "matched").toLowerCase();
+            const label = rowStatus === "mismatch" ? __("Mismatch") : rowStatus === "warning" ? __("Warning") : __("Matched");
+            return `<span class="pimv1-row-status pimv1-status-${this.escape(rowStatus)}">${label}</span>`;
+        };
         const rowsHtml = rows.length ? rows.map((row) => `
             <tr>
+                <td>${rowStatus(row)}</td>
                 <td>${this.escape(row.item_name || row.item_code)}</td>
                 <td>${this.number(row.ordered_qty)}</td>
                 <td>${this.number(row.received_qty)}</td>
                 <td>${this.number(row.invoiced_qty)}</td>
+                <td>${this.money(row.ordered_rate)}</td>
+                <td>${this.money(row.invoiced_rate)}</td>
                 <td>${this.number(row.ordered_vs_received_qty)}</td>
                 <td>${this.number(row.received_vs_invoiced_qty)}</td>
                 <td>${this.money(row.ordered_amount)}</td>
                 <td>${this.money(row.invoiced_amount)}</td>
-            </tr>`).join("") : `<tr><td colspan="8" class="pimv1-match-muted">${__("No item rows loaded yet.")}</td></tr>`;
+            </tr>`).join("") : `<tr><td colspan="11" class="pimv1-match-muted">${__("No item rows loaded yet.")}</td></tr>`;
 
         const missing = (preview.missing || []).length
             ? `<div class="text-warning" style="margin-top:8px;">${__("Some linked documents could not be loaded. Clear links or recreate drafts if needed.")}</div>`
             : "";
 
         $target.html(`
-            <div class="pimv1-match-docs">${docsHtml}</div>
+            <div class="pimv1-match-docs">${docsHtml}${statusHtml}</div>
+            ${issuesHtml}
             <div class="pimv1-match-grid">
                 <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
                 <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Received Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_qty)}</div></div>
@@ -2300,7 +2335,7 @@ class PurchaseInvoiceManagementPageV1 {
                 <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Invoice Amount")}</div><div class="pimv1-match-value">${this.money(summary.ordered_vs_invoiced_amount)}</div></div>
             </div>
             <table class="pimv1-match-table">
-                <thead><tr><th>${__("Item")}</th><th>${__("Ordered")}</th><th>${__("Received")}</th><th>${__("Invoiced")}</th><th>${__("PO-Receipt")}</th><th>${__("Receipt-Invoice")}</th><th>${__("PO Amount")}</th><th>${__("Invoice Amount")}</th></tr></thead>
+                <thead><tr><th>${__("Status")}</th><th>${__("Item")}</th><th>${__("Ordered")}</th><th>${__("Received")}</th><th>${__("Invoiced")}</th><th>${__("PO Rate")}</th><th>${__("Invoice Rate")}</th><th>${__("PO-Receipt")}</th><th>${__("Receipt-Invoice")}</th><th>${__("PO Amount")}</th><th>${__("Invoice Amount")}</th></tr></thead>
                 <tbody>${rowsHtml}</tbody>
             </table>
             ${missing}

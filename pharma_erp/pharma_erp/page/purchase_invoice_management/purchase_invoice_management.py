@@ -1943,6 +1943,14 @@ def get_procurement_match_preview(links):
         _match_add_doc_items(item_map, doc, kind)
 
     rows = []
+    all_issues = []
+    qty_tolerance = 0.0001
+    amount_tolerance = 0.01
+    rate_tolerance = 0.01
+
+    def add_issue(issues, code: str, severity: str, message: str) -> None:
+        issues.append({"code": code, "severity": severity, "message": message})
+
     for item_code, bucket in sorted(item_map.items(), key=lambda item: item[0]):
         ordered_qty = flt(bucket.get("ordered_qty"))
         received_qty = flt(bucket.get("received_qty"))
@@ -1950,10 +1958,50 @@ def get_procurement_match_preview(links):
         ordered_amount = flt(bucket.get("ordered_amount"))
         received_amount = flt(bucket.get("received_amount"))
         invoiced_amount = flt(bucket.get("invoiced_amount"))
+        ordered_rate = ordered_amount / ordered_qty if ordered_qty else 0.0
+        received_rate = received_amount / received_qty if received_qty else 0.0
+        invoiced_rate = invoiced_amount / invoiced_qty if invoiced_qty else 0.0
+        issues = []
+
+        if ordered_qty <= qty_tolerance and received_qty > qty_tolerance:
+            add_issue(issues, "received_without_po", "mismatch", "Received item is not present in the Purchase Order.")
+        if ordered_qty <= qty_tolerance and invoiced_qty > qty_tolerance:
+            add_issue(issues, "invoice_item_not_in_po", "mismatch", "Invoice item is not present in the Purchase Order.")
+        if ordered_qty > qty_tolerance and received_qty <= qty_tolerance:
+            add_issue(issues, "ordered_not_received", "warning", "Ordered item has not been received yet.")
+        if ordered_qty > qty_tolerance and received_qty > qty_tolerance and received_qty < ordered_qty - qty_tolerance:
+            add_issue(issues, "received_less_than_ordered", "warning", "Received quantity is less than ordered quantity.")
+        if received_qty > qty_tolerance and invoiced_qty > received_qty + qty_tolerance:
+            add_issue(issues, "invoice_quantity_higher_than_received", "mismatch", "Invoice quantity is higher than received quantity.")
+        if received_qty > qty_tolerance and invoiced_qty < received_qty - qty_tolerance:
+            add_issue(issues, "invoice_quantity_lower_than_received", "warning", "Invoice quantity is lower than received quantity.")
+        if ordered_qty > qty_tolerance and invoiced_qty > qty_tolerance and abs(invoiced_rate - ordered_rate) > rate_tolerance:
+            add_issue(issues, "invoice_rate_differs_from_po", "warning", "Invoice rate differs from Purchase Order rate.")
+        if ordered_qty > qty_tolerance and invoiced_qty > qty_tolerance and abs(invoiced_amount - ordered_amount) > amount_tolerance:
+            add_issue(issues, "invoice_amount_differs_from_po", "warning", "Invoice amount differs from Purchase Order amount.")
+
+        if any(issue.get("severity") == "mismatch" for issue in issues):
+            status = "mismatch"
+        elif issues:
+            status = "warning"
+        else:
+            status = "matched"
+
+        bucket["ordered_rate"] = ordered_rate
+        bucket["received_rate"] = received_rate
+        bucket["invoiced_rate"] = invoiced_rate
         bucket["ordered_vs_received_qty"] = ordered_qty - received_qty
         bucket["received_vs_invoiced_qty"] = received_qty - invoiced_qty
         bucket["ordered_vs_invoiced_amount"] = ordered_amount - invoiced_amount
+        bucket["status"] = status
+        bucket["issues"] = issues
+        bucket["issues_text"] = "; ".join(issue.get("message") for issue in issues)
         rows.append(bucket)
+        for issue in issues:
+            enriched_issue = dict(issue)
+            enriched_issue["item_code"] = bucket.get("item_code")
+            enriched_issue["item_name"] = bucket.get("item_name")
+            all_issues.append(enriched_issue)
 
     summary = {
         "requested_qty": sum(flt(row.get("requested_qty")) for row in rows),
@@ -1968,6 +2016,17 @@ def get_procurement_match_preview(links):
     summary["ordered_vs_received_qty"] = summary["ordered_qty"] - summary["received_qty"]
     summary["received_vs_invoiced_qty"] = summary["received_qty"] - summary["invoiced_qty"]
     summary["ordered_vs_invoiced_amount"] = summary["ordered_amount"] - summary["invoiced_amount"]
+    summary["issues_count"] = len(all_issues)
+    summary["issues"] = all_issues
+    if any(issue.get("severity") == "mismatch" for issue in all_issues):
+        summary["match_status"] = "mismatch"
+        summary["status_label"] = "Mismatch"
+    elif all_issues or missing:
+        summary["match_status"] = "warning"
+        summary["status_label"] = "Warning"
+    else:
+        summary["match_status"] = "matched"
+        summary["status_label"] = "Matched"
 
     return {
         "documents": {kind: _match_doc_summary(doc) for kind, doc in docs.items()},
