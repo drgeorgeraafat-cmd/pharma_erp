@@ -58,6 +58,11 @@ class PurchaseInvoiceManagementPageV1 {
             () => this.createPurchaseOrderDraft(),
             __("Procurement")
         );
+        this.$purchaseReceiptButton = this.page.add_inner_button(
+            __("Create Purchase Receipt Draft"),
+            () => this.createPurchaseReceiptDraft(),
+            __("Procurement")
+        );
         this.$validateButton = this.page.add_inner_button(__("Validate Invoice"), () => this.validateAndReport(), __("Actions"));
         this.$saveSubmitButton = this.page.add_inner_button(__("Save & Submit"), () => this.saveAndSubmit(), __("Invoice"));
         this.$submitButton = this.page.add_inner_button(__("Submit Saved Draft"), () => this.submitInvoice(), __("Invoice"));
@@ -364,6 +369,9 @@ class PurchaseInvoiceManagementPageV1 {
                             <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-order-draft">
                                 ${__("Purchase Order Draft")}
                             </button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-receipt-draft">
+                                ${__("Purchase Receipt Draft")}
+                            </button>
                             <button type="button" class="btn btn-default btn-sm" data-action="page-save-draft">
                                 ${__("Save Draft")}
                             </button>
@@ -569,6 +577,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.on("click.pimv1", "[data-action='returns-management']", () => this.openReturnsManagement());
         this.$main.on("click.pimv1", "[data-action='create-purchase-request-draft']", () => this.createPurchaseRequestDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-order-draft']", () => this.createPurchaseOrderDraft());
+        this.$main.on("click.pimv1", "[data-action='create-purchase-receipt-draft']", () => this.createPurchaseReceiptDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-return']", (event) => {
             frappe.route_options = {
                 return_type: "Return Against Invoice",
@@ -2114,20 +2123,26 @@ class PurchaseInvoiceManagementPageV1 {
     }
 
     validateProcurementDraft(kind) {
-        const isPurchaseOrder = kind === "purchase_order";
-        const title = isPurchaseOrder ? __("Purchase Order Draft") : __("Purchase Request Draft");
+        const titleByKind = {
+            purchase_request: __("Purchase Request Draft"),
+            purchase_order: __("Purchase Order Draft"),
+            purchase_receipt: __("Purchase Receipt Draft"),
+        };
+        const title = titleByKind[kind] || __("Procurement Draft");
+        const needsSupplier = kind === "purchase_order" || kind === "purchase_receipt";
+        const needsRate = kind === "purchase_order" || kind === "purchase_receipt";
         const errors = [];
 
         if (!this.value("company")) errors.push(__("Company is required."));
-        if (isPurchaseOrder && !this.value("supplier")) errors.push(__("Supplier is required for Purchase Order."));
+        if (needsSupplier && !this.value("supplier")) errors.push(__("Supplier is required for {0}.", [title]));
         if (!this.value("warehouse")) errors.push(__("Receiving Warehouse is required."));
         if (!this.rows.length) errors.push(__("Add at least one purchase item."));
 
         (this.rows || []).forEach((row, index) => {
             if (!row.item_code) errors.push(__("Item is required on row {0}.", [index + 1]));
             if (flt(row.qty) <= 0) errors.push(__("Quantity must be greater than zero on row {0}.", [index + 1]));
-            if (isPurchaseOrder && !cint(row.is_bonus) && flt(row.net_rate || row.supplier_base_price) <= 0) {
-                errors.push(__("Purchase rate is required on row {0} for Purchase Order.", [index + 1]));
+            if (needsRate && !cint(row.is_bonus) && flt(row.net_rate || row.supplier_base_price) <= 0) {
+                errors.push(__("Purchase rate is required on row {0} for {1}.", [index + 1, title]));
             }
         });
 
@@ -2143,11 +2158,22 @@ class PurchaseInvoiceManagementPageV1 {
     }
 
     async createProcurementDraft(kind) {
-        const isPurchaseOrder = kind === "purchase_order";
-        const label = isPurchaseOrder ? __("Purchase Order Draft") : __("Purchase Request Draft");
-        const method = isPurchaseOrder
-            ? "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_order_draft"
-            : "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_request_draft";
+        const labelByKind = {
+            purchase_request: __("Purchase Request Draft"),
+            purchase_order: __("Purchase Order Draft"),
+            purchase_receipt: __("Purchase Receipt Draft"),
+        };
+        const methodByKind = {
+            purchase_request: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_request_draft",
+            purchase_order: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_order_draft",
+            purchase_receipt: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.create_purchase_receipt_draft",
+        };
+        const label = labelByKind[kind] || __("Procurement Draft");
+        const method = methodByKind[kind];
+        if (!method) {
+            frappe.msgprint({ title: label, message: __("Unsupported procurement draft type."), indicator: "red" });
+            return null;
+        }
 
         if (!this.validateProcurementDraft(kind)) return null;
 
@@ -2192,6 +2218,10 @@ class PurchaseInvoiceManagementPageV1 {
 
     createPurchaseOrderDraft() {
         return this.createProcurementDraft("purchase_order");
+    }
+
+    createPurchaseReceiptDraft() {
+        return this.createProcurementDraft("purchase_receipt");
     }
 
     validatePage() {

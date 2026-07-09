@@ -1764,6 +1764,60 @@ def _build_purchase_order_item(row: frappe._dict, default_warehouse: str, schedu
     return _child_values("Purchase Order Item", values)
 
 
+
+def _build_purchase_receipt_item(row: frappe._dict, default_warehouse: str) -> dict[str, Any]:
+    base = _procurement_item_base(row, default_warehouse)
+    calc = _calculate_row(row, 1)
+    rate = flt(calc.final_rate)
+    is_bonus = cint(row.get("is_bonus"))
+    taxable_bonus = bool(is_bonus and rate > 0)
+    parsed_expiry = _parse_flexible_date(row.get("expiry_date"), _("Expiry Date")) if row.get("expiry_date") else None
+    values = {
+        "item_code": base.item_code,
+        "item_name": base.item_name,
+        "description": base.description,
+        "qty": base.qty,
+        "received_qty": base.qty,
+        "stock_qty": base.qty * base.conversion_factor,
+        "uom": base.uom,
+        "stock_uom": base.stock_uom,
+        "conversion_factor": base.conversion_factor,
+        "warehouse": base.warehouse,
+        "price_list_rate": rate,
+        "rate": rate,
+        "base_rate": rate,
+        "amount": base.qty * rate,
+        "base_amount": base.qty * rate,
+        "discount_percentage": 0,
+        "discount_amount": 0,
+        "item_tax_template": row.get("item_tax_template") or None,
+        "batch_no": (row.get("batch_no") or "").strip(),
+        "expiry_date": parsed_expiry,
+        "is_free_item": bool(is_bonus and not taxable_bonus),
+        "allow_zero_valuation_rate": bool(is_bonus and not taxable_bonus),
+        "custom_selling_price": calc.customer_price,
+        "custom_customer_base_before_vat": calc.customer_base_before_vat,
+        "custom_supplier_base_price": calc.supplier_base,
+        "custom_purchase_pricing_method": row.get("pricing_method") or "Discount From Customer Price",
+        "custom_manual_net_rate": calc.final_rate,
+        "custom_supplier_discount_percentage": 100 if is_bonus else calc.supplier_discount,
+        "custom_additional_discount": 0 if is_bonus else calc.additional_discount,
+        "custom_effective_discount_percentage": calc.effective_discount,
+        "custom_tax_entry_mode": row.get("tax_entry_mode") or "No VAT",
+        "custom_vat_inclusive_in_final_rate": cint(row.get("vat_inclusive")),
+        "custom_vat_rate": calc.vat_rate,
+        "custom_entered_net_before_vat": calc.entered_net_before_vat,
+        "custom_net_before_vat": calc.net_before_vat,
+        "custom_vat_per_unit": calc.vat_per_unit,
+        "custom_total_vat_amount": calc.total_vat,
+        "custom_is_bonus_item": is_bonus,
+        "custom_batch_number": (row.get("batch_no") or "").strip(),
+        "custom_expiry_date": parsed_expiry,
+        "custom_auto_batch_reason": row.get("auto_batch_reason"),
+    }
+    return _child_values("Purchase Receipt Item", values)
+
+
 def _procurement_response(doc) -> dict[str, Any]:
     route_doctype = doc.doctype.lower().replace(" ", "-")
     return {
@@ -1837,6 +1891,55 @@ def create_purchase_order_draft(payload):
     doc.set("items", [])
     for source in payload.get("items") or []:
         doc.append("items", _build_purchase_order_item(frappe._dict(source), payload.get("warehouse"), schedule_date))
+
+    _copy_tax_template(doc, payload.get("taxes_and_charges"), 1)
+    _ensure_item_tax_rows(doc, payload)
+    _apply_item_tax_overrides(doc, payload)
+    _append_additional_charge(
+        doc,
+        payload.get("additional_charge_account"),
+        flt(payload.get("additional_charge_amount")),
+        payload.get("additional_charge_description"),
+    )
+    invoice_discount = max(0.0, min(100.0, flt(payload.get("invoice_discount_percentage"))))
+    if invoice_discount:
+        doc.apply_discount_on = "Net Total"
+        doc.additional_discount_percentage = invoice_discount
+    if hasattr(doc, "set_missing_values"):
+        doc.set_missing_values()
+    if hasattr(doc, "calculate_taxes_and_totals"):
+        doc.calculate_taxes_and_totals()
+    doc.insert()
+    doc.reload()
+    return {"document": _procurement_response(doc)}
+
+
+
+@frappe.whitelist()
+def create_purchase_receipt_draft(payload):
+    """Create an ERPNext Purchase Receipt Draft from the current Purchase Management rows."""
+    _require_document_create_access("Purchase Receipt")
+    payload = _parse_payload(payload)
+    _validate_procurement_payload(payload, require_supplier=True)
+
+    doc = frappe.new_doc("Purchase Receipt")
+    doc.company = payload.get("company")
+    doc.supplier = payload.get("supplier")
+    doc.posting_date = payload.get("posting_date") or nowdate()
+    if doc.meta.has_field("set_posting_time"):
+        doc.set_posting_time = 1
+    if doc.meta.has_field("set_warehouse"):
+        doc.set_warehouse = payload.get("warehouse")
+    if doc.meta.has_field("custom_source_purchase_invoice_draft"):
+        doc.custom_source_purchase_invoice_draft = payload.get("name") or ""
+    if doc.meta.has_field("custom_purchase_management_source"):
+        doc.custom_purchase_management_source = "Purchase & Invoice Management"
+    if doc.meta.has_field("remarks"):
+        doc.remarks = payload.get("remarks") or _("Draft created from Purchase & Invoice Management.")
+
+    doc.set("items", [])
+    for source in payload.get("items") or []:
+        doc.append("items", _build_purchase_receipt_item(frappe._dict(source), payload.get("warehouse")))
 
     _copy_tax_template(doc, payload.get("taxes_and_charges"), 1)
     _ensure_item_tax_rows(doc, payload)
