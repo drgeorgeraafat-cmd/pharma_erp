@@ -156,6 +156,13 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-stage-muted .pimv1-stage-value { background: var(--control-bg); color: var(--text-muted); border: 1px solid var(--border-color); }
                 @media (max-width: 1100px) { .pimv1-stage-summary { grid-template-columns: repeat(2, minmax(180px, 1fr)); } }
                 @media (max-width: 700px) { .pimv1-stage-summary { grid-template-columns: 1fr; } }
+                .pimv1-next-step-note { margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--control-bg); color: var(--text-color); line-height: 1.55; font-size: 12px; clear: both; }
+                .pimv1-next-step-note strong { font-weight: 800; }
+                .pimv1-next-step-muted { background: var(--control-bg); border-color: var(--border-color); }
+                .pimv1-next-step-info { background: #eef4ff; border-color: #b7ccff; color: #175cd3; }
+                .pimv1-next-step-warning { background: #fff9e6; border-color: #ffd591; color: #8a5a00; }
+                .pimv1-next-step-danger { background: #fdeeee; border-color: #f3b6b6; color: #c92a2a; }
+                .pimv1-next-step-success { background: #eaf7ee; border-color: #bde5c8; color: #1f7a3f; }
                 .pimv1-status-warning { background: #fff7e6; color: #9a6500; border: 1px solid #ffd58a; }
                 .pimv1-status-mismatch { background: #fdecec; color: #b42318; border: 1px solid #f5b5b0; }
                 .pimv1-issues { margin-top: 10px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
@@ -2374,6 +2381,7 @@ class PurchaseInvoiceManagementPageV1 {
         $target.html(`
             <div class="pimv1-match-docs">${docsHtml}${statusHtml}</div>
             ${this.renderProcurementStageStatusSummary(preview, links)}
+            ${this.renderProcurementSimpleNextStep(preview, links)}
             ${issuesHtml}
             <div class="pimv1-match-grid">
                 <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
@@ -2392,6 +2400,52 @@ class PurchaseInvoiceManagementPageV1 {
     }
 
 
+
+
+    renderProcurementSimpleNextStep(preview, links) {
+        const summary = (preview && preview.summary) || {};
+        links = links || this.procurementLinks || {};
+        const hasRequest = !!links.purchase_request;
+        const hasOrder = !!links.purchase_order;
+        const hasReceipt = !!links.purchase_receipt;
+        const hasInvoice = !!links.purchase_invoice;
+        const matchStatus = String(summary.match_status || "matched").toLowerCase();
+
+        let level = "info";
+        let title = __("Next Step");
+        let body = "";
+
+        if (matchStatus === "mismatch") {
+            level = "danger";
+            body = __("Fix the mismatch before submit. Usually this means the invoice quantity is higher than the received quantity, or linked documents need correction.");
+        } else if (matchStatus === "warning") {
+            level = "warning";
+            body = __("Review the warnings before submit. Warnings can be operationally acceptable, for example when the supplier sent an actual extra/wrong item. Enter the invoice as-is, then handle return/credit note if needed.");
+        } else if (hasReceipt && !hasInvoice) {
+            level = "info";
+            body = __("Create Purchase Invoice Draft from this Purchase Receipt when you receive or enter the supplier invoice.");
+        } else if (hasOrder && !hasReceipt) {
+            level = "info";
+            body = __("Create Purchase Receipt Draft from this Purchase Order when the supplier sends the goods.");
+        } else if (hasRequest && !hasOrder) {
+            level = "info";
+            body = __("Create Purchase Order Draft from this Purchase Request after choosing the supplier and the quantities you want to order.");
+        } else if (hasInvoice && matchStatus === "matched") {
+            level = "success";
+            body = __("The linked procurement documents are matched. Review the draft invoice, then submit when ready, or start a new draft.");
+        } else if (!hasRequest && !hasOrder && !hasReceipt && !hasInvoice) {
+            level = "muted";
+            body = __("Create or load a Purchase Request / Order / Receipt / Invoice to build the procurement cycle.");
+        } else {
+            level = "info";
+            body = __("Review the procurement stage summary above, then continue with the next operational document.");
+        }
+
+        return `
+            <div class="pimv1-next-step-note pimv1-next-step-${this.escape(level)}" data-role="procurement-simple-next-step">
+                <strong>${this.escape(title)}:</strong> ${this.escape(body)}
+            </div>`;
+    }
 
     renderProcurementStageStatusSummary(preview, links) {
         const summary = (preview && preview.summary) || {};
