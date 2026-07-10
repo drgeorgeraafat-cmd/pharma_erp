@@ -143,6 +143,7 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-match-muted { color: var(--text-muted); }
                 .pimv1-match-status { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 7px 12px; font-weight: 800; font-size: 12px; }
                 .pimv1-status-matched { background: #eaf7ee; color: #1f7a3f; border: 1px solid #bde5c8; }
+                .pimv1-status-planning { background: #eef4ff; color: #175cd3; border: 1px solid #b7ccff; }
                 .pimv1-status-warning { background: #fff7e6; color: #9a6500; border: 1px solid #ffd58a; }
                 .pimv1-status-mismatch { background: #fdecec; color: #b42318; border: 1px solid #f5b5b0; }
                 .pimv1-issues { margin-top: 10px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
@@ -152,6 +153,13 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-issue.warning .pimv1-issue-severity { color: #9a6500; }
                 .pimv1-issue.mismatch .pimv1-issue-severity { color: #b42318; }
                 .pimv1-row-status { font-weight: 800; border-radius: 999px; padding: 3px 8px; font-size: 11px; white-space: nowrap; }
+                .pimv1-stock-recheck { display:block; margin-top:4px; font-size:11px; font-weight:700; }
+                .pimv1-stock-recheck.covered { color:#1f7a3f; }
+                .pimv1-stock-recheck.partial { color:#9a6500; }
+                .pimv1-source-context { border:1px solid #b7ccff; background:#eef4ff; color:#175cd3; border-radius:12px; padding:10px 12px; margin:12px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+                .pimv1-source-context .pimv1-source-pill { border:1px solid #b7ccff; background:var(--card-bg); border-radius:999px; padding:4px 9px; font-weight:700; }
+                .pimv1-source-context { border: 1px solid #b7ccff; background: #eef4ff; color: #175cd3; border-radius: 12px; padding: 10px 12px; margin: 12px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+                .pimv1-source-context .pimv1-source-pill { border: 1px solid #b7ccff; background: var(--card-bg); border-radius: 999px; padding: 4px 9px; font-weight: 700; }
                 .pimv1-section { padding: 16px; margin-top: 14px; }
                 .pimv1-section-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 13px; }
                 .pimv1-section-title h4 { margin: 0; font-weight: 800; }
@@ -2311,12 +2319,13 @@ class PurchaseInvoiceManagementPageV1 {
 
         const summary = preview.summary || {};
         const rows = preview.rows || [];
-        const status = (summary.match_status || "matched").toLowerCase();
-        const statusLabel = summary.status_label || (status === "mismatch" ? __("Mismatch") : status === "warning" ? __("Warning") : __("Matched"));
-        const statusIcon = status === "mismatch" ? "✖" : status === "warning" ? "⚠" : "✓";
+        const requestOnly = !!(links.purchase_request && !links.purchase_order && !links.purchase_receipt && !links.purchase_invoice);
+        const status = requestOnly ? "planning" : (summary.match_status || "matched").toLowerCase();
+        const statusLabel = requestOnly ? __("Request Loaded") : (summary.status_label || (status === "mismatch" ? __("Mismatch") : status === "warning" ? __("Warning") : __("Matched")));
+        const statusIcon = status === "mismatch" ? "✖" : status === "warning" ? "⚠" : status === "planning" ? "●" : "✓";
         const statusHtml = `<span class="pimv1-match-status pimv1-status-${this.escape(status)}">${statusIcon} ${this.escape(statusLabel)}</span>`;
-        const issues = summary.issues || [];
-        const issuesHtml = issues.length ? `
+        const issues = requestOnly ? [] : (summary.issues || []);
+        const issuesHtml = requestOnly ? `<div class="pimv1-help" style="margin-top:10px;">${__("Purchase Request is loaded. Create or load a Purchase Order to start ordered/received/invoiced matching.")}</div>` : (issues.length ? `
             <div class="pimv1-issues" data-role="three-way-match-issues">
                 ${issues.map((issue) => `
                     <div class="pimv1-issue ${this.escape(issue.severity || "warning")}">
@@ -2324,7 +2333,7 @@ class PurchaseInvoiceManagementPageV1 {
                         <div><strong>${this.escape(issue.item_name || issue.item_code || "")}</strong><br>${this.escape(issue.message || issue.code || "")}</div>
                     </div>
                 `).join("")}
-            </div>` : `<div class="pimv1-help" style="margin-top:10px;">${__("All linked Purchase Order / Receipt / Invoice quantities and amounts are currently matched.")}</div>`;
+            </div>` : `<div class="pimv1-help" style="margin-top:10px;">${__("All linked Purchase Order / Receipt / Invoice quantities and amounts are currently matched.")}</div>`);
 
         const rowStatus = (row) => {
             const rowStatus = (row.status || "matched").toLowerCase();
@@ -2442,7 +2451,14 @@ class PurchaseInvoiceManagementPageV1 {
                 renderEmpty(__("No source item rows were found."));
                 return;
             }
+            const sourceDoc = (loaded && loaded.document) || {};
             dialog.fields_dict.source_items_html.$wrapper.html(`
+                <div class="pimv1-source-context">
+                    <span>${__("Selected Source")}</span>
+                    <span class="pimv1-source-pill">${this.escape(config.label)}: ${this.escape(sourceDoc.name || "")}</span>
+                    <span>${__("Next Operation")}</span>
+                    <span class="pimv1-source-pill">${this.escape(config.nextLabel)}</span>
+                </div>
                 <div class="pimv1-help" style="margin:12px 0;">
                     ${__("Select the rows and quantities to continue into {0}. You can split one request/order into multiple later documents by loading only part of the quantity.", [config.nextLabel])}
                 </div>
@@ -2455,6 +2471,8 @@ class PurchaseInvoiceManagementPageV1 {
                                 <th style="width:105px;">${__("Source Qty")}</th>
                                 <th style="width:110px;">${__("Already Used")}</th>
                                 <th style="width:105px;">${__("Remaining")}</th>
+                                                                <th style="width:110px;">${__("Current Stock")}</th>
+                                <th style="width:110px;">${__("Suggested Qty")}</th>
                                 <th style="width:130px;">${__("Qty to Load")}</th>
                                 <th style="width:90px;">${__("UOM")}</th>
                                 <th style="width:120px;">${__("Rate")}</th>
@@ -2464,15 +2482,22 @@ class PurchaseInvoiceManagementPageV1 {
                         <tbody>
                             ${rows.map((row, index) => {
                                 const remainingQty = flt(row.remaining_qty);
-                                const fullyConsumed = remainingQty <= 0;
+                                
+                                const currentStockQty = flt(row.current_stock_qty || 0);
+                                const suggestedQty = Math.max(0, Math.min(remainingQty, flt(row.suggested_qty_to_load !== undefined ? row.suggested_qty_to_load : remainingQty)));
+                                const stockLevel = row.stock_recheck_level || "none";
+                                const stockMessage = row.stock_recheck_message || "";
+const fullyConsumed = remainingQty <= 0;
                                 return `
                                 <tr data-source-index="${index}" class="${fullyConsumed ? "text-muted" : ""}">
                                     <td><input type="checkbox" data-role="source-select" data-index="${index}" ${fullyConsumed ? "disabled" : "checked"}></td>
                                     <td><strong>${this.escape(row.item_name || row.item_code)}</strong><br><span class="text-muted">${this.escape(row.item_code || "")}</span>${fullyConsumed ? `<br><span class="badge badge-default">${__("Fully Used")}</span>` : ""}</td>
                                     <td>${this.number(row.source_qty || 0)}</td>
                                     <td>${this.number(row.already_used_qty || 0)}</td>
-                                    <td><strong>${this.number(remainingQty)}</strong></td>
-                                    <td><input class="form-control input-xs" type="number" step="0.001" min="0" max="${remainingQty}" data-role="source-qty" data-index="${index}" value="${fullyConsumed ? 0 : remainingQty}" ${fullyConsumed ? "disabled" : ""}></td>
+                                    <td><strong>${this.number(remainingQty)}</strong>${stockMessage ? `<span class="pimv1-stock-recheck ${this.escape(stockLevel)}">${this.escape(stockMessage)}</span>` : ""}</td>
+                                    <td>${this.number(currentStockQty)}</td>
+                                    <td><strong>${this.number(suggestedQty)}</strong></td>
+                                    <td><input class="form-control input-xs" type="number" step="0.001" min="0" max="${remainingQty}" data-role="source-qty" data-index="${index}" value="${fullyConsumed ? 0 : suggestedQty}" ${fullyConsumed ? "disabled" : ""}></td>
                                     <td>${this.escape(row.uom || "")}</td>
                                     <td>${this.money(row.net_rate || row.supplier_base_price || 0)}</td>
                                     <td>${this.escape(row.warehouse || "")}</td>
@@ -2817,6 +2842,167 @@ class PurchaseInvoiceManagementPageV1 {
         else reset();
     }
 
+
+
+    activeProcurementLinksForSubmit(invoiceName) {
+        const links = Object.assign({}, this.procurementLinks || {});
+        if (invoiceName) {
+            links.purchase_invoice = invoiceName;
+            links.purchase_invoice_doctype = "Purchase Invoice";
+        }
+        return links;
+    }
+
+    procurementLinksNeedSubmitGuard(links) {
+        links = links || {};
+        return !!(links.purchase_order || links.purchase_receipt || links.purchase_invoice);
+    }
+
+    procurementIssuesMarkup(preview) {
+        const summary = (preview && preview.summary) || {};
+        const issues = summary.issues || [];
+        if (!issues.length) {
+            return `<div class="text-muted">${__("No detailed issue rows were returned.")}</div>`;
+        }
+        return `
+            <ul style="padding-inline-start: 18px; margin: 8px 0; line-height: 1.7;">
+                ${issues.map((issue) => `
+                    <li>
+                        <strong>${this.escape((issue.severity || "warning").toUpperCase())}</strong>
+                        ${issue.item_name || issue.item_code ? ` — ${this.escape(issue.item_name || issue.item_code)}` : ""}<br>
+                        <span>${this.escape(issue.message || issue.code || "")}</span>
+                    </li>
+                `).join("")}
+            </ul>`;
+    }
+
+    procurementDecisionSummaryMarkup(preview) {
+        const summary = (preview && preview.summary) || {};
+        return `
+            <div class="pimv1-match-grid" style="margin-top: 8px;">
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Received Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Invoiced Qty")}</div><div class="pimv1-match-value">${this.number(summary.invoiced_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Receipt")}</div><div class="pimv1-match-value">${this.number(summary.ordered_vs_received_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Receipt vs Invoice")}</div><div class="pimv1-match-value">${this.number(summary.received_vs_invoiced_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Invoice Amount")}</div><div class="pimv1-match-value">${this.money(summary.ordered_vs_invoiced_amount)}</div></div>
+            </div>`;
+    }
+
+    async logProcurementMatchDecision(invoiceName, preview, links, reason) {
+        const summary = (preview && preview.summary) || {};
+        await frappe.call({
+            method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.log_procurement_match_decision",
+            args: {
+                payload: JSON.stringify({
+                    purchase_invoice: invoiceName,
+                    decision: "accepted_warning",
+                    match_status: summary.match_status || "warning",
+                    reason: reason || "",
+                    links: links || {},
+                    summary: summary,
+                    issues: summary.issues || [],
+                }),
+            },
+            freeze: true,
+            freeze_message: __("Recording procurement match decision..."),
+        });
+    }
+
+    promptProcurementWarningDecision(invoiceName, preview, links) {
+        return new Promise((resolve) => {
+            let resolved = false;
+            const dialog = new frappe.ui.Dialog({
+                title: __("Accept Procurement Match Warning"),
+                fields: [
+                    {
+                        fieldtype: "HTML",
+                        fieldname: "warning_html",
+                        options: `
+                            <div style="line-height:1.7">
+                                <div class="text-warning"><strong>${__("This purchase invoice has procurement match warnings.")}</strong></div>
+                                ${this.procurementDecisionSummaryMarkup(preview)}
+                                <div style="margin-top:10px;"><strong>${__("Warnings")}</strong></div>
+                                ${this.procurementIssuesMarkup(preview)}
+                                <div class="text-muted">${__("Enter the operational reason for accepting this difference before submitting.")}</div>
+                            </div>`,
+                    },
+                    {
+                        fieldtype: "Small Text",
+                        fieldname: "reason",
+                        label: __("Reason for accepting difference"),
+                        reqd: 1,
+                    },
+                ],
+                primary_action_label: __("Accept Difference & Continue"),
+                primary_action: async (values) => {
+                    const reason = (values && values.reason ? values.reason : "").trim();
+                    if (!reason) {
+                        frappe.msgprint(__("Reason is required."));
+                        return;
+                    }
+                    try {
+                        await this.logProcurementMatchDecision(invoiceName, preview, links, reason);
+                        resolved = true;
+                        dialog.hide();
+                        frappe.show_alert({ message: __("Procurement match decision recorded."), indicator: "orange" }, 5);
+                        resolve(true);
+                    } catch (error) {
+                        console.error("Unable to log procurement match decision", error);
+                        frappe.msgprint({
+                            title: __("Procurement Match Decision"),
+                            message: this.escape(error.message || error),
+                            indicator: "red",
+                        });
+                    }
+                },
+            });
+            dialog.onhide = () => {
+                if (!resolved) resolve(false);
+            };
+            dialog.show();
+        });
+    }
+
+    async ensureProcurementSubmitDecision(invoiceName) {
+        const links = this.activeProcurementLinksForSubmit(invoiceName);
+        if (!this.procurementLinksNeedSubmitGuard(links)) return true;
+
+        this.procurementLinks = links;
+        this.saveProcurementLinks();
+        const preview = await this.fetchProcurementMatchPreview(false);
+        if (!preview || !preview.summary) {
+            frappe.msgprint({
+                title: __("Procurement Match Guard"),
+                message: __("Unable to refresh Procurement Match Preview. Please refresh the match before submitting."),
+                indicator: "red",
+            });
+            return false;
+        }
+
+        const summary = preview.summary || {};
+        const status = (summary.match_status || "matched").toLowerCase();
+        if (status === "matched") return true;
+
+        if (status === "mismatch") {
+            frappe.msgprint({
+                title: __("Procurement Match Mismatch"),
+                message: `
+                    <div style="line-height:1.7">
+                        <div class="text-danger"><strong>${__("Submit blocked because there is a serious procurement mismatch.")}</strong></div>
+                        ${this.procurementDecisionSummaryMarkup(preview)}
+                        <div style="margin-top:10px;"><strong>${__("Mismatch details")}</strong></div>
+                        ${this.procurementIssuesMarkup(preview)}
+                        <div class="text-muted" style="margin-top:10px;">${__("Fix the Purchase Order / Receipt / Invoice quantities first, then refresh the match.")}</div>
+                    </div>`,
+                indicator: "red",
+            });
+            return false;
+        }
+
+        return await this.promptProcurementWarningDecision(invoiceName, preview, links);
+    }
+
     async saveAndSubmit() {
         if (this.isSaving || !this.validatePage()) return;
         const totals = this.totals();
@@ -2834,6 +3020,8 @@ class PurchaseInvoiceManagementPageV1 {
                 freezeMessage: __("Saving and validating Purchase Invoice..."),
             });
             if (!saved || !saved.name) return;
+            const decisionOk = await this.ensureProcurementSubmitDecision(saved.name);
+            if (!decisionOk) return;
             await this.performSubmit();
         });
     }
@@ -2863,6 +3051,8 @@ class PurchaseInvoiceManagementPageV1 {
 
     async submitInvoice() {
         if (!this.draftName || !this.validateAndReport()) return;
+        const decisionOk = await this.ensureProcurementSubmitDecision(this.draftName);
+        if (!decisionOk) return;
         frappe.confirm(__("Submit this saved Purchase Invoice? Stock and accounting entries will be created."), async () => {
             await this.performSubmit();
         });

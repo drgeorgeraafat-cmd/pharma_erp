@@ -14,7 +14,7 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate, now_datetime, nowdate
+from frappe.utils import cint, flt, getdate, now_datetime, nowdate, escape_html
 
 from pharma_erp.purchase_management import get_purchase_settings
 
@@ -1982,9 +1982,9 @@ def get_procurement_match_preview(links):
         issues = []
 
         if ordered_qty <= qty_tolerance and received_qty > qty_tolerance:
-            add_issue(issues, "received_without_po", "mismatch", "Received item is not present in the Purchase Order.")
+            add_issue(issues, "received_without_po", "warning", "Received item is not present in the Purchase Order. If this is an actual supplier line, receive/invoice it as-is, then handle return/credit note if needed.")
         if ordered_qty <= qty_tolerance and invoiced_qty > qty_tolerance:
-            add_issue(issues, "invoice_item_not_in_po", "mismatch", "Invoice item is not present in the Purchase Order.")
+            add_issue(issues, "invoice_item_not_in_po", "warning", "Invoice item is not present in the Purchase Order. Enter supplier invoice as received; use Supplier Return/Credit Note if the item was sent by mistake.")
         if ordered_qty > qty_tolerance and received_qty <= qty_tolerance:
             add_issue(issues, "ordered_not_received", "warning", "Ordered item has not been received yet.")
         if ordered_qty > qty_tolerance and received_qty > qty_tolerance and received_qty < ordered_qty - qty_tolerance:
@@ -2279,6 +2279,47 @@ def _purchase_page_row_from_source(source_type: str, doc, row) -> dict[str, Any]
     }
 
 
+def _source_current_stock_qty(item_code: str, warehouse: str | None = None) -> float:
+    """Return current actual stock for advisory procurement recheck."""
+    if not item_code:
+        return 0.0
+    if warehouse:
+        return flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty") or 0)
+    row = frappe.db.sql(
+        """select sum(actual_qty) from `tabBin` where item_code=%s""",
+        (item_code,),
+    )
+    return flt(row[0][0] if row and row[0] else 0)
+
+
+def _apply_source_stock_recheck(source_type: str, source_row: dict[str, Any]) -> None:
+    """Add advisory current-stock fields to source picker rows.
+
+    This does not change stock, status, or linked documents. It only warns the user
+    when a requested shortage may already have been covered by another purchase.
+    """
+    item_code = source_row.get("item_code")
+    warehouse = source_row.get("warehouse")
+    remaining_qty = flt(source_row.get("remaining_qty") or source_row.get("qty") or 0)
+    current_stock_qty = _source_current_stock_qty(item_code, warehouse)
+    source_row["current_stock_qty"] = current_stock_qty
+    source_row["suggested_qty_to_load"] = remaining_qty
+    source_row["stock_recheck_level"] = "none"
+    source_row["stock_recheck_message"] = ""
+
+    if source_type != "purchase_request" or remaining_qty <= 0:
+        return
+
+    if current_stock_qty >= remaining_qty:
+        source_row["stock_recheck_level"] = "covered"
+        source_row["suggested_qty_to_load"] = 0
+        source_row["stock_recheck_message"] = _("Current stock may already cover this requested quantity.")
+    elif current_stock_qty > 0:
+        source_row["stock_recheck_level"] = "partial"
+        source_row["suggested_qty_to_load"] = max(remaining_qty - current_stock_qty, 0)
+        source_row["stock_recheck_message"] = _("Current stock has increased; review the quantity before ordering.")
+
+
 @frappe.whitelist()
 def get_procurement_source_items(source_type: str, source_name: str):
     """Load selectable source items for continuing a procurement flow.
@@ -2311,6 +2352,7 @@ def get_procurement_source_items(source_type: str, source_name: str):
         source_row["remaining_qty"] = remaining_qty
         source_row["qty"] = remaining_qty
         source_row["is_fully_consumed"] = 1 if remaining_qty <= 0 else 0
+        _apply_source_stock_recheck(source_type, source_row)
         items.append(source_row)
 
     return {
@@ -2547,6 +2589,70 @@ def create_purchase_invoice_draft(payload):
     _attach_file(payload.get("attachment"), doc.name)
     doc.reload()
     return {"document": _procurement_response(doc), "invoice": _invoice_response(doc)}
+
+
+@frappe.whitelist()
+def log_procurement_match_decision(payload):
+    """Record a user's decision to continue despite procurement match warnings.
+
+    This is intentionally audit-only: it does not submit, cancel, or change stock/GL.
+    The actual submit still goes through submit_invoice after this comment is written.
+    """
+    _require_create_access()
+    data = _parse_payload(payload or {})
+    invoice_name = (data.get("purchase_invoice") or data.get("invoice") or "").strip()
+    if not invoice_name or not frappe.db.exists("Purchase Invoice", invoice_name):
+        frappe.throw(_("A valid Purchase Invoice is required to log the match decision."))
+
+    doc = frappe.get_doc("Purchase Invoice", invoice_name)
+    doc.check_permission("write")
+
+    status = (data.get("match_status") or "").strip().lower()
+    decision = (data.get("decision") or "").strip()
+    reason = (data.get("reason") or "").strip()
+    if status in {"warning", "mismatch"} and not reason:
+        frappe.throw(_("A reason is required when accepting procurement match differences."))
+
+    links = data.get("links") or {}
+    summary = data.get("summary") or {}
+    issues = data.get("issues") or summary.get("issues") or []
+
+    def link_line(label: str, value: Any) -> str:
+        if not value:
+            return ""
+        return f"<li><b>{escape_html(label)}:</b> {escape_html(str(value))}</li>"
+
+    issue_lines = []
+    for issue in issues[:30]:
+        if not isinstance(issue, dict):
+            continue
+        item = issue.get("item_name") or issue.get("item_code") or ""
+        severity = issue.get("severity") or "warning"
+        message = issue.get("message") or issue.get("code") or ""
+        issue_lines.append(
+            f"<li><b>{escape_html(str(severity).upper())}</b> — {escape_html(str(item))}: {escape_html(str(message))}</li>"
+        )
+
+    links_html = "".join([
+        link_line("Purchase Request", links.get("purchase_request") or links.get("material_request")),
+        link_line("Purchase Order", links.get("purchase_order")),
+        link_line("Purchase Receipt", links.get("purchase_receipt")),
+        link_line("Purchase Invoice", links.get("purchase_invoice") or invoice_name),
+    ])
+
+    summary_json = escape_html(frappe.as_json(summary, indent=2) if summary else "{}")
+    comment = f"""
+        <div><b>Procurement Match Decision</b></div>
+        <div><b>Status:</b> {escape_html(status or 'unknown')}</div>
+        <div><b>Decision:</b> {escape_html(decision or 'accepted')}</div>
+        <div><b>Reason:</b> {escape_html(reason)}</div>
+        <ul>{links_html}</ul>
+        <div><b>Issues:</b></div>
+        <ul>{''.join(issue_lines) or '<li>No issue details provided.</li>'}</ul>
+        <details><summary>Match Summary JSON</summary><pre>{summary_json}</pre></details>
+    """
+    doc.add_comment("Comment", comment)
+    return {"ok": True, "invoice": doc.name}
 
 
 @frappe.whitelist()
