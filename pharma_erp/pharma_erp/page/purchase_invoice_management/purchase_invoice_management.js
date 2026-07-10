@@ -144,6 +144,18 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-match-status { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 7px 12px; font-weight: 800; font-size: 12px; }
                 .pimv1-status-matched { background: #eaf7ee; color: #1f7a3f; border: 1px solid #bde5c8; }
                 .pimv1-status-planning { background: #eef4ff; color: #175cd3; border: 1px solid #b7ccff; }
+                .pimv1-stage-summary { display: grid; grid-template-columns: repeat(4, minmax(190px, 1fr)); gap: 10px; margin-top: 12px; }
+                .pimv1-stage-card { border: 1px solid var(--border-color); background: var(--card-bg); border-radius: 14px; padding: 11px 12px; min-height: 88px; }
+                .pimv1-stage-title { color: var(--text-muted); font-size: 11px; margin-bottom: 6px; }
+                .pimv1-stage-value { font-weight: 900; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 9px; }
+                .pimv1-stage-note { color: var(--text-muted); font-size: 11px; line-height: 1.5; margin-top: 7px; }
+                .pimv1-stage-open .pimv1-stage-value { background: #eef4ff; color: #175cd3; border: 1px solid #b7ccff; }
+                .pimv1-stage-progress .pimv1-stage-value { background: #fff7e6; color: #9a6500; border: 1px solid #ffd591; }
+                .pimv1-stage-done .pimv1-stage-value { background: #eaf7ee; color: #1f7a3f; border: 1px solid #bde5c8; }
+                .pimv1-stage-attention .pimv1-stage-value { background: #fdeeee; color: #c92a2a; border: 1px solid #f3b6b6; }
+                .pimv1-stage-muted .pimv1-stage-value { background: var(--control-bg); color: var(--text-muted); border: 1px solid var(--border-color); }
+                @media (max-width: 1100px) { .pimv1-stage-summary { grid-template-columns: repeat(2, minmax(180px, 1fr)); } }
+                @media (max-width: 700px) { .pimv1-stage-summary { grid-template-columns: 1fr; } }
                 .pimv1-status-warning { background: #fff7e6; color: #9a6500; border: 1px solid #ffd58a; }
                 .pimv1-status-mismatch { background: #fdecec; color: #b42318; border: 1px solid #f5b5b0; }
                 .pimv1-issues { margin-top: 10px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
@@ -2361,6 +2373,7 @@ class PurchaseInvoiceManagementPageV1 {
 
         $target.html(`
             <div class="pimv1-match-docs">${docsHtml}${statusHtml}</div>
+            ${this.renderProcurementStageStatusSummary(preview, links)}
             ${issuesHtml}
             <div class="pimv1-match-grid">
                 <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
@@ -2378,6 +2391,136 @@ class PurchaseInvoiceManagementPageV1 {
         `);
     }
 
+
+
+    renderProcurementStageStatusSummary(preview, links) {
+        const summary = (preview && preview.summary) || {};
+        links = links || this.procurementLinks || {};
+        const hasRequest = !!links.purchase_request;
+        const hasOrder = !!links.purchase_order;
+        const hasReceipt = !!links.purchase_receipt;
+        const hasInvoice = !!links.purchase_invoice;
+
+        const requestedQty = flt(summary.requested_qty || 0);
+        const orderedQty = flt(summary.ordered_qty || 0);
+        const receivedQty = flt(summary.received_qty || 0);
+        const invoicedQty = flt(summary.invoiced_qty || 0);
+        const remainingToOrder = Math.max(0, requestedQty - orderedQty);
+        const remainingToReceive = Math.max(0, orderedQty - receivedQty);
+        const remainingToInvoice = Math.max(0, receivedQty - invoicedQty);
+        const overOrdered = Math.max(0, orderedQty - requestedQty);
+        const overReceived = Math.max(0, receivedQty - orderedQty);
+        const overInvoiced = Math.max(0, invoicedQty - receivedQty);
+        const matchStatus = String(summary.match_status || "matched").toLowerCase();
+        const requestOnly = !!(hasRequest && !hasOrder && !hasReceipt && !hasInvoice);
+
+        const stageCard = (title, value, note, level) => `
+            <div class="pimv1-stage-card pimv1-stage-${this.escape(level || "open")}">
+                <div class="pimv1-stage-title">${this.escape(title)}</div>
+                <div class="pimv1-stage-value">${this.escape(value)}</div>
+                <div class="pimv1-stage-note">${note}</div>
+            </div>`;
+
+        let requestValue = __("No Request");
+        let requestLevel = "muted";
+        if (hasRequest) {
+            if (!hasOrder) {
+                requestValue = __("Open Request");
+                requestLevel = "open";
+            } else if (overOrdered > 0.0001) {
+                requestValue = __("Over Ordered");
+                requestLevel = "attention";
+            } else if (remainingToOrder > 0.0001) {
+                requestValue = __("Partially Ordered");
+                requestLevel = "progress";
+            } else {
+                requestValue = __("Fully Ordered");
+                requestLevel = "done";
+            }
+        }
+
+        let orderValue = __("No Order");
+        let orderLevel = "muted";
+        if (hasOrder) {
+            if (!hasReceipt && receivedQty <= 0) {
+                orderValue = __("Waiting Receipt");
+                orderLevel = "open";
+            } else if (overReceived > 0.0001) {
+                orderValue = __("Over Received");
+                orderLevel = "attention";
+            } else if (remainingToReceive > 0.0001) {
+                orderValue = __("Partially Received");
+                orderLevel = "progress";
+            } else {
+                orderValue = __("Fully Received");
+                orderLevel = "done";
+            }
+        }
+
+        let receiptValue = __("No Receipt");
+        let receiptLevel = "muted";
+        if (hasReceipt) {
+            if (!hasInvoice && invoicedQty <= 0) {
+                receiptValue = __("Waiting Invoice");
+                receiptLevel = "open";
+            } else if (overInvoiced > 0.0001) {
+                receiptValue = __("Over Invoiced");
+                receiptLevel = "attention";
+            } else if (remainingToInvoice > 0.0001) {
+                receiptValue = __("Partially Invoiced");
+                receiptLevel = "progress";
+            } else {
+                receiptValue = __("Fully Invoiced");
+                receiptLevel = "done";
+            }
+        }
+
+        let overallValue = __("Open");
+        let overallLevel = "open";
+        if (matchStatus === "mismatch") {
+            overallValue = __("Needs Attention");
+            overallLevel = "attention";
+        } else if (matchStatus === "warning") {
+            overallValue = __("Needs Review");
+            overallLevel = "progress";
+        } else if (requestOnly) {
+            overallValue = __("Request Loaded");
+            overallLevel = "open";
+        } else if (hasInvoice && matchStatus === "matched") {
+            overallValue = __("Completed / Matched");
+            overallLevel = "done";
+        } else if (hasReceipt) {
+            overallValue = __("Receipt Stage");
+            overallLevel = remainingToInvoice > 0 ? "progress" : "open";
+        } else if (hasOrder) {
+            overallValue = __("Order Stage");
+            overallLevel = remainingToReceive > 0 ? "progress" : "open";
+        } else if (hasRequest) {
+            overallValue = __("Request Stage");
+            overallLevel = "open";
+        }
+
+        const requestNote = hasRequest
+            ? `${__("Requested")}: <strong>${this.number(requestedQty)}</strong> · ${__("Ordered")}: <strong>${this.number(orderedQty)}</strong> · ${__("Remaining")}: <strong>${this.number(remainingToOrder)}</strong>`
+            : __("No shortage/request source is linked to this cycle.");
+        const orderNote = hasOrder
+            ? `${__("Ordered")}: <strong>${this.number(orderedQty)}</strong> · ${__("Received")}: <strong>${this.number(receivedQty)}</strong> · ${__("Remaining")}: <strong>${this.number(remainingToReceive)}</strong>`
+            : __("Create or load a Purchase Order to choose supplier and ordered qty.");
+        const receiptNote = hasReceipt
+            ? `${__("Received")}: <strong>${this.number(receivedQty)}</strong> · ${__("Invoiced")}: <strong>${this.number(invoicedQty)}</strong> · ${__("Remaining")}: <strong>${this.number(remainingToInvoice)}</strong>`
+            : __("Create or load a Purchase Receipt to record what actually arrived.");
+        const overallNote = summary.status_label
+            ? this.escape(summary.status_label)
+            : __("Stage status is read-only and based on linked Request / Order / Receipt / Invoice quantities.");
+
+        return `
+            <div class="pimv1-stage-summary" data-role="procurement-stage-status-summary">
+                ${stageCard(__("Request"), requestValue, requestNote, requestLevel)}
+                ${stageCard(__("Order"), orderValue, orderNote, orderLevel)}
+                ${stageCard(__("Receipt"), receiptValue, receiptNote, receiptLevel)}
+                ${stageCard(__("Overall"), overallValue, overallNote, overallLevel)}
+            </div>`;
+    }
 
     procurementSourceConfig(sourceType) {
         const configs = {
