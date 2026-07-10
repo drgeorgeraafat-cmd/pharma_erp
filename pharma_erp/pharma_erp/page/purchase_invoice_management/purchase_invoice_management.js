@@ -50,6 +50,21 @@ class PurchaseInvoiceManagementPageV1 {
             __("Invoice")
         );
         this.$openButton.prop("disabled", true);
+        this.$loadPurchaseRequestButton = this.page.add_inner_button(
+            __("Load Purchase Request"),
+            () => this.openProcurementSourcePicker("purchase_request"),
+            __("Procurement")
+        );
+        this.$loadPurchaseOrderButton = this.page.add_inner_button(
+            __("Load Purchase Order"),
+            () => this.openProcurementSourcePicker("purchase_order"),
+            __("Procurement")
+        );
+        this.$loadPurchaseReceiptButton = this.page.add_inner_button(
+            __("Load Purchase Receipt"),
+            () => this.openProcurementSourcePicker("purchase_receipt"),
+            __("Procurement")
+        );
         this.$purchaseRequestButton = this.page.add_inner_button(
             __("Create Purchase Request Draft"),
             () => this.createPurchaseRequestDraft(),
@@ -391,6 +406,15 @@ class PurchaseInvoiceManagementPageV1 {
                             <button type="button" class="btn btn-default btn-sm" data-action="returns-management">
                                 ${__("Returns Management")}
                             </button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-request">
+                                ${__("Load Request")}
+                            </button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-order">
+                                ${__("Load Order")}
+                            </button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-receipt">
+                                ${__("Load Receipt")}
+                            </button>
                             <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-request-draft">
                                 ${__("Purchase Request Draft")}
                             </button>
@@ -619,6 +643,9 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
         this.$main.on("click.pimv1", "[data-action='supplier-running-account']", () => this.openSupplierRunningAccount());
         this.$main.on("click.pimv1", "[data-action='returns-management']", () => this.openReturnsManagement());
+        this.$main.on("click.pimv1", "[data-action='load-purchase-request']", () => this.openProcurementSourcePicker("purchase_request"));
+        this.$main.on("click.pimv1", "[data-action='load-purchase-order']", () => this.openProcurementSourcePicker("purchase_order"));
+        this.$main.on("click.pimv1", "[data-action='load-purchase-receipt']", () => this.openProcurementSourcePicker("purchase_receipt"));
         this.$main.on("click.pimv1", "[data-action='create-purchase-request-draft']", () => this.createPurchaseRequestDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-order-draft']", () => this.createPurchaseOrderDraft());
         this.$main.on("click.pimv1", "[data-action='create-purchase-receipt-draft']", () => this.createPurchaseReceiptDraft());
@@ -2340,6 +2367,183 @@ class PurchaseInvoiceManagementPageV1 {
             </table>
             ${missing}
         `);
+    }
+
+
+    procurementSourceConfig(sourceType) {
+        const configs = {
+            purchase_request: {
+                label: __("Purchase Request"),
+                doctype: "Material Request",
+                linkKey: "purchase_request",
+                targetKind: "purchase_order",
+                nextLabel: __("Purchase Order Draft"),
+            },
+            purchase_order: {
+                label: __("Purchase Order"),
+                doctype: "Purchase Order",
+                linkKey: "purchase_order",
+                targetKind: "purchase_receipt",
+                nextLabel: __("Purchase Receipt Draft"),
+            },
+            purchase_receipt: {
+                label: __("Purchase Receipt"),
+                doctype: "Purchase Receipt",
+                linkKey: "purchase_receipt",
+                targetKind: "purchase_invoice",
+                nextLabel: __("Purchase Invoice Draft"),
+            },
+        };
+        return configs[sourceType] || configs.purchase_request;
+    }
+
+    async openProcurementSourcePicker(sourceType) {
+        const config = this.procurementSourceConfig(sourceType);
+        let loaded = null;
+        const dialog = new frappe.ui.Dialog({
+            title: __("Load From {0}", [config.label]),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "source_name",
+                    fieldtype: "Link",
+                    label: config.label,
+                    options: config.doctype,
+                    reqd: 1,
+                    get_query: () => ({ filters: { docstatus: ["<", 2] } }),
+                },
+                {
+                    fieldname: "replace_rows",
+                    fieldtype: "Check",
+                    label: __("Replace current purchase rows"),
+                    default: this.rows.length ? 1 : 0,
+                },
+                { fieldname: "source_items_html", fieldtype: "HTML" },
+            ],
+            primary_action_label: __("Load Items"),
+            primary_action: async () => {
+                if (!loaded) {
+                    await loadSource();
+                    dialog.set_primary_action_label(__("Apply Selected Items"));
+                    return;
+                }
+                await applySelected();
+            },
+            secondary_action_label: __("Cancel"),
+            secondary_action: () => dialog.hide(),
+        });
+
+        const renderEmpty = (message) => {
+            dialog.fields_dict.source_items_html.$wrapper.html(`<div class="pimv1-help" style="margin-top:12px;">${this.escape(message)}</div>`);
+        };
+        const renderRows = () => {
+            const rows = loaded.items || [];
+            if (!rows.length) {
+                renderEmpty(__("No source item rows were found."));
+                return;
+            }
+            dialog.fields_dict.source_items_html.$wrapper.html(`
+                <div class="pimv1-help" style="margin:12px 0;">
+                    ${__("Select the rows and quantities to continue into {0}. You can split one request/order into multiple later documents by loading only part of the quantity.", [config.nextLabel])}
+                </div>
+                <div style="max-height:420px; overflow:auto; border:1px solid var(--border-color); border-radius:10px;">
+                    <table class="table table-bordered table-sm" style="margin:0; font-size:12px;">
+                        <thead>
+                            <tr>
+                                <th style="width:45px;">${__("Use")}</th>
+                                <th>${__("Item")}</th>
+                                <th style="width:105px;">${__("Source Qty")}</th>
+                                <th style="width:110px;">${__("Already Used")}</th>
+                                <th style="width:105px;">${__("Remaining")}</th>
+                                <th style="width:130px;">${__("Qty to Load")}</th>
+                                <th style="width:90px;">${__("UOM")}</th>
+                                <th style="width:120px;">${__("Rate")}</th>
+                                <th>${__("Warehouse")}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map((row, index) => {
+                                const remainingQty = flt(row.remaining_qty);
+                                const fullyConsumed = remainingQty <= 0;
+                                return `
+                                <tr data-source-index="${index}" class="${fullyConsumed ? "text-muted" : ""}">
+                                    <td><input type="checkbox" data-role="source-select" data-index="${index}" ${fullyConsumed ? "disabled" : "checked"}></td>
+                                    <td><strong>${this.escape(row.item_name || row.item_code)}</strong><br><span class="text-muted">${this.escape(row.item_code || "")}</span>${fullyConsumed ? `<br><span class="badge badge-default">${__("Fully Used")}</span>` : ""}</td>
+                                    <td>${this.number(row.source_qty || 0)}</td>
+                                    <td>${this.number(row.already_used_qty || 0)}</td>
+                                    <td><strong>${this.number(remainingQty)}</strong></td>
+                                    <td><input class="form-control input-xs" type="number" step="0.001" min="0" max="${remainingQty}" data-role="source-qty" data-index="${index}" value="${fullyConsumed ? 0 : remainingQty}" ${fullyConsumed ? "disabled" : ""}></td>
+                                    <td>${this.escape(row.uom || "")}</td>
+                                    <td>${this.money(row.net_rate || row.supplier_base_price || 0)}</td>
+                                    <td>${this.escape(row.warehouse || "")}</td>
+                                </tr>`;
+                            }).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `);
+        };
+
+        const loadSource = async () => {
+            const sourceName = dialog.get_value("source_name");
+            if (!sourceName) {
+                frappe.msgprint({ title: config.label, message: __("Select a source document first."), indicator: "orange" });
+                return;
+            }
+            const response = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.get_procurement_source_items",
+                args: { source_type: sourceType, source_name: sourceName },
+                freeze: true,
+                freeze_message: __("Loading {0} items...", [config.label]),
+            });
+            loaded = response.message || null;
+            renderRows();
+        };
+
+        const applySelected = async () => {
+            if (!loaded) return;
+            const selected = [];
+            const $wrapper = dialog.fields_dict.source_items_html.$wrapper;
+            $wrapper.find("[data-role='source-select']").each((_, checkbox) => {
+                const $checkbox = $(checkbox);
+                if (!$checkbox.prop("checked")) return;
+                const index = Number($checkbox.data("index"));
+                const row = { ...(loaded.items[index] || {}) };
+                const qty = flt($wrapper.find(`[data-role='source-qty'][data-index='${index}']`).val());
+                const remainingQty = flt(row.remaining_qty);
+                if (!row.item_code || qty <= 0) return;
+                if (remainingQty <= 0) return;
+                if (qty > remainingQty + 0.0001) {
+                    frappe.throw(__("Qty exceeds remaining quantity for {0}. Remaining: {1}", [row.item_name || row.item_code, remainingQty]));
+                }
+                row.qty = qty;
+                row.source_qty = flt(row.source_qty || remainingQty || row.qty);
+                row.already_used_qty = flt(row.already_used_qty || 0);
+                row.remaining_qty = remainingQty;
+                row.row_id = row.row_id || this.makeRowId();
+                this.recalculateRow(row);
+                selected.push(row);
+            });
+            if (!selected.length) {
+                frappe.msgprint({ title: config.label, message: __("Select at least one item row with quantity greater than zero."), indicator: "orange" });
+                return;
+            }
+
+            const replaceRows = cint(dialog.get_value("replace_rows"));
+            if (loaded.company && this.controls.company) await this.controls.company.set_value(loaded.company);
+            if (loaded.supplier && this.controls.supplier) await this.controls.supplier.set_value(loaded.supplier);
+            if (loaded.warehouse && this.controls.warehouse) await this.controls.warehouse.set_value(loaded.warehouse);
+            this.rows = replaceRows ? selected : (this.rows || []).concat(selected);
+            this.recordProcurementLink(config.linkKey, loaded.document);
+            this.renderRows();
+            this.refreshCards();
+            await this.fetchProcurementMatchPreview();
+            dialog.hide();
+            frappe.show_alert({ message: __("Loaded {0} item rows from {1}.", [selected.length, loaded.document.name]), indicator: "green" }, 6);
+        };
+
+        renderEmpty(__("Select a source document, then click Load Items."));
+        dialog.show();
     }
 
     procurementDraftPayload() {

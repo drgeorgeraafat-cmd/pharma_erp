@@ -1214,6 +1214,18 @@ def _build_item_row(doc, row: frappe._dict, default_warehouse: str, tax_included
     }
     if row.get("item_tax_template") and not is_bonus:
         values["item_tax_template"]=row.get("item_tax_template")
+    invoice_item_fields = _doc_fieldnames("Purchase Invoice Item")
+    source_links = {
+        "purchase_order": row.get("purchase_order") or None,
+        "po_detail": row.get("purchase_order_item") or row.get("po_detail") or None,
+        "purchase_receipt": row.get("purchase_receipt") or None,
+        "pr_detail": row.get("purchase_receipt_item") or row.get("pr_detail") or None,
+        "material_request": row.get("material_request") or None,
+        "material_request_item": row.get("material_request_item") or None,
+    }
+    for key, value in source_links.items():
+        if value and key in invoice_item_fields:
+            values[key] = value
     return values
 
 def _currency_precision(doc) -> int:
@@ -1760,6 +1772,8 @@ def _build_purchase_order_item(row: frappe._dict, default_warehouse: str, schedu
         "discount_percentage": 0,
         "discount_amount": 0,
         "item_tax_template": row.get("item_tax_template") or None,
+        "material_request": row.get("material_request") or None,
+        "material_request_item": row.get("material_request_item") or None,
     }
     return _child_values("Purchase Order Item", values)
 
@@ -1814,6 +1828,10 @@ def _build_purchase_receipt_item(row: frappe._dict, default_warehouse: str) -> d
         "custom_batch_number": (row.get("batch_no") or "").strip(),
         "custom_expiry_date": parsed_expiry,
         "custom_auto_batch_reason": row.get("auto_batch_reason"),
+        "purchase_order": row.get("purchase_order") or None,
+        "purchase_order_item": row.get("purchase_order_item") or row.get("po_detail") or None,
+        "material_request": row.get("material_request") or None,
+        "material_request_item": row.get("material_request_item") or None,
     }
     return _child_values("Purchase Receipt Item", values)
 
@@ -2033,6 +2051,277 @@ def get_procurement_match_preview(links):
         "missing": missing,
         "summary": summary,
         "rows": rows,
+    }
+
+
+def _source_doc_config(source_type: str) -> dict[str, Any]:
+    source_type = (source_type or "").strip()
+    configs = {
+        "purchase_request": {
+            "doctype": "Material Request",
+            "label": _("Purchase Request"),
+            "link_key": "purchase_request",
+            "target": "purchase_order",
+        },
+        "purchase_order": {
+            "doctype": "Purchase Order",
+            "label": _("Purchase Order"),
+            "link_key": "purchase_order",
+            "target": "purchase_receipt",
+        },
+        "purchase_receipt": {
+            "doctype": "Purchase Receipt",
+            "label": _("Purchase Receipt"),
+            "link_key": "purchase_receipt",
+            "target": "purchase_invoice",
+        },
+    }
+    if source_type not in configs:
+        frappe.throw(_("Unsupported procurement source type."))
+    return configs[source_type]
+
+
+def _source_row_qty(source_type: str, row) -> float:
+    if source_type == "purchase_receipt":
+        return flt(row.get("received_qty") or row.get("accepted_qty") or row.get("qty") or row.get("stock_qty"))
+    return flt(row.get("qty") or row.get("stock_qty"))
+
+
+def _source_row_rate(row, qty: float) -> float:
+    rate = flt(row.get("rate") or row.get("base_rate") or row.get("price_list_rate"))
+    if not rate and qty:
+        rate = flt(row.get("amount") or row.get("base_amount")) / qty
+    return rate
+
+
+
+
+
+def _child_table_has_field(doctype: str, fieldname: str) -> bool:
+    try:
+        return bool(frappe.get_meta(doctype).get_field(fieldname))
+    except Exception:
+        return False
+
+
+def _sum_linked_child_qty(parent_doctype: str, child_doctype: str, qty_fields: list[str], filters: dict[str, Any]) -> float:
+    """Sum linked child quantities for draft/submitted downstream procurement docs.
+
+    Draft documents are intentionally counted so the picker cannot accidentally
+    over-order, over-receive, or over-invoice from already-created draft documents.
+    """
+    qty_field = next((field for field in qty_fields if _child_table_has_field(child_doctype, field)), None)
+    if not qty_field:
+        return 0.0
+
+    conditions = ["p.docstatus < 2"]
+    params = []
+    for fieldname, value in (filters or {}).items():
+        if value in (None, ""):
+            continue
+        if not _child_table_has_field(child_doctype, fieldname):
+            continue
+        conditions.append(f"c.`{fieldname}` = %s")
+        params.append(value)
+
+    if len(conditions) <= 1:
+        return 0.0
+
+    result = frappe.db.sql(
+        f"""
+        select coalesce(sum(c.`{qty_field}`), 0)
+        from `tab{child_doctype}` c
+        join `tab{parent_doctype}` p on p.name = c.parent
+        where {' and '.join(conditions)}
+        """,
+        tuple(params),
+    )
+    return flt(result[0][0] if result else 0)
+
+
+def _source_row_consumed_qty(source_type: str, source_docname: str, source_rowname: str, item_code: str) -> float:
+    """Return quantity already carried forward from a source row.
+
+    purchase_request -> Purchase Order Item
+    purchase_order   -> Purchase Receipt Item
+    purchase_receipt -> Purchase Invoice Item
+    """
+    source_type = (source_type or "").strip()
+
+    if source_type == "purchase_request":
+        filters = {
+            "material_request": source_docname,
+            "material_request_item": source_rowname,
+        }
+        # item_code fallback keeps the function useful if a custom ERPNext field is missing.
+        if not _child_table_has_field("Purchase Order Item", "material_request_item"):
+            filters = {"material_request": source_docname, "item_code": item_code}
+        return _sum_linked_child_qty("Purchase Order", "Purchase Order Item", ["qty", "stock_qty"], filters)
+
+    if source_type == "purchase_order":
+        detail_field = "purchase_order_item" if _child_table_has_field("Purchase Receipt Item", "purchase_order_item") else "po_detail"
+        filters = {
+            "purchase_order": source_docname,
+            detail_field: source_rowname,
+        }
+        if not _child_table_has_field("Purchase Receipt Item", detail_field):
+            filters = {"purchase_order": source_docname, "item_code": item_code}
+        return _sum_linked_child_qty("Purchase Receipt", "Purchase Receipt Item", ["qty", "received_qty", "accepted_qty", "stock_qty"], filters)
+
+    if source_type == "purchase_receipt":
+        detail_field = "pr_detail" if _child_table_has_field("Purchase Invoice Item", "pr_detail") else "purchase_receipt_item"
+        filters = {
+            "purchase_receipt": source_docname,
+            detail_field: source_rowname,
+        }
+        if not _child_table_has_field("Purchase Invoice Item", detail_field):
+            filters = {"purchase_receipt": source_docname, "item_code": item_code}
+        return _sum_linked_child_qty("Purchase Invoice", "Purchase Invoice Item", ["qty", "stock_qty"], filters)
+
+    return 0.0
+
+
+def _purchase_page_row_from_source(source_type: str, doc, row) -> dict[str, Any]:
+    item_code = row.get("item_code")
+    item = frappe.db.get_value(
+        "Item",
+        item_code,
+        _safe_fields(
+            "Item",
+            [
+                "item_name",
+                "stock_uom",
+                "purchase_uom",
+                "has_batch_no",
+                "has_expiry_date",
+                "custom_customer_price",
+            ],
+        ),
+        as_dict=True,
+    ) or frappe._dict()
+    qty = _source_row_qty(source_type, row)
+    rate = _source_row_rate(row, qty)
+    warehouse = row.get("warehouse") or row.get("target_warehouse") or row.get("accepted_warehouse") or doc.get("set_warehouse") or ""
+    customer_price = flt(row.get("custom_selling_price")) or flt(item.get("custom_customer_price")) or rate
+    supplier_base = flt(row.get("custom_supplier_base_price")) or flt(row.get("price_list_rate")) or rate or customer_price
+    net_rate = flt(row.get("custom_manual_net_rate")) or rate
+    conversion_factor = flt(row.get("conversion_factor")) or _uom_conversion_factor(item_code, row.get("uom") or item.get("purchase_uom") or item.get("stock_uom"), item.get("stock_uom"))
+
+    source_links = {
+        "source_doctype": doc.doctype,
+        "source_name": doc.name,
+        "source_detail": row.get("name") or "",
+    }
+    if source_type == "purchase_request":
+        source_links.update({
+            "material_request": doc.name,
+            "material_request_item": row.get("name") or "",
+        })
+    elif source_type == "purchase_order":
+        source_links.update({
+            "purchase_order": doc.name,
+            "purchase_order_item": row.get("name") or "",
+            "material_request": row.get("material_request") or "",
+            "material_request_item": row.get("material_request_item") or "",
+        })
+    elif source_type == "purchase_receipt":
+        source_links.update({
+            "purchase_receipt": doc.name,
+            "purchase_receipt_item": row.get("name") or "",
+            "purchase_order": row.get("purchase_order") or "",
+            "purchase_order_item": row.get("purchase_order_item") or row.get("po_detail") or "",
+            "material_request": row.get("material_request") or "",
+            "material_request_item": row.get("material_request_item") or "",
+        })
+
+    return {
+        "row_id": f"source-{doc.doctype}-{doc.name}-{row.get('name') or row.get('idx')}",
+        "item_code": item_code,
+        "item_name": row.get("item_name") or item.get("item_name") or item_code,
+        "qty": qty,
+        "source_qty": qty,
+        "uom": row.get("uom") or item.get("purchase_uom") or item.get("stock_uom"),
+        "conversion_factor": conversion_factor,
+        "warehouse": warehouse,
+        "customer_price": customer_price,
+        "printed_retail_price": customer_price,
+        "customer_base_before_vat": flt(row.get("custom_customer_base_before_vat")),
+        "supplier_base_price": supplier_base,
+        "pricing_method": row.get("custom_purchase_pricing_method") or ("Direct Final Net Rate" if net_rate else "Discount From Customer Price"),
+        "entered_net_before_vat": flt(row.get("custom_entered_net_before_vat")),
+        "supplier_discount": flt(row.get("custom_supplier_discount_percentage")),
+        "additional_discount": flt(row.get("custom_additional_discount")),
+        "effective_discount": flt(row.get("custom_effective_discount_percentage")),
+        "tax_entry_mode": row.get("custom_tax_entry_mode") or ("Auto by VAT %" if row.get("item_tax_template") else "No VAT"),
+        "vat_inclusive": cint(row.get("custom_vat_inclusive_in_final_rate") if row.get("custom_vat_inclusive_in_final_rate") is not None else 1),
+        "vat_rate": flt(row.get("custom_vat_rate")),
+        "net_before_vat": flt(row.get("custom_net_before_vat")),
+        "vat_per_unit": flt(row.get("custom_vat_per_unit")),
+        "total_vat": flt(row.get("custom_total_vat_amount")),
+        "net_rate": net_rate,
+        "amount": qty * net_rate,
+        "batch_no": row.get("custom_batch_number") or row.get("batch_no") or "",
+        "expiry_date": row.get("custom_expiry_date") or row.get("expiry_date") or "",
+        "item_tax_template": row.get("item_tax_template") or "",
+        "item_tax_rate": flt(row.get("custom_vat_rate")),
+        "is_bonus": cint(row.get("custom_is_bonus_item") or row.get("is_free_item")),
+        "auto_batch_reason": row.get("custom_auto_batch_reason") or "",
+        "has_batch_no": cint(item.get("has_batch_no")),
+        "has_expiry_date": cint(item.get("has_expiry_date")),
+        "current_customer_price": flt(item.get("custom_customer_price")),
+        "risk_level": "None",
+        "risk_flags": [],
+        "risk_messages": [],
+        "risk_confirmed": 0,
+        "risk_confirmation_reason": "",
+        "risk_metrics": _purchase_risk_metrics(item_code, warehouse, qty * conversion_factor),
+        **source_links,
+    }
+
+
+@frappe.whitelist()
+def get_procurement_source_items(source_type: str, source_name: str):
+    """Load selectable source items for continuing a procurement flow.
+
+    This is a read-only picker foundation. The user chooses which rows and quantities
+    to carry forward into the current Purchase & Invoice Management page.
+    """
+    _require_read_access()
+    config = _source_doc_config(source_type)
+    doctype = config["doctype"]
+    source_name = (source_name or "").strip()
+    if not source_name or not frappe.db.exists(doctype, source_name):
+        frappe.throw(_("{0} was not found.").format(config["label"]))
+    doc = frappe.get_doc(doctype, source_name)
+    doc.check_permission("read")
+
+    items = []
+    for row in doc.get("items") or []:
+        item_code = row.get("item_code")
+        if not item_code:
+            continue
+        source_row = _purchase_page_row_from_source(source_type, doc, row)
+        source_qty = flt(source_row.get("qty"))
+        if source_qty <= 0:
+            continue
+        already_used_qty = _source_row_consumed_qty(source_type, doc.name, row.get("name") or "", item_code)
+        remaining_qty = max(source_qty - already_used_qty, 0)
+        source_row["source_qty"] = source_qty
+        source_row["already_used_qty"] = already_used_qty
+        source_row["remaining_qty"] = remaining_qty
+        source_row["qty"] = remaining_qty
+        source_row["is_fully_consumed"] = 1 if remaining_qty <= 0 else 0
+        items.append(source_row)
+
+    return {
+        "source_type": source_type,
+        "target_kind": config["target"],
+        "link_key": config["link_key"],
+        "document": _procurement_response(doc),
+        "company": doc.get("company") or "",
+        "supplier": doc.get("supplier") or "",
+        "warehouse": doc.get("set_warehouse") or (items[0].get("warehouse") if items else ""),
+        "items": items,
     }
 
 
