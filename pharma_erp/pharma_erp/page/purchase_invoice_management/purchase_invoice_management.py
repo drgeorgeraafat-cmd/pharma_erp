@@ -640,7 +640,11 @@ def get_bootstrap(company: str | None = None):
         limit_page_length=500,
     ) if frappe.db.exists("DocType", "Item Tax Template") else []
     item_tax_templates = [
-        {"name": name, "rate": _item_tax_template_rate(name)}
+        {
+            "name": name,
+            "rate": _item_tax_template_rate(name),
+            "tax_accounts": [row.get("account") for row in _item_tax_accounts(name) if row.get("account")],
+        }
         for name in item_tax_template_names
     ]
     return {
@@ -1358,6 +1362,81 @@ def _item_tax_accounts(template_name: str | None) -> list[dict]:
     return [{"account":row.tax_type,"rate":flt(row.tax_rate)} for row in (template.get("taxes") or []) if row.tax_type]
 
 
+def _template_has_one_tax_account(template_name: str | None, company: str | None = None) -> bool:
+    if not template_name or not frappe.db.exists("Item Tax Template", template_name):
+        return False
+    template_company = frappe.db.get_value("Item Tax Template", template_name, "company")
+    if company and template_company and template_company != company:
+        return False
+    return len(_item_tax_accounts(template_name)) == 1
+
+
+def _is_vat_labelled_item_tax_template(template_name: str) -> bool:
+    accounts = [row.get("account") or "" for row in _item_tax_accounts(template_name)]
+    label = " ".join([template_name or "", *accounts])
+    return bool(re.search(r"(^|[^a-z])vat([^a-z]|$)|value\s*added|ضريبة\s*القيمة", label, re.IGNORECASE))
+
+
+def _resolve_tax_template_for_row(row: frappe._dict, company: str | None = None) -> str | None:
+    current = (row.get("item_tax_template") or "").strip()
+    if current and _template_has_one_tax_account(current, company):
+        return current
+    mode = row.get("tax_entry_mode") or "No VAT"
+    if mode == "No VAT" or cint(row.get("is_bonus")):
+        return current or None
+
+    item_default = _default_item_tax_template(row.get("item_code"), company)
+    if _template_has_one_tax_account(item_default, company):
+        return item_default
+
+    filters = {"disabled": 0}
+    if company:
+        filters["company"] = company
+    names = frappe.get_all(
+        "Item Tax Template",
+        filters=filters,
+        pluck="name",
+        order_by="name asc",
+        limit_page_length=500,
+    )
+    candidates = [name for name in names if _template_has_one_tax_account(name, company)]
+    target_rate = max(0.0, flt(row.get("vat_rate")))
+    if target_rate:
+        matching = [name for name in candidates if abs(_item_tax_template_rate(name) - target_rate) < 0.0001]
+        if len(matching) == 1:
+            return matching[0]
+
+    # Manual VAT is allowed to differ from the configured percentage. In that
+    # case the template identifies only the VAT accounting account. Prefer the
+    # single template explicitly labelled as VAT, without changing the entered
+    # VAT Per Unit or Total VAT for Line.
+    has_manual_amount = flt(row.get("vat_per_unit")) > 0 or flt(row.get("total_vat")) > 0
+    if mode in ("VAT Per Unit", "Total VAT for Line") and has_manual_amount:
+        labelled = [name for name in candidates if _is_vat_labelled_item_tax_template(name)]
+        if len(labelled) == 1:
+            return labelled[0]
+
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _normalize_tax_templates(payload: frappe._dict) -> None:
+    company = payload.get("company")
+    for source in payload.get("items") or []:
+        row = frappe._dict(source)
+        if (row.get("tax_entry_mode") or "No VAT") == "No VAT" or cint(row.get("is_bonus")):
+            continue
+        if row.get("item_tax_template"):
+            continue
+        resolved = _resolve_tax_template_for_row(row, company)
+        if not resolved:
+            frappe.throw(
+                _("Select an Item Tax Template to identify the VAT account for item {0}. The manually entered VAT amount will not be recalculated.").format(
+                    frappe.bold(row.get("item_code") or "")
+                )
+            )
+        source["item_tax_template"] = resolved
+
+
 def _ensure_item_tax_rows(doc, payload: frappe._dict) -> None:
     existing={row.account_head for row in (doc.get("taxes") or []) if row.account_head}
     for source in payload.get("items") or []:
@@ -1396,6 +1475,77 @@ def _apply_item_tax_overrides(doc, payload: frappe._dict) -> None:
             effective_rate=100.0*calc.vat_per_unit/calc.net_before_vat if calc.net_before_vat else 0
             rates[accounts[0]["account"]] = effective_rate
         item.item_tax_rate=json.dumps(rates)
+
+def _append_bonus_vat_charges(doc, payload: frappe._dict) -> float:
+    """Post VAT payable on free bonus quantities as an explicit tax charge.
+
+    The bonus item itself must stay free in ERPNext (rate/amount = 0). Its
+    operational VAT Per Unit and Total VAT are retained in the custom item
+    fields, while this tax row carries the payable amount to the configured VAT
+    account and therefore into the official invoice total / GL on submit.
+    """
+    company = payload.get("company") or doc.get("company")
+    source_rows = [frappe._dict(source) for source in (payload.get("items") or [])]
+    item_templates: dict[str, str] = {}
+    for row in source_rows:
+        if cint(row.get("is_bonus")):
+            continue
+        template = (row.get("item_tax_template") or "").strip()
+        if row.get("item_code") and template:
+            item_templates[row.get("item_code")] = template
+
+    amounts_by_account: dict[str, float] = {}
+    for row in source_rows:
+        if not cint(row.get("is_bonus")):
+            continue
+        if (row.get("tax_entry_mode") or "No VAT") == "No VAT":
+            continue
+
+        calc = _calculate_row(row, 1)
+        bonus_vat = max(0.0, flt(calc.total_vat))
+        if not bonus_vat:
+            continue
+
+        template = (row.get("item_tax_template") or "").strip()
+        if not template:
+            template = item_templates.get(row.get("item_code")) or ""
+        if not template:
+            lookup_row = frappe._dict(dict(row))
+            lookup_row.is_bonus = 0
+            template = _resolve_tax_template_for_row(lookup_row, company) or ""
+
+        accounts = _item_tax_accounts(template)
+        if len(accounts) != 1:
+            frappe.throw(
+                _("Bonus VAT requires one Item Tax Template account for item {0}.").format(
+                    frappe.bold(row.get("item_code") or "")
+                )
+            )
+        account = accounts[0].get("account")
+        amounts_by_account[account] = flt(amounts_by_account.get(account)) + bonus_vat
+
+    precision = _currency_precision(doc)
+    total = 0.0
+    for account, raw_amount in amounts_by_account.items():
+        amount = flt(raw_amount, precision)
+        if not amount:
+            continue
+        doc.append(
+            "taxes",
+            {
+                "charge_type": "Actual",
+                "account_head": account,
+                "description": _("Bonus Item VAT"),
+                "rate": 0,
+                "tax_amount": amount,
+                "included_in_print_rate": 0,
+                "add_deduct_tax": "Add",
+                "category": "Total",
+            },
+        )
+        total += amount
+    return flt(total, precision)
+
 
 def _append_additional_charge(doc, account: str | None, amount: float, description: str | None) -> None:
     amount = flt(amount)
@@ -1446,15 +1596,16 @@ def _calculate_row(row: frappe._dict, tax_included: int = 1) -> dict:
     if cint(row.get("is_bonus")):
         customer_base = customer_price / (1.0 + vat_rate / 100.0) if mode != "No VAT" and vat_rate else customer_price
         taxable_base = max(0.0, flt(row.get("supplier_base_price")) or customer_base)
-        if mode == "VAT Per Unit":
+        # v0.7.61.2: bonus VAT uses the inherited VAT Per Unit.
+        # Total VAT for Line belongs to the purchased row; for a bonus row the
+        # unit cost is the already-calculated VAT Per Unit copied from that row.
+        if mode in ("VAT Per Unit", "Total VAT for Line"):
             vat_per_unit = max(0.0, flt(row.get("vat_per_unit")))
-        elif mode == "Total VAT for Line":
-            vat_per_unit = max(0.0, flt(row.get("total_vat"))) / qty
         elif mode == "Auto by VAT %":
             vat_per_unit = taxable_base * vat_rate / 100.0
         else:
             vat_per_unit = 0.0
-        total_vat = max(0.0, flt(row.get("total_vat"))) if mode == "Total VAT for Line" else vat_per_unit * qty
+        total_vat = vat_per_unit * qty
         final_rate = vat_per_unit
         effective = 100.0 * (1.0 - final_rate / customer_price) if customer_price else 100.0
         return frappe._dict(
@@ -1635,8 +1786,11 @@ def _build_item_row(doc, row: frappe._dict, default_warehouse: str, tax_included
     conversion_factor=flt(row.get("conversion_factor")) or _uom_conversion_factor(item_code,uom,item.stock_uom)
     calc=_calculate_row(row,1)
     is_bonus=cint(row.get("is_bonus"))
-    taxable_bonus = bool(is_bonus and flt(calc.final_rate) > 0)
-    standard_rate = flt(calc.final_rate)
+    # Bonus goods remain zero-value ERP item rows. Any VAT payable on those
+    # free units is posted separately to the VAT account by
+    # _append_bonus_vat_charges(), while the custom fields retain the
+    # operational VAT-per-unit display used by Purchase Management.
+    standard_rate = 0.0 if is_bonus else flt(calc.final_rate)
     parsed_expiry=_parse_flexible_date(row.get("expiry_date"),_("Expiry Date"))
     movement_risk=_purchase_risk_metrics(item_code,row.get("warehouse") or default_warehouse,qty*conversion_factor)
     expiry_risk=_expiry_risk(parsed_expiry, doc.posting_date)
@@ -1649,7 +1803,7 @@ def _build_item_row(doc, row: frappe._dict, default_warehouse: str, tax_included
         "qty":qty,"uom":uom,"stock_uom":item.stock_uom,"conversion_factor":conversion_factor,
         "warehouse":row.get("warehouse") or default_warehouse,
         "price_list_rate":standard_rate,"rate":standard_rate,"discount_percentage":0,"discount_amount":0,
-        "is_free_item":bool(is_bonus and not taxable_bonus),"allow_zero_valuation_rate":bool(is_bonus and not taxable_bonus),
+        "is_free_item":bool(is_bonus),"allow_zero_valuation_rate":bool(is_bonus),
         "custom_selling_price":calc.customer_price,"custom_customer_base_before_vat":calc.customer_base_before_vat,
         "custom_supplier_base_price":calc.supplier_base,"custom_purchase_pricing_method":row.get("pricing_method") or "Discount From Customer Price",
         "custom_manual_net_rate":calc.final_rate,"custom_supplier_discount_percentage":100 if is_bonus else calc.supplier_discount,
@@ -1678,6 +1832,18 @@ def _build_item_row(doc, row: frappe._dict, default_warehouse: str, tax_included
         if value and key in invoice_item_fields:
             values[key] = value
     return values
+
+def _disable_purchase_invoice_rounded_total(doc) -> None:
+    """Keep the supplier payable/outstanding equal to the exact invoice total.
+
+    ERPNext can round the payable to the nearest whole currency unit through
+    ``rounded_total``. Supplier invoices entered from this page must instead
+    preserve the exact supplier document amount (for example 1,469.71), while
+    any permitted supplier fraction difference remains an explicit tax row.
+    """
+    if doc.meta.has_field("disable_rounded_total"):
+        doc.disable_rounded_total = 1
+
 
 def _currency_precision(doc) -> int:
     return cint(frappe.db.get_default("currency_precision") or 2)
@@ -1811,17 +1977,33 @@ def _invoice_response(doc) -> dict:
 
 
 def _purchase_page_additional_charge(doc) -> dict:
+    # v0.7.61.2: system-generated Actual tax rows are not shipping charges.
+    # Bonus Item VAT is posted as an official Actual tax row for accounting,
+    # but must never be loaded back into the page's Shipping / Additional
+    # Charges controls; otherwise it is appended a second time on re-save or
+    # submit and creates an artificial difference equal to the bonus VAT.
+    ignored_descriptions = {
+        _("Supplier Invoice Fraction Adjustment"),
+        "Supplier Invoice Fraction Adjustment",
+        _("Bonus Item VAT"),
+        "Bonus Item VAT",
+    }
+    ignored_normalized = {
+        str(description or "").strip().casefold()
+        for description in ignored_descriptions
+        if description
+    }
+
     for tax in doc.get("taxes") or []:
         if tax.charge_type != "Actual":
             continue
-        if (tax.description or "") == _("Supplier Invoice Fraction Adjustment"):
-            continue
-        if (tax.description or "") == "Supplier Invoice Fraction Adjustment":
+        description = (tax.description or "").strip()
+        if description.casefold() in ignored_normalized:
             continue
         return {
             "account": tax.account_head or "",
             "amount": flt(tax.tax_amount),
-            "description": tax.description or "",
+            "description": description,
         }
     return {"account": "", "amount": 0.0, "description": ""}
 
@@ -1993,6 +2175,7 @@ def save_draft(payload):
     payload = _parse_payload(payload)
     _validate_header(payload)
     _enrich_procurement_items_from_latest_link(payload)
+    _normalize_tax_templates(payload)
     settings = get_purchase_settings()
     _validate_near_expiry_confirmation_before_save(payload, settings)
 
@@ -2023,6 +2206,7 @@ def save_draft(payload):
     else:
         doc = frappe.new_doc("Purchase Invoice")
 
+    _disable_purchase_invoice_rounded_total(doc)
     doc.company = payload.get("company")
     doc.supplier = payload.get("supplier")
     doc.posting_date = payload.get("posting_date") or nowdate()
@@ -2062,6 +2246,7 @@ def save_draft(payload):
     _copy_tax_template(doc, payload.get("taxes_and_charges"), 1)
     _ensure_item_tax_rows(doc, payload)
     _apply_item_tax_overrides(doc, payload)
+    _append_bonus_vat_charges(doc, payload)
     _append_additional_charge(
         doc,
         payload.get("additional_charge_account"),
@@ -3007,6 +3192,7 @@ def create_purchase_order_draft(payload):
     payload = _parse_payload(payload)
     _validate_procurement_payload(payload, require_supplier=True)
     _enrich_procurement_items_from_linked_source(payload, "purchase_request")
+    _normalize_tax_templates(payload)
     schedule_date = _procurement_schedule_date(payload)
 
     doc = frappe.new_doc("Purchase Order")
@@ -3059,6 +3245,7 @@ def create_purchase_receipt_draft(payload):
     payload = _parse_payload(payload)
     _validate_procurement_payload(payload, require_supplier=True)
     _enrich_procurement_items_from_linked_source(payload, "purchase_order")
+    _normalize_tax_templates(payload)
 
     doc = frappe.new_doc("Purchase Receipt")
     doc.company = payload.get("company")
@@ -3113,6 +3300,7 @@ def create_purchase_invoice_draft(payload):
     payload = _parse_payload(payload)
     _validate_procurement_payload(payload, require_supplier=True)
     _enrich_procurement_items_from_latest_link(payload)
+    _normalize_tax_templates(payload)
     settings = get_purchase_settings()
     _validate_near_expiry_confirmation_before_save(payload, settings)
 
@@ -3135,6 +3323,7 @@ def create_purchase_invoice_draft(payload):
             )
 
     doc = frappe.new_doc("Purchase Invoice")
+    _disable_purchase_invoice_rounded_total(doc)
     doc.company = payload.get("company")
     doc.supplier = payload.get("supplier")
     doc.posting_date = payload.get("posting_date") or nowdate()
@@ -3178,6 +3367,7 @@ def create_purchase_invoice_draft(payload):
     _copy_tax_template(doc, payload.get("taxes_and_charges"), 1)
     _ensure_item_tax_rows(doc, payload)
     _apply_item_tax_overrides(doc, payload)
+    _append_bonus_vat_charges(doc, payload)
     _append_additional_charge(
         doc,
         payload.get("additional_charge_account"),
@@ -3267,6 +3457,21 @@ def submit_invoice(name: str):
     doc.check_permission("submit")
     if doc.docstatus != 0:
         frappe.throw(_("Only a Draft Purchase Invoice can be submitted."))
+
+    # Also normalize drafts created before this fix. Saving once with rounded
+    # total disabled removes ERPNext's extra whole-unit rounding while keeping
+    # the explicit supplier fraction-adjustment row and Bonus VAT row intact.
+    rounded_total_was_enabled = bool(
+        doc.meta.has_field("disable_rounded_total")
+        and not cint(doc.get("disable_rounded_total"))
+    )
+    _disable_purchase_invoice_rounded_total(doc)
+    if rounded_total_was_enabled:
+        if hasattr(doc, "calculate_taxes_and_totals"):
+            doc.calculate_taxes_and_totals()
+        doc.save()
+        doc.reload()
+
     _validate_purchase_risk_before_submit(doc)
     doc.submit()
     doc.reload()

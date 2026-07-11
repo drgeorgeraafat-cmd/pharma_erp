@@ -1761,6 +1761,21 @@ all`,
             values.tax_entry_mode=dialog.get_value("tax_entry_mode")||"No VAT";
             values.vat_per_unit=flt(dialog.get_value("vat_per_unit"));
             values.total_vat=flt(dialog.get_value("total_vat"));
+            // v0.7.61.2: manual VAT amounts still need one ERP tax-account template.
+            // Resolve it automatically when the company has one unambiguous template;
+            // the entered VAT Per Unit / Total VAT remains the source of the amount.
+            if(values.tax_entry_mode!=="No VAT"&&!values.item_tax_template){
+                const resolvedTemplate=this.resolveTaxTemplateForRow(values,context);
+                if(!resolvedTemplate){
+                    frappe.msgprint({
+                        title:__("Select VAT Account Template"),
+                        message:__("Select an Item Tax Template to identify the VAT account. The manual VAT amount will not be recalculated."),
+                        indicator:"orange"
+                    });
+                    return;
+                }
+                values.item_tax_template=resolvedTemplate;
+            }
             const row=this.rowFromDialog(values,context); if(editing)this.rows[index]=row;else this.addOrMergeRow(row);
             if(!values.is_bonus&&flt(values.bonus_qty)>0){
                 const bonusDraft={
@@ -2050,10 +2065,13 @@ all`,
             const customerBase=(mode!=="No VAT"&&vatRate)?customerPrice/(1+vatRate/100):customerPrice;
             const taxableBase=Math.max(0,flt(values.supplier_base_price)||customerBase);
             let vatPerUnit=0;
-            if(mode==="VAT Per Unit") vatPerUnit=Math.max(0,flt(values.vat_per_unit));
-            else if(mode==="Total VAT for Line") vatPerUnit=Math.max(0,flt(values.total_vat))/qty;
+            // v0.7.61.2 bonus VAT uses the inherited VAT Per Unit.
+            // Total VAT for Line belongs to the purchased row and must never be copied
+            // as the bonus row total. The bonus row unit cost is the already-calculated
+            // VAT Per Unit from the purchased row.
+            if(mode==="VAT Per Unit"||mode==="Total VAT for Line") vatPerUnit=Math.max(0,flt(values.vat_per_unit));
             else if(mode==="Auto by VAT %") vatPerUnit=taxableBase*vatRate/100;
-            const totalVat=mode==="Total VAT for Line"?Math.max(0,flt(values.total_vat)):vatPerUnit*qty;
+            const totalVat=vatPerUnit*qty;
             const finalRate=vatPerUnit;
             const effective=customerPrice?100*(1-finalRate/customerPrice):100;
             return {
@@ -2166,6 +2184,37 @@ all`,
             options.push(`<option value="${this.escape(row.name)}"${isSelected}>${this.escape(row.name)} (${this.number(row.rate)}%)</option>`);
         });
         return options.join("");
+    }
+
+    resolveTaxTemplateForRow(row = {}, context = {}) {
+        const current = row.item_tax_template || context.default_item_tax_template || "";
+        if (current) return current;
+        const mode = row.tax_entry_mode || "No VAT";
+        if (mode === "No VAT") return "";
+
+        const templates = (this.bootstrap.item_tax_templates || []).filter((entry) => entry && entry.name);
+        const targetRate = Math.max(0, flt(row.vat_rate || context.default_item_tax_rate));
+        if (targetRate > 0) {
+            const matching = templates.filter((entry) => Math.abs(flt(entry.rate) - targetRate) < 0.0001);
+            if (matching.length === 1) return matching[0].name;
+        }
+
+        // v0.7.61.2: manual VAT prefers the uniquely VAT-labelled account template.
+        // Manual amounts can be invoice-specific and therefore must not be forced
+        // to equal the configured percentage. The template only identifies the
+        // accounting VAT account; VAT Per Unit / Total VAT for Line stay unchanged.
+        const isManual = mode === "VAT Per Unit" || mode === "Total VAT for Line";
+        const hasManualAmount = flt(row.vat_per_unit) > 0 || flt(row.total_vat) > 0;
+        if (isManual && hasManualAmount) {
+            const vatLabel = /(^|[^a-z])vat([^a-z]|$)|value\s*added|ضريبة\s*القيمة/i;
+            const labelled = templates.filter((entry) => {
+                const accounts = Array.isArray(entry.tax_accounts) ? entry.tax_accounts : [];
+                return vatLabel.test([entry.name, ...accounts].join(" "));
+            });
+            if (labelled.length === 1) return labelled[0].name;
+        }
+
+        return templates.length === 1 ? templates[0].name : "";
     }
 
     recalculateRow(row) {
@@ -2522,7 +2571,11 @@ all`,
             if (row.has_expiry_date && !row.expiry_date) errors.push({ message: __("Expiry Date is required on row {0}.", [index + 1]), row: index });
             const liveRisk=this.evaluateRisk(row.risk_metrics||{},row.qty,row.conversion_factor||1,row.expiry_date);
             if ((liveRisk.flags||[]).includes("EXPIRED_ITEM")) errors.push({ message: __("Expired item on row {0}: {1}", [index+1,(liveRisk.messages||[]).join(" • ")]), row:index });
-            if (row.tax_entry_mode !== "No VAT" && !row.item_tax_template) errors.push({ message: __("Item Tax Template is required for taxable row {0}.", [index + 1]), row:index });
+            if (!cint(row.is_bonus) && row.tax_entry_mode !== "No VAT" && !row.item_tax_template) {
+                const resolvedTemplate = this.resolveTaxTemplateForRow(row);
+                if (resolvedTemplate) row.item_tax_template = resolvedTemplate;
+                else errors.push({ message: __("Select an Item Tax Template to identify the VAT account on taxable row {0}. Manual VAT values will remain unchanged.", [index + 1]), row:index });
+            }
             const requireRiskConfirmation = cint((this.bootstrap.purchase_settings || {}).require_risk_confirmation);
             const nearExpiryPending =
                 requireRiskConfirmation
