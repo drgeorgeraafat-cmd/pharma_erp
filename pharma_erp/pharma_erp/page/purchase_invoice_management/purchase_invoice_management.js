@@ -3236,6 +3236,180 @@ const fullyConsumed = remainingQty <= 0;
         return await this.promptProcurementWarningDecision(invoiceName, preview, links);
     }
 
+
+
+    activeProcurementLinksForSubmitV59(invoiceName) {
+        const links = Object.assign({}, this.procurementLinks || {});
+        if (invoiceName) {
+            links.purchase_invoice = invoiceName;
+            links.purchase_invoice_doctype = "Purchase Invoice";
+        }
+        return links;
+    }
+
+    procurementHasUpstreamSourceV59(links) {
+        links = links || {};
+        return !!(links.purchase_request || links.material_request || links.purchase_order || links.purchase_receipt);
+    }
+
+    procurementIssueListHtmlV59(preview) {
+        const summary = (preview && preview.summary) || {};
+        const issues = summary.issues || [];
+        if (!issues.length) {
+            return `<div class="text-muted">${__("No detailed issue rows were returned.")}</div>`;
+        }
+        return `
+            <ul style="padding-inline-start:18px; margin:8px 0; line-height:1.7;">
+                ${issues.map((issue) => `
+                    <li>
+                        <strong>${this.escape((issue.severity || "warning").toUpperCase())}</strong>
+                        ${issue.item_name || issue.item_code ? ` — ${this.escape(issue.item_name || issue.item_code)}` : ""}<br>
+                        <span>${this.escape(issue.message || issue.code || "")}</span>
+                    </li>
+                `).join("")}
+            </ul>`;
+    }
+
+    procurementSubmitSummaryHtmlV59(preview) {
+        const summary = (preview && preview.summary) || {};
+        return `
+            <div class="pimv1-match-grid" style="margin-top:8px;">
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Received Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Invoiced Qty")}</div><div class="pimv1-match-value">${this.number(summary.invoiced_qty)}</div></div>
+                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Receipt vs Invoice")}</div><div class="pimv1-match-value">${this.number(summary.received_vs_invoiced_qty)}</div></div>
+            </div>`;
+    }
+
+    async logProcurementSubmitReviewV59(invoiceName, preview, links, reason) {
+        const summary = (preview && preview.summary) || {};
+        await frappe.call({
+            method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.log_procurement_match_decision",
+            args: {
+                payload: JSON.stringify({
+                    purchase_invoice: invoiceName,
+                    decision: "accepted_warning_before_submit",
+                    match_status: summary.match_status || "warning",
+                    reason: reason || "",
+                    links: links || {},
+                    summary: summary,
+                    issues: summary.issues || [],
+                }),
+            },
+            freeze: true,
+            freeze_message: __("Recording procurement submit review..."),
+        });
+    }
+
+    promptProcurementWarningSubmitV59(invoiceName, preview, links) {
+        return new Promise((resolve) => {
+            let accepted = false;
+            const dialog = new frappe.ui.Dialog({
+                title: __("Review Procurement Warnings Before Submit"),
+                fields: [
+                    {
+                        fieldtype: "HTML",
+                        fieldname: "warning_html",
+                        options: `
+                            <div style="line-height:1.7; max-width:780px;">
+                                <div class="text-warning"><strong>${__("This invoice has procurement warnings.")}</strong></div>
+                                <div class="text-muted">${__("Warnings may be operationally acceptable. Example: the supplier sent a real lower quantity, extra item, or wrong item. Enter the invoice as-is only if this is the real supplier invoice, then handle return/credit note if needed.")}</div>
+                                ${this.procurementSubmitSummaryHtmlV59(preview)}
+                                <div style="margin-top:10px;"><strong>${__("Warnings")}</strong></div>
+                                ${this.procurementIssueListHtmlV59(preview)}
+                            </div>`,
+                    },
+                    {
+                        fieldtype: "Small Text",
+                        fieldname: "reason",
+                        label: __("Operational reason for continuing"),
+                        reqd: 1,
+                        description: __("This reason will be saved in the Purchase Invoice timeline before submit."),
+                    },
+                ],
+                primary_action_label: __("Accept Warning & Continue Submit"),
+                primary_action: async (values) => {
+                    const reason = (values && values.reason ? values.reason : "").trim();
+                    if (!reason) {
+                        frappe.msgprint(__("Reason is required."));
+                        return;
+                    }
+                    try {
+                        await this.logProcurementSubmitReviewV59(invoiceName, preview, links, reason);
+                        accepted = true;
+                        dialog.hide();
+                        frappe.show_alert({ message: __("Procurement warning review recorded."), indicator: "orange" }, 5);
+                        resolve(true);
+                    } catch (error) {
+                        console.error("Unable to record procurement submit review", error);
+                        frappe.msgprint({
+                            title: __("Procurement Submit Review"),
+                            message: this.escape(error.message || error),
+                            indicator: "red",
+                        });
+                    }
+                },
+            });
+            dialog.onhide = () => {
+                if (!accepted) resolve(false);
+            };
+            dialog.show();
+        });
+    }
+
+    async ensureProcurementSubmitDecisionV59(invoiceName) {
+        const links = this.activeProcurementLinksForSubmitV59(invoiceName);
+
+        // Direct supplier invoice outside the shortage/procurement cycle is allowed.
+        // It should not be blocked just because a draft Purchase Invoice exists.
+        if (!this.procurementHasUpstreamSourceV59(links)) {
+            frappe.show_alert({
+                message: __("Direct Purchase Invoice: no linked Purchase Request / Order / Receipt was found."),
+                indicator: "blue",
+            }, 5);
+            return true;
+        }
+
+        this.procurementLinks = links;
+        this.saveProcurementLinks();
+
+        const preview = await this.fetchProcurementMatchPreview(false);
+        if (!preview || !preview.summary) {
+            frappe.msgprint({
+                title: __("Procurement Submit Guard"),
+                message: __("Unable to refresh Procurement Match Preview. Please refresh the match before submitting."),
+                indicator: "red",
+            });
+            return false;
+        }
+
+        const summary = preview.summary || {};
+        const status = String(summary.match_status || "matched").toLowerCase();
+
+        if (status === "matched") {
+            frappe.show_alert({ message: __("Procurement match confirmed. Invoice can be submitted."), indicator: "green" }, 5);
+            return true;
+        }
+
+        if (status === "mismatch") {
+            frappe.msgprint({
+                title: __("Procurement Mismatch"),
+                message: `
+                    <div style="line-height:1.7; max-width:780px;">
+                        <div class="text-danger"><strong>${__("Submit blocked because there is a serious procurement mismatch.")}</strong></div>
+                        <div class="text-muted">${__("Fix the quantities or linked documents first, then refresh the match and submit again.")}</div>
+                        ${this.procurementSubmitSummaryHtmlV59(preview)}
+                        <div style="margin-top:10px;"><strong>${__("Mismatch details")}</strong></div>
+                        ${this.procurementIssueListHtmlV59(preview)}
+                    </div>`,
+                indicator: "red",
+            });
+            return false;
+        }
+
+        return await this.promptProcurementWarningSubmitV59(invoiceName, preview, links);
+    }
+
     async saveAndSubmit() {
         if (this.isSaving || !this.validatePage()) return;
         const totals = this.totals();
@@ -3253,7 +3427,7 @@ const fullyConsumed = remainingQty <= 0;
                 freezeMessage: __("Saving and validating Purchase Invoice..."),
             });
             if (!saved || !saved.name) return;
-            const decisionOk = await this.ensureProcurementSubmitDecision(saved.name);
+            const decisionOk = await this.ensureProcurementSubmitDecisionV59(saved.name);
             if (!decisionOk) return;
             await this.performSubmit();
         });
@@ -3284,7 +3458,7 @@ const fullyConsumed = remainingQty <= 0;
 
     async submitInvoice() {
         if (!this.draftName || !this.validateAndReport()) return;
-        const decisionOk = await this.ensureProcurementSubmitDecision(this.draftName);
+        const decisionOk = await this.ensureProcurementSubmitDecisionV59(this.draftName);
         if (!decisionOk) return;
         frappe.confirm(__("Submit this saved Purchase Invoice? Stock and accounting entries will be created."), async () => {
             await this.performSubmit();
