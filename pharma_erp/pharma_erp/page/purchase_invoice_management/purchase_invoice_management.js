@@ -2860,7 +2860,41 @@ const fullyConsumed = remainingQty <= 0;
             }, 7);
             this.recordProcurementLink(kind, document);
             await this.fetchProcurementMatchPreview();
-            frappe.set_route("Form", document.doctype, document.name);
+            // v0.7.58: keep the operator on Purchase & Invoice Management.
+            // Drafts are created in the background, linked to the current procurement cycle,
+            // and the match preview is refreshed instead of opening the ERPNext Form page.
+            const linkKeyByKind = {
+                purchase_request: "purchase_request",
+                purchase_order: "purchase_order",
+                purchase_receipt: "purchase_receipt",
+                purchase_invoice: "purchase_invoice",
+            };
+
+            if (typeof this.recordProcurementLink === "function" && linkKeyByKind[kind]) {
+                this.recordProcurementLink(linkKeyByKind[kind], document);
+            }
+
+            if (kind === "purchase_invoice" && message.invoice) {
+                this.draftName = message.invoice.name || document.name;
+                if (typeof this.applySavedInvoiceState === "function") {
+                    this.applySavedInvoiceState(message.invoice);
+                } else if (typeof this.setSavedInvoice === "function") {
+                    this.setSavedInvoice(message.invoice);
+                } else {
+                    this.currentInvoice = message.invoice;
+                    this.savedInvoice = message.invoice;
+                }
+            }
+
+            if (typeof this.refreshCards === "function") {
+                this.refreshCards();
+            }
+            if (typeof this.renderRows === "function") {
+                this.renderRows();
+            }
+            if (typeof this.fetchProcurementMatchPreview === "function") {
+                await this.fetchProcurementMatchPreview(true);
+            }
             return document;
         } catch (error) {
             console.error("Purchase procurement draft creation failed", error);
