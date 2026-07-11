@@ -43,7 +43,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.addStyles();
         this.setupLayoutControls();
         this.page.set_primary_action(__("Save Draft"), () => this.saveDraft(), "save");
-        this.page.add_inner_button(__("New Invoice"), () => this.resetInvoice(), __("Invoice"));
+        this.page.add_inner_button(__("New Draft"), () => this.resetInvoice(), __("Invoice"));
         this.$openButton = this.page.add_inner_button(
             __("Open Official Document"),
             () => this.openOfficialDocument(),
@@ -112,16 +112,46 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-fullscreen-target:fullscreen .layout-main-section-wrapper,
                 .pimv1-fullscreen-target:fullscreen .layout-main-section { width: 100% !important; max-width: none !important; }
                 .pimv1-hero {
-                    display: flex; justify-content: space-between; align-items: center; gap: 18px;
-                    border: 1px solid var(--border-color); border-radius: 16px; padding: 20px;
-                    background: linear-gradient(135deg, var(--card-bg), var(--control-bg)); margin-bottom: 14px;
+                    display: flex; justify-content: space-between; align-items: flex-start; gap: 18px;
+                    border: 1px solid var(--border-color); border-radius: 16px; padding: 16px 18px;
+                    background: linear-gradient(135deg, var(--card-bg), var(--control-bg)); margin-bottom: 12px;
                 }
+                .pimv1-hero-copy { min-width: 240px; }
                 .pimv1-hero h2 { margin: 0 0 6px; font-weight: 800; }
-                .pimv1-hero p { margin: 0; color: var(--text-muted); }
-                .pimv1-hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-                .pimv1-lifecycle-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-                .pimv1-lifecycle-actions .btn { min-width: 112px; font-weight: 700; }
+                .pimv1-hero p { margin: 0; color: var(--text-muted); max-width: 760px; }
+                .pimv1-hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+                .pimv1-primary-actions, .pimv1-context-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+                .pimv1-primary-actions {
+                    padding: 6px; border: 1px solid var(--border-color); border-radius: 12px;
+                    background: var(--card-bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+                }
+                .pimv1-primary-actions .btn {
+                    min-width: 124px; min-height: 36px; padding: 7px 13px; border-radius: 8px;
+                    font-weight: 800; font-size: 12px;
+                }
+                .pimv1-new-draft-btn {
+                    background: var(--blue-100) !important; color: var(--blue-700) !important;
+                    border-color: var(--border-color) !important;
+                }
+                .pimv1-save-draft-btn {
+                    background: var(--control-bg) !important; color: var(--text-color) !important;
+                    border: 1px solid var(--border-color) !important;
+                }
+                .pimv1-save-submit-btn { box-shadow: 0 1px 2px rgba(0, 0, 0, .16); }
+                .pimv1-context-actions .btn { font-weight: 700; }
                 .pimv1-doc-badge { border-radius: 999px; padding: 7px 12px; background: var(--blue-100); color: var(--blue-700); font-weight: 700; white-space: nowrap; }
+                .pimv1-workflow-section { padding: 13px 14px; }
+                .pimv1-workflow-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+                .pimv1-workflow-step { border: 1px solid var(--border-color); border-radius: 12px; padding: 10px; background: var(--control-bg); min-width: 0; }
+                .pimv1-workflow-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+                .pimv1-workflow-index { width: 25px; height: 25px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 25px; background: var(--blue-100); color: var(--blue-700); font-weight: 900; }
+                .pimv1-workflow-title { font-weight: 900; line-height: 1.2; }
+                .pimv1-workflow-note { color: var(--text-muted); font-size: 10px; margin-top: 2px; line-height: 1.35; }
+                .pimv1-workflow-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+                .pimv1-workflow-actions .btn { flex: 1 1 92px; min-width: 0; font-weight: 700; }
+                .pimv1-metrics { grid-template-columns: repeat(6, minmax(135px, 1fr)); margin-top: 12px; }
+                .pimv1-metrics .pimv1-card { padding: 11px 12px; min-height: 78px; }
+                .pimv1-metrics .pimv1-card-value { font-size: 18px; margin-top: 5px; }
                 .pimv1-grid { display: grid; gap: 12px; }
                 .pimv1-grid-4 { grid-template-columns: repeat(4, minmax(170px, 1fr)); }
                 .pimv1-grid-3 { grid-template-columns: repeat(3, minmax(190px, 1fr)); }
@@ -175,10 +205,14 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-stock-recheck { display:block; margin-top:4px; font-size:11px; font-weight:700; }
                 .pimv1-stock-recheck.covered { color:#1f7a3f; }
                 .pimv1-stock-recheck.partial { color:#9a6500; }
-                .pimv1-source-context { border:1px solid #b7ccff; background:#eef4ff; color:#175cd3; border-radius:12px; padding:10px 12px; margin:12px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-                .pimv1-source-context .pimv1-source-pill { border:1px solid #b7ccff; background:var(--card-bg); border-radius:999px; padding:4px 9px; font-weight:700; }
                 .pimv1-source-context { border: 1px solid #b7ccff; background: #eef4ff; color: #175cd3; border-radius: 12px; padding: 10px 12px; margin: 12px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
                 .pimv1-source-context .pimv1-source-pill { border: 1px solid #b7ccff; background: var(--card-bg); border-radius: 999px; padding: 4px 9px; font-weight: 700; }
+                .pimv1-match-details { margin-top: 10px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--control-bg); overflow: hidden; }
+                .pimv1-match-details > summary { cursor: pointer; padding: 10px 12px; font-weight: 800; list-style-position: inside; user-select: none; }
+                .pimv1-match-details[open] > summary { border-bottom: 1px solid var(--border-color); background: var(--subtle-fg); }
+                .pimv1-match-details-body { padding: 0 12px 12px; }
+                .pimv1-match-table-wrap { width: 100%; overflow-x: auto; }
+                .pimv1-match-table { min-width: 1040px; }
                 .pimv1-section { padding: 16px; margin-top: 14px; }
                 .pimv1-section-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 13px; }
                 .pimv1-section-title h4 { margin: 0; font-weight: 800; }
@@ -347,13 +381,21 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-recent-filter-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-start; margin-top: 10px; flex-wrap: wrap; }
                 .pimv1-recent-status { color: var(--text-muted); font-size: 12px; margin-inline-start: auto; }
                 .pimv1-recent-results { margin-top: 10px; overflow-x: auto; }
+                @media (max-width: 1250px) {
+                    .pimv1-metrics { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
+                    .pimv1-workflow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                }
                 @media (max-width: 1100px) {
                     .pimv1-grid-4, .pimv1-grid-3 { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
                     .pimv1-summary { grid-template-columns: 1fr; }
                     .pimv1-recent-filters { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
                 }
-                @media (max-width: 650px) {
+                @media (max-width: 760px) {
                     .pimv1-hero { align-items: flex-start; flex-direction: column; }
+                    .pimv1-hero-actions { width: 100%; justify-content: flex-start; }
+                    .pimv1-primary-actions { width: 100%; }
+                    .pimv1-primary-actions .btn { flex: 1 1 145px; }
+                    .pimv1-workflow-grid, .pimv1-metrics { grid-template-columns: 1fr; }
                     .pimv1-grid-4, .pimv1-grid-3, .pimv1-grid-2 { grid-template-columns: 1fr; }
                     .pimv1-barcode { min-width: 100%; }
                     .pimv1-recent-filters { grid-template-columns: 1fr; }
@@ -420,68 +462,70 @@ class PurchaseInvoiceManagementPageV1 {
         this.$main.html(`
             <div class="pimv1">
                 <div class="pimv1-hero">
-                    <div>
+                    <div class="pimv1-hero-copy">
                         <h2>${__("Purchase & Invoice Management")}</h2>
-                        <p>${__("Operational purchase entry with Purchase Invoice, stock and accounting in the background.")}</p>
+                        <p>${__("Create purchase drafts in a clear four-step flow, then review and submit the supplier invoice from the same page.")}</p>
                     </div>
                     <div class="pimv1-hero-actions">
-                        <div class="pimv1-doc-badge" data-role="draft-badge">${__("New Draft")}</div>
-                        <div class="pimv1-lifecycle-actions">
-                            <button type="button" class="btn btn-default btn-sm" data-action="supplier-running-account">
-                                ${__("Supplier Account")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="returns-management">
-                                ${__("Returns Management")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-request">
-                                ${__("Load Request")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-order">
-                                ${__("Load Order")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-receipt">
-                                ${__("Load Receipt")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-request-draft">
-                                ${__("Purchase Request Draft")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-order-draft">
-                                ${__("Purchase Order Draft")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-receipt-draft">
-                                ${__("Purchase Receipt Draft")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-invoice-draft">
-                                ${__("Purchase Invoice Draft")}
-                            </button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="page-save-draft">
-                                ${__("Save Draft")}
-                            </button>
-                            <button type="button" class="btn btn-primary btn-sm" data-action="page-save-submit">
-                                ${__("Save & Submit")}
-                            </button>
+                        <div class="pimv1-doc-badge" data-role="draft-badge">${__("Unsaved Invoice")}</div>
+                        <div class="pimv1-context-actions">
+                            <button type="button" class="btn btn-default btn-sm" data-action="supplier-running-account">${__("Supplier Account")}</button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="returns-management">${__("Returns")}</button>
+                        </div>
+                        <div class="pimv1-primary-actions" aria-label="${__("Invoice Actions")}">
+                            <button type="button" class="btn btn-default btn-sm pimv1-new-draft-btn" data-action="page-new-draft">＋ ${__("New Draft")}</button>
+                            <button type="button" class="btn btn-default btn-sm pimv1-save-draft-btn" data-action="page-save-draft">${__("Save Draft")}</button>
+                            <button type="button" class="btn btn-primary btn-sm pimv1-save-submit-btn" data-action="page-save-submit">${__("Save & Submit")}</button>
                         </div>
                     </div>
                 </div>
 
-                <div class="pimv1-grid pimv1-grid-4">
-                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Supplier Balance")}</div><div class="pimv1-card-value" data-role="supplier-balance">—</div><div class="pimv1-card-note" data-role="supplier-type">${__("Select supplier")}</div></div>
-                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Items")}</div><div class="pimv1-card-value" data-role="items-count">0</div><div class="pimv1-card-note" data-role="bonus-count">${__("Bonus lines: 0")}</div></div>
-                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Estimated Net Before Added Tax")}</div><div class="pimv1-card-value" data-role="estimated-net">0.00</div><div class="pimv1-card-note">${__("After line and invoice discounts")}</div></div>
-                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Estimated VAT / Tax")}</div><div class="pimv1-card-value" data-role="estimated-tax">0.00</div><div class="pimv1-card-note" data-role="estimated-tax-note">${__("Live estimate from item tax templates")}</div></div>
-                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Estimated Grand Total")}</div><div class="pimv1-card-value" data-role="estimated-grand">0.00</div><div class="pimv1-card-note">${__("ERPNext confirms the actual value on save")}</div></div>
-                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Saved Tax / Grand Total")}</div><div class="pimv1-card-value" data-role="saved-grand">—</div><div class="pimv1-card-note" data-role="saved-status">${__("Not saved yet")}</div></div>
-                </div>
-
-                <div class="pimv1-section" data-role="procurement-match-preview">
+                <div class="pimv1-section pimv1-workflow-section">
                     <div class="pimv1-section-title">
-                        <h4>${__("Procurement Match Preview")}</h4>
-                        <div class="pimv1-actions">
-                            <button type="button" class="btn btn-default btn-sm" data-action="refresh-procurement-match">${__("Refresh Match")}</button>
-                            <button type="button" class="btn btn-default btn-sm" data-action="clear-procurement-links">${__("Clear Links")}</button>
+                        <h4>${__("Procurement Workflow")}</h4>
+                        <span class="text-muted">${__("Drafts are created in the background without opening another page.")}</span>
+                    </div>
+                    <div class="pimv1-workflow-grid">
+                        <div class="pimv1-workflow-step">
+                            <div class="pimv1-workflow-head">
+                                <span class="pimv1-workflow-index">1</span>
+                                <div><div class="pimv1-workflow-title">${__("Request")}</div><div class="pimv1-workflow-note">${__("Shortage list before selecting the supplier")}</div></div>
+                            </div>
+                            <div class="pimv1-workflow-actions">
+                                <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-request">${__("Load")}</button>
+                                <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-request-draft">${__("Create Draft")}</button>
+                            </div>
+                        </div>
+                        <div class="pimv1-workflow-step">
+                            <div class="pimv1-workflow-head">
+                                <span class="pimv1-workflow-index">2</span>
+                                <div><div class="pimv1-workflow-title">${__("Order")}</div><div class="pimv1-workflow-note">${__("Supplier and quantities actually ordered")}</div></div>
+                            </div>
+                            <div class="pimv1-workflow-actions">
+                                <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-order">${__("Load")}</button>
+                                <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-order-draft">${__("Create Draft")}</button>
+                            </div>
+                        </div>
+                        <div class="pimv1-workflow-step">
+                            <div class="pimv1-workflow-head">
+                                <span class="pimv1-workflow-index">3</span>
+                                <div><div class="pimv1-workflow-title">${__("Receipt")}</div><div class="pimv1-workflow-note">${__("What physically arrived from the supplier")}</div></div>
+                            </div>
+                            <div class="pimv1-workflow-actions">
+                                <button type="button" class="btn btn-default btn-sm" data-action="load-purchase-receipt">${__("Load")}</button>
+                                <button type="button" class="btn btn-default btn-sm" data-action="create-purchase-receipt-draft">${__("Create Draft")}</button>
+                            </div>
+                        </div>
+                        <div class="pimv1-workflow-step">
+                            <div class="pimv1-workflow-head">
+                                <span class="pimv1-workflow-index">4</span>
+                                <div><div class="pimv1-workflow-title">${__("Invoice")}</div><div class="pimv1-workflow-note">${__("Supplier invoice and final submit guard")}</div></div>
+                            </div>
+                            <div class="pimv1-workflow-actions">
+                                <button type="button" class="btn btn-primary btn-sm" data-action="create-purchase-invoice-draft">${__("Create Invoice Draft")}</button>
+                            </div>
                         </div>
                     </div>
-                    <div class="pimv1-match-content" data-role="procurement-match-content"></div>
                 </div>
 
                 <div class="pimv1-section">
@@ -515,6 +559,26 @@ class PurchaseInvoiceManagementPageV1 {
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <div class="pimv1-grid pimv1-metrics">
+                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Supplier Balance")}</div><div class="pimv1-card-value" data-role="supplier-balance">—</div><div class="pimv1-card-note" data-role="supplier-type">${__("Select supplier")}</div></div>
+                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Items")}</div><div class="pimv1-card-value" data-role="items-count">0</div><div class="pimv1-card-note" data-role="bonus-count">${__("Bonus lines: 0")}</div></div>
+                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Estimated Net Before Added Tax")}</div><div class="pimv1-card-value" data-role="estimated-net">0.00</div><div class="pimv1-card-note">${__("After discounts")}</div></div>
+                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Estimated VAT / Tax")}</div><div class="pimv1-card-value" data-role="estimated-tax">0.00</div><div class="pimv1-card-note" data-role="estimated-tax-note">${__("Live estimate")}</div></div>
+                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Estimated Grand Total")}</div><div class="pimv1-card-value" data-role="estimated-grand">0.00</div><div class="pimv1-card-note">${__("Before final ERP confirmation")}</div></div>
+                    <div class="pimv1-card"><div class="pimv1-card-label">${__("Saved Tax / Grand Total")}</div><div class="pimv1-card-value" data-role="saved-grand">—</div><div class="pimv1-card-note" data-role="saved-status">${__("Not saved yet")}</div></div>
+                </div>
+
+                <div class="pimv1-section" data-role="procurement-match-preview">
+                    <div class="pimv1-section-title">
+                        <div><h4>${__("Procurement Match Preview")}</h4><span class="text-muted">${__("Next Step and stage status stay visible; detailed quantities are collapsed by default.")}</span></div>
+                        <div class="pimv1-actions">
+                            <button type="button" class="btn btn-default btn-sm" data-action="refresh-procurement-match">${__("Refresh Match")}</button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="clear-procurement-links">${__("Clear Links")}</button>
+                        </div>
+                    </div>
+                    <div class="pimv1-match-content" data-role="procurement-match-content"></div>
                 </div>
 
                 <div class="pimv1-section">
@@ -666,6 +730,7 @@ class PurchaseInvoiceManagementPageV1 {
             if (event.which === 13) { event.preventDefault(); this.addByBarcode(); }
         });
         this.$main.on("click.pimv1", "[data-action='attach']", () => this.openUploader());
+        this.$main.on("click.pimv1", "[data-action='page-new-draft']", () => this.resetInvoice());
         this.$main.on("click.pimv1", "[data-action='page-save-draft']", () => this.saveDraft());
         this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
         this.$main.on("click.pimv1", "[data-action='supplier-running-account']", () => this.openSupplierRunningAccount());
@@ -2380,22 +2445,29 @@ class PurchaseInvoiceManagementPageV1 {
 
         $target.html(`
             <div class="pimv1-match-docs">${docsHtml}${statusHtml}</div>
-            ${this.renderProcurementStageStatusSummary(preview, links)}
             ${this.renderProcurementSimpleNextStep(preview, links)}
+            ${this.renderProcurementStageStatusSummary(preview, links)}
             ${issuesHtml}
-            <div class="pimv1-match-grid">
-                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
-                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Received Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_qty)}</div></div>
-                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Invoiced Qty")}</div><div class="pimv1-match-value">${this.number(summary.invoiced_qty)}</div></div>
-                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Receipt Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_vs_received_qty)}</div></div>
-                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Receipt vs Invoice Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_vs_invoiced_qty)}</div></div>
-                <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Invoice Amount")}</div><div class="pimv1-match-value">${this.money(summary.ordered_vs_invoiced_amount)}</div></div>
-            </div>
-            <table class="pimv1-match-table">
-                <thead><tr><th>${__("Status")}</th><th>${__("Item")}</th><th>${__("Ordered")}</th><th>${__("Received")}</th><th>${__("Invoiced")}</th><th>${__("PO Rate")}</th><th>${__("Invoice Rate")}</th><th>${__("PO-Receipt")}</th><th>${__("Receipt-Invoice")}</th><th>${__("PO Amount")}</th><th>${__("Invoice Amount")}</th></tr></thead>
-                <tbody>${rowsHtml}</tbody>
-            </table>
-            ${missing}
+            <details class="pimv1-match-details">
+                <summary>${__("Show quantities and item-level matching details")}</summary>
+                <div class="pimv1-match-details-body">
+                    <div class="pimv1-match-grid">
+                        <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Ordered Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_qty)}</div></div>
+                        <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Received Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_qty)}</div></div>
+                        <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Invoiced Qty")}</div><div class="pimv1-match-value">${this.number(summary.invoiced_qty)}</div></div>
+                        <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Receipt Qty")}</div><div class="pimv1-match-value">${this.number(summary.ordered_vs_received_qty)}</div></div>
+                        <div class="pimv1-match-box"><div class="pimv1-match-label">${__("Receipt vs Invoice Qty")}</div><div class="pimv1-match-value">${this.number(summary.received_vs_invoiced_qty)}</div></div>
+                        <div class="pimv1-match-box"><div class="pimv1-match-label">${__("PO vs Invoice Amount")}</div><div class="pimv1-match-value">${this.money(summary.ordered_vs_invoiced_amount)}</div></div>
+                    </div>
+                    <div class="pimv1-match-table-wrap">
+                        <table class="pimv1-match-table">
+                            <thead><tr><th>${__("Status")}</th><th>${__("Item")}</th><th>${__("Ordered")}</th><th>${__("Received")}</th><th>${__("Invoiced")}</th><th>${__("PO Rate")}</th><th>${__("Invoice Rate")}</th><th>${__("PO-Receipt")}</th><th>${__("Receipt-Invoice")}</th><th>${__("PO Amount")}</th><th>${__("Invoice Amount")}</th></tr></thead>
+                            <tbody>${rowsHtml}</tbody>
+                        </table>
+                    </div>
+                    ${missing}
+                </div>
+            </details>
         `);
     }
 
@@ -2441,7 +2513,7 @@ class PurchaseInvoiceManagementPageV1 {
             body = __("The linked procurement documents are matched. Review the draft invoice, then submit when ready, or start a new draft.");
         } else {
             level = "info";
-            body = __("Review the procurement stage summary above, then continue with the next operational document.");
+            body = __("Review the procurement stage summary, then continue with the next operational document.");
         }
 
         return `
@@ -3041,7 +3113,7 @@ const fullyConsumed = remainingQty <= 0;
     }
 
     resetInvoice() {
-        const reset = () => {
+        const reset = async () => {
             this.rows = [];
             this.activeRowIndex = null;
             this.draftName = null;
@@ -3050,17 +3122,38 @@ const fullyConsumed = remainingQty <= 0;
             this.supplierInvoiceTotalManual = false;
             this.supplierInvoiceTotalAutoUpdating = true;
             this.lastAutoSupplierInvoiceTotal = 0;
-            ["supplier", "bill_no", "payment_classification", "taxes_and_charges", "additional_charge_account", "remarks"].forEach((field) => this.controls[field] && this.controls[field].set_value(""));
-            ["invoice_discount_percentage", "additional_charge_amount", "supplier_invoice_total"].forEach((field) => this.controls[field] && this.controls[field].set_value(0));
-            window.setTimeout(() => { this.supplierInvoiceTotalAutoUpdating = false; }, 0);
-            if (this.controls.tax_included_in_print_rate) this.controls.tax_included_in_print_rate.set_value(1);
+            this.procurementLinks = {};
+            this.procurementMatchPreview = null;
+            this.saveProcurementLinks();
+            this.clearLocalDraft();
+
+            const clearFields = [
+                "supplier", "bill_no", "payment_classification", "taxes_and_charges",
+                "additional_charge_account", "remarks"
+            ];
+            const zeroFields = [
+                "invoice_discount_percentage", "additional_charge_amount",
+                "supplier_invoice_total", "fraction_adjustment"
+            ];
+            for (const field of clearFields) {
+                if (this.controls[field]) await this.controls[field].set_value("");
+            }
+            for (const field of zeroFields) {
+                if (this.controls[field]) await this.controls[field].set_value(0);
+            }
+            if (this.controls.tax_included_in_print_rate) {
+                await this.controls.tax_included_in_print_rate.set_value(1);
+            }
+
             const today = this.bootstrap.posting_date || frappe.datetime.get_today();
-            this.controls.posting_date.set_value(today);
-            this.controls.bill_date.set_value(today);
-            this.controls.due_date.set_value(today);
+            for (const field of ["posting_date", "bill_date", "due_date"]) {
+                if (this.controls[field]) await this.controls[field].set_value(today);
+            }
+            this.supplierInvoiceTotalAutoUpdating = false;
             this.supplierContext = {};
+
             this.$main.find("[data-role='attachment-name']").text(__("No file attached"));
-            this.$main.find("[data-role='draft-badge']").text(__("New Draft"));
+            this.$main.find("[data-role='draft-badge']").text(__("Unsaved Invoice"));
             this.$main.find("[data-role='saved-grand']").text("—");
             this.$main.find("[data-role='saved-status']").text(__("Not saved yet"));
             this.$openButton.prop("disabled", true);
@@ -3068,13 +3161,22 @@ const fullyConsumed = remainingQty <= 0;
             this.$cancelButton.prop("disabled", true);
             this.$main.find("[data-action='page-save-draft']").prop("disabled", false);
             this.$main.find("[data-action='page-save-submit']").prop("disabled", false);
+
             this.renderRows();
             this.refreshCards();
+            this.renderProcurementMatchPreview();
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            frappe.show_alert({
+                message: __("New invoice started. Current invoice data and procurement links were cleared."),
+                indicator: "blue",
+            }, 5);
         };
-        if (this.rows.length || this.draftName) frappe.confirm(__("Start a new invoice and clear current data?"), reset);
-        else reset();
+        if (this.rows.length || this.draftName || Object.keys(this.procurementLinks || {}).length) {
+            frappe.confirm(__("Start a new invoice and clear all current page data and procurement links?"), reset);
+        } else {
+            reset();
+        }
     }
-
 
 
     activeProcurementLinksForSubmit(invoiceName) {
