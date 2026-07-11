@@ -2415,27 +2415,30 @@ class PurchaseInvoiceManagementPageV1 {
         let title = __("Next Step");
         let body = "";
 
-        if (matchStatus === "mismatch") {
+        // Stage progression must win over warning status.
+        // Example: an order without receipt is a normal waiting-receipt stage,
+        // even if the match engine flags "ordered item not received yet" as warning.
+        if (!hasRequest && !hasOrder && !hasReceipt && !hasInvoice) {
+            level = "muted";
+            body = __("Create or load a Purchase Request / Order / Receipt / Invoice to build the procurement cycle.");
+        } else if (hasRequest && !hasOrder) {
+            level = "info";
+            body = __("Create Purchase Order Draft from this Purchase Request after choosing the supplier and the quantities you want to order.");
+        } else if (hasOrder && !hasReceipt) {
+            level = "info";
+            body = __("Create Purchase Receipt Draft from this Purchase Order when the supplier sends the goods.");
+        } else if (hasReceipt && !hasInvoice) {
+            level = "info";
+            body = __("Create Purchase Invoice Draft from this Purchase Receipt when you receive or enter the supplier invoice.");
+        } else if (matchStatus === "mismatch") {
             level = "danger";
             body = __("Fix the mismatch before submit. Usually this means the invoice quantity is higher than the received quantity, or linked documents need correction.");
         } else if (matchStatus === "warning") {
             level = "warning";
             body = __("Review the warnings before submit. Warnings can be operationally acceptable, for example when the supplier sent an actual extra/wrong item. Enter the invoice as-is, then handle return/credit note if needed.");
-        } else if (hasReceipt && !hasInvoice) {
-            level = "info";
-            body = __("Create Purchase Invoice Draft from this Purchase Receipt when you receive or enter the supplier invoice.");
-        } else if (hasOrder && !hasReceipt) {
-            level = "info";
-            body = __("Create Purchase Receipt Draft from this Purchase Order when the supplier sends the goods.");
-        } else if (hasRequest && !hasOrder) {
-            level = "info";
-            body = __("Create Purchase Order Draft from this Purchase Request after choosing the supplier and the quantities you want to order.");
         } else if (hasInvoice && matchStatus === "matched") {
             level = "success";
             body = __("The linked procurement documents are matched. Review the draft invoice, then submit when ready, or start a new draft.");
-        } else if (!hasRequest && !hasOrder && !hasReceipt && !hasInvoice) {
-            level = "muted";
-            body = __("Create or load a Purchase Request / Order / Receipt / Invoice to build the procurement cycle.");
         } else {
             level = "info";
             body = __("Review the procurement stage summary above, then continue with the next operational document.");
@@ -2446,7 +2449,6 @@ class PurchaseInvoiceManagementPageV1 {
                 <strong>${this.escape(title)}:</strong> ${this.escape(body)}
             </div>`;
     }
-
     renderProcurementStageStatusSummary(preview, links) {
         const summary = (preview && preview.summary) || {};
         links = links || this.procurementLinks || {};
