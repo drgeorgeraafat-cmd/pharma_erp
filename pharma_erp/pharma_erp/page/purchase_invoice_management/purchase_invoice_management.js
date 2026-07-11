@@ -18,13 +18,16 @@ class PurchaseInvoiceManagementPageV1 {
         this.supplierContext = {};
         this.rows = [];
         this.controls = {};
+        this.openDraftControls = {};
         this.recentControls = {};
+        this.openProcurementDrafts = { drafts: [], counts: {}, total: 0 };
         this.draftName = null;
         this.attachmentUrl = "";
         this.lastSavedTotals = null;
         this.isSaving = false;
         this.activeRowIndex = null;
         this.recentPanelOpen = false;
+        this.openDraftsPanelOpen = false;
         this.wideMode = true;
         this.initialRenderComplete = false;
         this.supplierInvoiceTotalManual = false;
@@ -315,6 +318,36 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-summary-row strong { font-size: 15px; }
                 .pimv1-summary-grand { background: var(--green-50); }
                 .pimv1-help { padding: 12px; border-radius: 10px; background: var(--yellow-50); border: 1px solid var(--yellow-200); color: var(--text-color); }
+                .pimv1-open-drafts-section { margin-bottom: 12px; }
+                .pimv1-open-drafts-panel { display: none; margin-top: 14px; }
+                .pimv1-open-drafts-panel.is-open { display: block; }
+                .pimv1-open-drafts-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+                .pimv1-open-drafts-summary { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 8px; margin-bottom: 12px; }
+                .pimv1-open-draft-count { border: 1px solid var(--border-color); border-radius: 11px; padding: 9px 11px; background: var(--control-bg); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+                .pimv1-open-draft-count strong { font-size: 18px; font-weight: 900; }
+                .pimv1-open-draft-count span { color: var(--text-muted); font-size: 11px; font-weight: 700; }
+                .pimv1-open-drafts-filters { display: grid; grid-template-columns: minmax(165px, .75fr) minmax(175px, .8fr) minmax(220px, 1fr) minmax(190px, .9fr) auto; gap: 10px; align-items: end; padding: 11px; border: 1px solid var(--border-color); border-radius: 11px; background: var(--control-bg); }
+                .pimv1-open-drafts-filter-actions { display: flex; align-items: center; gap: 7px; padding-bottom: 4px; flex-wrap: wrap; }
+                .pimv1-open-drafts-status { color: var(--text-muted); font-size: 11px; margin-top: 8px; }
+                .pimv1-open-drafts-results { margin-top: 10px; overflow: auto; max-height: 380px; border: 1px solid var(--border-color); border-radius: 10px; }
+                .pimv1-open-drafts-table { width: 100%; border-collapse: collapse; min-width: 1280px; }
+                .pimv1-open-drafts-table th, .pimv1-open-drafts-table td { padding: 9px; border-bottom: 1px solid var(--border-color); text-align: right; vertical-align: middle; }
+                .pimv1-open-drafts-table th { color: var(--text-muted); font-size: 11px; white-space: nowrap; position: sticky; top: 0; background: var(--card-bg); z-index: 1; }
+                .pimv1-open-draft-stage { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 9px; font-size: 11px; font-weight: 900; border: 1px solid var(--border-color); }
+                .pimv1-open-draft-stage.purchase_request { background: var(--blue-100); color: var(--blue-700); }
+                .pimv1-open-draft-stage.purchase_order { background: var(--yellow-100); color: var(--yellow-700); }
+                .pimv1-open-draft-stage.purchase_receipt { background: var(--green-100); color: var(--green-700); }
+                .pimv1-open-draft-stage.purchase_invoice { background: var(--purple-100); color: var(--purple-700); }
+                .pimv1-open-draft-age { display: inline-flex; border-radius: 999px; padding: 3px 7px; font-size: 10px; font-weight: 800; background: var(--control-bg); border: 1px solid var(--border-color); }
+                .pimv1-open-draft-age.stale { background: var(--orange-100); color: var(--orange-700); }
+                .pimv1-open-draft-progress { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: 10px; font-weight: 900; border: 1px solid var(--border-color); white-space: nowrap; }
+                .pimv1-open-draft-progress.open { background: var(--blue-100); color: var(--blue-700); }
+                .pimv1-open-draft-progress.partial { background: var(--yellow-100); color: var(--yellow-700); }
+                .pimv1-open-draft-progress.done { background: var(--green-100); color: var(--green-700); }
+                .pimv1-open-draft-chain { font-size: 11px; line-height: 1.55; min-width: 180px; }
+                .pimv1-open-draft-chain strong { color: var(--text-color); }
+                .pimv1-open-draft-actions { display: flex; gap: 6px; flex-wrap: wrap; min-width: 210px; }
+                .pimv1-open-draft-next { font-weight: 800; }
                 .pimv1-recent { width: 100%; border-collapse: collapse; }
                 .pimv1-recent th, .pimv1-recent td { padding: 9px; border-bottom: 1px solid var(--border-color); text-align: right; }
                 .pimv1-recent th { color: var(--text-muted); font-size: 11px; }
@@ -388,6 +421,8 @@ class PurchaseInvoiceManagementPageV1 {
                 @media (max-width: 1100px) {
                     .pimv1-grid-4, .pimv1-grid-3 { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
                     .pimv1-summary { grid-template-columns: 1fr; }
+                    .pimv1-open-drafts-summary { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+                    .pimv1-open-drafts-filters { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
                     .pimv1-recent-filters { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
                 }
                 @media (max-width: 760px) {
@@ -398,6 +433,8 @@ class PurchaseInvoiceManagementPageV1 {
                     .pimv1-workflow-grid, .pimv1-metrics { grid-template-columns: 1fr; }
                     .pimv1-grid-4, .pimv1-grid-3, .pimv1-grid-2 { grid-template-columns: 1fr; }
                     .pimv1-barcode { min-width: 100%; }
+                    .pimv1-open-drafts-summary { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
+                    .pimv1-open-drafts-filters { grid-template-columns: 1fr; }
                     .pimv1-recent-filters { grid-template-columns: 1fr; }
                 }
             </style>
@@ -528,6 +565,35 @@ class PurchaseInvoiceManagementPageV1 {
                     </div>
                 </div>
 
+                <div class="pimv1-section pimv1-open-drafts-section" data-role="open-procurement-drafts-section">
+                    <button type="button" class="pimv1-collapsible-title" data-action="toggle-open-drafts">
+                        <div>
+                            <h4>${__("Procurement Drafts Review")}</h4>
+                            <span class="text-muted">${__("Hidden by default for normal invoice entry. Open it only when you need to review or continue the four-stage procurement cycle.")}</span>
+                        </div>
+                        <span class="pimv1-collapsible-meta"><span data-role="open-drafts-count">${Number((this.bootstrap.open_procurement_drafts || {}).total || 0)}</span> ${__("active drafts")} <span class="pimv1-collapsible-icon">⌄</span></span>
+                    </button>
+                    <div class="pimv1-open-drafts-panel" data-role="open-drafts-panel">
+                        <div class="pimv1-open-drafts-toolbar">
+                            <span class="text-muted">${__("Review operational progress, reopen linked stages and continue only the drafts that still have remaining quantities.")}</span>
+                            <button type="button" class="btn btn-default btn-sm" data-action="refresh-open-drafts">${__("Refresh Drafts")}</button>
+                        </div>
+                        <div class="pimv1-open-drafts-summary" data-role="open-drafts-summary"></div>
+                        <div class="pimv1-open-drafts-filters">
+                            <div class="pimv1-field" data-open-draft-field="stage"></div>
+                            <div class="pimv1-field" data-open-draft-field="progress_status"></div>
+                            <div class="pimv1-field" data-open-draft-field="supplier"></div>
+                            <div class="pimv1-field" data-open-draft-field="search_text"></div>
+                            <div class="pimv1-open-drafts-filter-actions">
+                                <button type="button" class="btn btn-primary btn-sm" data-action="search-open-drafts">${__("Apply Filters")}</button>
+                                <button type="button" class="btn btn-default btn-sm" data-action="clear-open-drafts">${__("Clear")}</button>
+                            </div>
+                        </div>
+                        <div class="pimv1-open-drafts-status" data-role="open-drafts-status">${__("Showing active stages by default. Use Operational Status to include completed stages.")}</div>
+                        <div class="pimv1-open-drafts-results" data-role="open-drafts-results"></div>
+                    </div>
+                </div>
+
                 <div class="pimv1-section">
                     <div class="pimv1-section-title"><h4>${__("Invoice Header")}</h4><span class="text-muted">${__("Quick Invoice & Receipt")}</span></div>
                     <div class="pimv1-grid pimv1-grid-4">
@@ -630,12 +696,15 @@ class PurchaseInvoiceManagementPageV1 {
             </div>
         `);
 
+        this.openProcurementDrafts = this.bootstrap.open_procurement_drafts || { drafts: [], counts: {}, total: 0 };
         this.makeControls();
+        this.makeOpenDraftControls();
         this.makeRecentControls();
         this.bindEvents();
         this.applyWideMode(this.wideMode);
         this.renderShortcutHint();
         this.renderRows();
+        this.renderOpenProcurementDrafts(this.openProcurementDrafts);
         this.renderRecentInvoices(this.bootstrap.recent_invoices || []);
         this.refreshCards();
         this.renderProcurementMatchPreview();
@@ -653,6 +722,18 @@ class PurchaseInvoiceManagementPageV1 {
         });
         if (value !== undefined && value !== null) control.set_value(value);
         this.controls[fieldname] = control;
+        return control;
+    }
+
+    makeOpenDraftControl(fieldname, df, value) {
+        const parent = this.$main.find(`[data-open-draft-field="${fieldname}"]`).get(0);
+        const control = frappe.ui.form.make_control({
+            parent,
+            df: { fieldname: `open_draft_${fieldname}`, ...df },
+            render_input: true,
+        });
+        if (value !== undefined && value !== null) control.set_value(value);
+        this.openDraftControls[fieldname] = control;
         return control;
     }
 
@@ -709,6 +790,43 @@ class PurchaseInvoiceManagementPageV1 {
         this.bindSupplierInvoiceTotalManualInput(supplierInvoiceTotalControl);
         this.makeControl("fraction_adjustment", { label: __("Fraction Adjustment"), fieldtype: "Currency", read_only: 1 }, 0);
         this.makeControl("remarks", { label: __("Purchase Notes"), fieldtype: "Small Text" }, "");
+    }
+
+    makeOpenDraftControls() {
+        this.makeOpenDraftControl("stage", {
+            label: __("Stage"), fieldtype: "Select",
+            options: `
+purchase_request
+purchase_order
+purchase_receipt
+purchase_invoice`,
+        }, "");
+        this.makeOpenDraftControl("progress_status", {
+            label: __("Operational Status"), fieldtype: "Select",
+            options: `active
+open
+partial
+done
+all`,
+        }, "active");
+        this.makeOpenDraftControl("supplier", { label: __("Supplier"), fieldtype: "Link", options: "Supplier" }, "");
+        this.makeOpenDraftControl("search_text", { label: __("Document No"), fieldtype: "Data", placeholder: __("Search by document number") }, "");
+        const progressControl = this.openDraftControls.progress_status;
+        if (progressControl && progressControl.$input) {
+            progressControl.$input.find('option[value="active"]').text(__("Active Only (Open + Partial)"));
+            progressControl.$input.find('option[value="open"]').text(__("Open Only"));
+            progressControl.$input.find('option[value="partial"]').text(__("Partial Only"));
+            progressControl.$input.find('option[value="done"]').text(__("Done / Continued"));
+            progressControl.$input.find('option[value="all"]').text(__("All Statuses"));
+        }
+        const stageControl = this.openDraftControls.stage;
+        if (stageControl && stageControl.$input) {
+            stageControl.$input.find('option[value=""]').text(__("All Stages"));
+            stageControl.$input.find('option[value="purchase_request"]').text(__("Request"));
+            stageControl.$input.find('option[value="purchase_order"]').text(__("Order"));
+            stageControl.$input.find('option[value="purchase_receipt"]').text(__("Receipt"));
+            stageControl.$input.find('option[value="purchase_invoice"]').text(__("Invoice"));
+        }
     }
 
     makeRecentControls() {
@@ -782,6 +900,16 @@ class PurchaseInvoiceManagementPageV1 {
         });
         this.$main.on("click.pimv1", "[data-action='open-invoice']", (event) => frappe.set_route("Form", "Purchase Invoice", $(event.currentTarget).data("name")));
         this.$main.on("click.pimv1", "[data-action='load-draft']", (event) => this.loadDraftInvoice($(event.currentTarget).data("name")));
+        this.$main.on("click.pimv1", "[data-action='toggle-open-drafts']", () => this.toggleOpenDraftsPanel());
+        this.$main.on("click.pimv1", "[data-action='refresh-open-drafts']", () => this.refreshOpenProcurementDrafts());
+        this.$main.on("click.pimv1", "[data-action='search-open-drafts']", () => this.refreshOpenProcurementDrafts());
+        this.$main.on("click.pimv1", "[data-action='clear-open-drafts']", () => this.clearOpenProcurementDraftFilters());
+        this.$main.on("click.pimv1", "[data-action='continue-open-draft']", (event) => this.continueOpenProcurementDraft(event));
+        this.$main.on("click.pimv1", "[data-action='open-procurement-official']", (event) => {
+            const doctype = $(event.currentTarget).data("doctype");
+            const name = $(event.currentTarget).data("name");
+            if (doctype && name) frappe.set_route("Form", doctype, name);
+        });
         this.$main.on("click.pimv1", "[data-action='toggle-recent']", () => this.toggleRecentPanel());
         this.$main.on("click.pimv1", "[data-action='search-recent']", () => this.searchRecentInvoices());
         this.$main.on("click.pimv1", "[data-action='clear-recent']", () => this.clearRecentFilters());
@@ -2321,6 +2449,28 @@ class PurchaseInvoiceManagementPageV1 {
         this.renderProcurementMatchPreview();
     }
 
+    applyProcurementChain(linkedDocuments, options = {}) {
+        const replace = options.replace !== false;
+        const nextLinks = replace ? {} : { ...(this.procurementLinks || {}) };
+        const doctypes = {
+            purchase_request: "Material Request",
+            purchase_order: "Purchase Order",
+            purchase_receipt: "Purchase Receipt",
+            purchase_invoice: "Purchase Invoice",
+        };
+        ["purchase_request", "purchase_order", "purchase_receipt", "purchase_invoice"].forEach((key) => {
+            const document = linkedDocuments && linkedDocuments[key];
+            if (!document || !document.name) return;
+            nextLinks[key] = document.name;
+            nextLinks[`${key}_doctype`] = document.doctype || doctypes[key];
+        });
+        nextLinks.updated_at = frappe.datetime.now_datetime();
+        this.procurementLinks = nextLinks;
+        this.procurementMatchPreview = null;
+        this.saveProcurementLinks();
+        this.renderProcurementMatchPreview();
+    }
+
     clearProcurementLinks() {
         this.procurementLinks = {};
         this.procurementMatchPreview = null;
@@ -2677,7 +2827,7 @@ class PurchaseInvoiceManagementPageV1 {
         return configs[sourceType] || configs.purchase_request;
     }
 
-    async openProcurementSourcePicker(sourceType) {
+    async openProcurementSourcePicker(sourceType, preselectedName = "") {
         const config = this.procurementSourceConfig(sourceType);
         let loaded = null;
         const dialog = new frappe.ui.Dialog({
@@ -2753,12 +2903,12 @@ class PurchaseInvoiceManagementPageV1 {
                         <tbody>
                             ${rows.map((row, index) => {
                                 const remainingQty = flt(row.remaining_qty);
-                                
+
                                 const currentStockQty = flt(row.current_stock_qty || 0);
                                 const suggestedQty = Math.max(0, Math.min(remainingQty, flt(row.suggested_qty_to_load !== undefined ? row.suggested_qty_to_load : remainingQty)));
                                 const stockLevel = row.stock_recheck_level || "none";
                                 const stockMessage = row.stock_recheck_message || "";
-const fullyConsumed = remainingQty <= 0;
+                                const fullyConsumed = remainingQty <= 0;
                                 return `
                                 <tr data-source-index="${index}" class="${fullyConsumed ? "text-muted" : ""}">
                                     <td><input type="checkbox" data-role="source-select" data-index="${index}" ${fullyConsumed ? "disabled" : "checked"}></td>
@@ -2830,6 +2980,7 @@ const fullyConsumed = remainingQty <= 0;
             if (loaded.supplier && this.controls.supplier) await this.controls.supplier.set_value(loaded.supplier);
             if (loaded.warehouse && this.controls.warehouse) await this.controls.warehouse.set_value(loaded.warehouse);
             this.rows = replaceRows ? selected : (this.rows || []).concat(selected);
+            this.applyProcurementChain(loaded.linked_documents || {}, { replace: true });
             this.recordProcurementLink(config.linkKey, loaded.document);
             this.renderRows();
             this.refreshCards();
@@ -2840,6 +2991,11 @@ const fullyConsumed = remainingQty <= 0;
 
         renderEmpty(__("Select a source document, then click Load Items."));
         dialog.show();
+        if (preselectedName) {
+            await dialog.set_value("source_name", preselectedName);
+            await loadSource();
+            dialog.set_primary_action_label(__("Apply Selected Items"));
+        }
     }
 
     procurementDraftPayload() {
@@ -2967,6 +3123,7 @@ const fullyConsumed = remainingQty <= 0;
             if (typeof this.fetchProcurementMatchPreview === "function") {
                 await this.fetchProcurementMatchPreview(true);
             }
+            await this.refreshOpenProcurementDrafts({ silent: true });
             return document;
         } catch (error) {
             console.error("Purchase procurement draft creation failed", error);
@@ -3040,6 +3197,7 @@ const fullyConsumed = remainingQty <= 0;
             attachment: this.attachmentUrl,
             remarks: this.value("remarks"),
             buying_price_list: this.bootstrap.buying_price_list,
+            procurement_links: { ...(this.procurementLinks || {}) },
             items: this.rows,
         };
     }
@@ -3091,6 +3249,7 @@ const fullyConsumed = remainingQty <= 0;
             this.$main.find("[data-action='page-save-submit']").prop("disabled", invoice.docstatus !== 0);
             this.clearLocalDraft();
             this.renderRecentInvoices(this.bootstrap.recent_invoices);
+            await this.refreshOpenProcurementDrafts({ silent: true });
             if (!options.silent) {
                 frappe.show_alert({ message: __("Purchase Invoice {0} saved as Draft.", [invoice.name]), indicator: "green" }, 7);
             }
@@ -3554,6 +3713,7 @@ const fullyConsumed = remainingQty <= 0;
         this.$main.find("[data-role='draft-badge']").text(`${invoice.name || this.draftName} • ${invoice.status || __("Submitted")}`);
         this.$main.find("[data-role='saved-status']").text(invoice.status || __("Submitted"));
         this.renderRecentInvoices(this.bootstrap.recent_invoices);
+        await this.refreshOpenProcurementDrafts({ silent: true });
         frappe.show_alert({ message: __("Purchase Invoice {0} submitted successfully.", [invoice.name || this.draftName]), indicator: "green" }, 7);
         return invoice;
     }
@@ -3581,6 +3741,7 @@ const fullyConsumed = remainingQty <= 0;
             this.$main.find("[data-role='saved-status']").text(invoice.status || __("Cancelled"));
             this.$main.find("[data-role='draft-badge']").text(`${invoice.name || this.draftName} • ${invoice.status || __("Cancelled")}`);
             this.renderRecentInvoices(this.bootstrap.recent_invoices);
+            await this.refreshOpenProcurementDrafts({ silent: true });
             frappe.show_alert({ message: __("Purchase Invoice cancelled."), indicator: "orange" }, 6);
         });
     }
@@ -3598,7 +3759,7 @@ const fullyConsumed = remainingQty <= 0;
                     freeze_message: __("Loading Purchase Invoice Draft..."),
                 });
                 const message = response.message || {};
-                await this.applyLoadedInvoice(message.payload || {}, message.invoice || {});
+                await this.applyLoadedInvoice(message.payload || {}, message.invoice || {}, message.procurement_links || {});
                 this.toggleRecentPanel(false);
                 frappe.show_alert({ message: __("Draft {0} loaded into the purchase page.", [invoiceName]), indicator: "green" }, 6);
             } catch (error) {
@@ -3617,7 +3778,7 @@ const fullyConsumed = remainingQty <= 0;
         }
     }
 
-    async applyLoadedInvoice(payload, invoice) {
+    async applyLoadedInvoice(payload, invoice, procurementLinks = {}) {
         this.loadingInvoice = true;
         try {
             const headerFields = [
@@ -3664,6 +3825,8 @@ const fullyConsumed = remainingQty <= 0;
         this.renderRows();
         this.refreshCards();
         this.renderSummary();
+        this.applyProcurementChain(procurementLinks || {}, { replace: true });
+        await this.fetchProcurementMatchPreview(false);
     }
 
     localDraftKey() {
@@ -3715,8 +3878,155 @@ const fullyConsumed = remainingQty <= 0;
         try { localStorage.removeItem(this.localDraftKey()); } catch (e) {}
     }
 
+    openDraftValue(fieldname) {
+        return this.openDraftControls[fieldname] ? this.openDraftControls[fieldname].get_value() : "";
+    }
+
+    openDraftStageLabel(stage) {
+        const labels = {
+            purchase_request: __("Request"),
+            purchase_order: __("Order"),
+            purchase_receipt: __("Receipt"),
+            purchase_invoice: __("Invoice"),
+        };
+        return labels[stage] || stage || __("Draft");
+    }
+
+    renderOpenProcurementDrafts(payload) {
+        const data = payload || { drafts: [], counts: {}, progress_counts: {}, total: 0, all_status_total: 0 };
+        const drafts = data.drafts || [];
+        const counts = data.counts || {};
+        const progressCounts = data.progress_counts || {};
+        const total = Number(data.total !== undefined ? data.total : drafts.length) || 0;
+        const allStatusTotal = Number(data.all_status_total !== undefined ? data.all_status_total : total) || 0;
+        this.$main.find("[data-role='open-drafts-count']").text(total);
+        const countCard = (label, value) => `<div class="pimv1-open-draft-count"><span>${this.escape(label)}</span><strong>${Number(value || 0)}</strong></div>`;
+        this.$main.find("[data-role='open-drafts-summary']").html([
+            countCard(__("Filtered Results"), total),
+            countCard(__("All Statuses"), allStatusTotal),
+            countCard(__("Open"), progressCounts.open),
+            countCard(__("Partial"), progressCounts.partial),
+            countCard(__("Done"), progressCounts.done),
+            countCard(__("Requests"), counts.purchase_request),
+            countCard(__("Orders"), counts.purchase_order),
+            countCard(__("Receipts"), counts.purchase_receipt),
+            countCard(__("Invoices"), counts.purchase_invoice),
+        ].join(""));
+
+        const $results = this.$main.find("[data-role='open-drafts-results']");
+        if (!drafts.length) {
+            $results.html(`<div class="pimv1-empty">${__("No procurement drafts match the current filters.")}</div>`);
+            return;
+        }
+
+        $results.html(`
+            <table class="pimv1-open-drafts-table">
+                <thead><tr>
+                    <th>${__("Stage")}</th><th>${__("Document")}</th><th>${__("Operational Status")}</th>
+                    <th>${__("Linked Next Stage")}</th><th>${__("Supplier")}</th><th>${__("Date")}</th>
+                    <th>${__("Items / Qty")}</th><th>${__("Continued / Remaining")}</th><th>${__("Total")}</th>
+                    <th>${__("Open Age")}</th><th>${__("Next Action")}</th><th>${__("Actions")}</th>
+                </tr></thead>
+                <tbody>${drafts.map((row) => {
+                    const stage = row.stage || "";
+                    const progress = row.operational_status || "open";
+                    const daysOpen = Number(row.days_open || 0);
+                    const supplier = row.supplier_name || row.supplier || __("Not selected yet");
+                    const totalValue = stage === "purchase_request" ? "—" : this.money(row.grand_total || 0);
+                    const nextCount = Number(row.next_documents_count || 0);
+                    const nextDocument = row.next_document_name
+                        ? `<div class="pimv1-open-draft-chain"><strong>${this.escape(this.openDraftStageLabel(row.next_document_stage))}</strong><br>${this.escape(row.next_document_name)}${nextCount > 1 ? `<br><span class="text-muted">+${nextCount - 1} ${__("more linked document(s)")}</span>` : ""}</div>`
+                        : `<span class="text-muted">—</span>`;
+
+                    let continueAction = "";
+                    if (stage === "purchase_invoice") {
+                        continueAction = `<button type="button" class="btn btn-xs btn-primary pimv1-open-draft-next" data-action="continue-open-draft" data-stage="${this.escape(stage)}" data-name="${this.escape(row.name)}">${__("Open in Page")}</button>`;
+                    } else if (progress === "done" && row.next_document_name && row.next_document_stage) {
+                        continueAction = `<button type="button" class="btn btn-xs btn-primary pimv1-open-draft-next" data-action="continue-open-draft" data-stage="${this.escape(row.next_document_stage)}" data-name="${this.escape(row.next_document_name)}">${this.escape(row.next_action || __("Open Linked Stage"))}</button>`;
+                    } else {
+                        continueAction = `<button type="button" class="btn btn-xs btn-primary pimv1-open-draft-next" data-action="continue-open-draft" data-stage="${this.escape(stage)}" data-name="${this.escape(row.name)}">${this.escape(row.next_action || __("Continue"))}</button>`;
+                    }
+
+                    return `<tr>
+                        <td><span class="pimv1-open-draft-stage ${this.escape(stage)}">${this.escape(row.stage_label || this.openDraftStageLabel(stage))}</span></td>
+                        <td><strong>${this.escape(row.name || "")}</strong><br><span class="text-muted">${this.escape(row.status || __("Draft"))}</span></td>
+                        <td><span class="pimv1-open-draft-progress ${this.escape(progress)}">${this.escape(row.operational_status_label || progress)}</span></td>
+                        <td>${nextDocument}</td>
+                        <td>${this.escape(supplier)}</td>
+                        <td>${this.escape(row.date || "—")}</td>
+                        <td>${Number(row.items_count || 0)} / ${this.number(row.total_qty || 0)}</td>
+                        <td>${this.number(row.used_qty || 0)} / <strong>${this.number(row.remaining_qty || 0)}</strong></td>
+                        <td>${totalValue}</td>
+                        <td><span class="pimv1-open-draft-age ${daysOpen >= 7 ? "stale" : ""}">${daysOpen === 0 ? __("Today") : __("{0} day(s)", [daysOpen])}</span></td>
+                        <td>${this.escape(row.next_action || "")}</td>
+                        <td><div class="pimv1-open-draft-actions">
+                            ${continueAction}
+                            <button type="button" class="btn btn-xs btn-default" data-action="open-procurement-official" data-doctype="${this.escape(row.doctype)}" data-name="${this.escape(row.name)}">${__("Official Document")}</button>
+                        </div></td>
+                    </tr>`;
+                }).join("")}</tbody>
+            </table>
+        `);
+    }
+
+    async refreshOpenProcurementDrafts(options = {}) {
+        const $status = this.$main.find("[data-role='open-drafts-status']");
+        if (!options.silent) $status.text(__("Loading open procurement drafts..."));
+        try {
+            const response = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.get_open_procurement_drafts",
+                args: {
+                    company: this.value("company") || this.bootstrap.company || "",
+                    supplier: this.openDraftValue("supplier") || "",
+                    stage: this.openDraftValue("stage") || "",
+                    progress_status: this.openDraftValue("progress_status") || "active",
+                    search_text: this.openDraftValue("search_text") || "",
+                    limit: 60,
+                },
+            });
+            this.openProcurementDrafts = response.message || { drafts: [], counts: {}, total: 0 };
+            this.bootstrap.open_procurement_drafts = this.openProcurementDrafts;
+            this.renderOpenProcurementDrafts(this.openProcurementDrafts);
+            $status.text(__("{0} result(s) shown from {1} draft stage(s). Completed stages remain available through Operational Status = All or Done.", [this.openProcurementDrafts.total || 0, this.openProcurementDrafts.all_status_total || this.openProcurementDrafts.total || 0]));
+            return this.openProcurementDrafts;
+        } catch (error) {
+            $status.text(__("Could not load open procurement drafts."));
+            if (!options.silent) throw error;
+            return null;
+        }
+    }
+
+    async clearOpenProcurementDraftFilters() {
+        const tasks = Object.entries(this.openDraftControls).map(([fieldname, control]) =>
+            control.set_value(fieldname === "progress_status" ? "active" : "")
+        );
+        await Promise.all(tasks);
+        return this.refreshOpenProcurementDrafts();
+    }
+
+    continueOpenProcurementDraft(event) {
+        const $button = $(event.currentTarget);
+        const stage = String($button.data("stage") || "");
+        const name = String($button.data("name") || "");
+        if (!name) return;
+        if (stage === "purchase_invoice") {
+            this.loadDraftInvoice(name);
+            return;
+        }
+        if (["purchase_request", "purchase_order", "purchase_receipt"].includes(stage)) {
+            this.openProcurementSourcePicker(stage, name);
+        }
+    }
+
     openOfficialDocument() {
         if (this.draftName) frappe.set_route("Form", "Purchase Invoice", this.draftName);
+    }
+
+    toggleOpenDraftsPanel(forceOpen = null) {
+        this.openDraftsPanelOpen = forceOpen === null ? !this.openDraftsPanelOpen : Boolean(forceOpen);
+        this.$main.find("[data-role='open-drafts-panel']").toggleClass("is-open", this.openDraftsPanelOpen);
+        this.$main.find("[data-action='toggle-open-drafts']").toggleClass("is-open", this.openDraftsPanelOpen);
+        if (this.openDraftsPanelOpen) this.refreshOpenProcurementDrafts({ silent: true });
     }
 
     toggleRecentPanel(forceOpen = null) {

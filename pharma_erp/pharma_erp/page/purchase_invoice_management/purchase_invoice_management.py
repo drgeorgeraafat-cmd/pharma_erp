@@ -14,7 +14,7 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate, now_datetime, nowdate, escape_html
+from frappe.utils import cint, date_diff, flt, getdate, now_datetime, nowdate, escape_html
 
 from pharma_erp.purchase_management import get_purchase_settings
 
@@ -174,6 +174,456 @@ def _recent_invoices(company: str | None, limit: int = 12) -> list[dict]:
     return _filtered_purchase_invoices(company, limit=max(1, min(cint(limit), 30)))
 
 
+_OPEN_PROCUREMENT_DRAFT_CONFIG = {
+    "purchase_request": {
+        "doctype": "Material Request",
+        "label": "Request",
+        "date_fields": ["transaction_date", "schedule_date"],
+        "supplier_fields": ["custom_source_supplier"],
+        "filters": {"material_request_type": "Purchase"},
+        "next_action": "Continue to Order",
+    },
+    "purchase_order": {
+        "doctype": "Purchase Order",
+        "label": "Order",
+        "date_fields": ["transaction_date", "schedule_date"],
+        "supplier_fields": ["supplier"],
+        "filters": {},
+        "next_action": "Continue to Receipt",
+    },
+    "purchase_receipt": {
+        "doctype": "Purchase Receipt",
+        "label": "Receipt",
+        "date_fields": ["posting_date"],
+        "supplier_fields": ["supplier"],
+        "filters": {},
+        "next_action": "Continue to Invoice",
+    },
+    "purchase_invoice": {
+        "doctype": "Purchase Invoice",
+        "label": "Invoice",
+        "date_fields": ["posting_date"],
+        "supplier_fields": ["supplier"],
+        "filters": {"is_return": 0},
+        "next_action": "Review / Submit",
+    },
+}
+
+
+def _open_draft_item_stats(doctype: str, names: list[str]) -> dict[str, dict[str, float]]:
+    if not names:
+        return {}
+    items_field = frappe.get_meta(doctype).get_field("items")
+    child_doctype = items_field.options if items_field else None
+    if not child_doctype or not frappe.db.exists("DocType", child_doctype):
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(names))
+    values = [*names, doctype]
+    rows = frappe.db.sql(
+        f"""
+        select parent, count(name) as items_count, coalesce(sum(qty), 0) as total_qty
+        from `tab{child_doctype}`
+        where parent in ({placeholders}) and parenttype = %s
+        group by parent
+        """,
+        tuple(values),
+        as_dict=True,
+    )
+    return {
+        row.parent: {
+            "items_count": cint(row.items_count),
+            "total_qty": flt(row.total_qty),
+        }
+        for row in rows
+    }
+
+
+
+def _open_draft_downstream_progress(stage_key: str, source_names: list[str]) -> dict[str, dict[str, Any]]:
+    """Return downstream quantity usage and linked document names for procurement drafts.
+
+    The source documents intentionally remain ERPNext Drafts.  Operational progress is
+    therefore calculated from linked downstream child rows instead of docstatus.
+    """
+    if not source_names:
+        return {}
+
+    configs = {
+        "purchase_request": {
+            "parent_doctype": "Purchase Order",
+            "child_doctype": "Purchase Order Item",
+            "link_fields": ["material_request"],
+            "qty_fields": ["qty", "stock_qty"],
+            "target_stage": "purchase_order",
+        },
+        "purchase_order": {
+            "parent_doctype": "Purchase Receipt",
+            "child_doctype": "Purchase Receipt Item",
+            "link_fields": ["purchase_order"],
+            "qty_fields": ["qty", "received_qty", "accepted_qty", "stock_qty"],
+            "target_stage": "purchase_receipt",
+        },
+        "purchase_receipt": {
+            "parent_doctype": "Purchase Invoice",
+            "child_doctype": "Purchase Invoice Item",
+            "link_fields": ["purchase_receipt"],
+            "qty_fields": ["qty", "stock_qty"],
+            "target_stage": "purchase_invoice",
+        },
+    }
+    config = configs.get(stage_key)
+    if not config:
+        return {}
+
+    child_meta = frappe.get_meta(config["child_doctype"])
+    child_fields = {field.fieldname for field in child_meta.fields if field.fieldname}
+    link_field = next((field for field in config["link_fields"] if field in child_fields), None)
+    qty_field = next((field for field in config["qty_fields"] if field in child_fields), None)
+    if not link_field or not qty_field:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(source_names))
+    rows = frappe.db.sql(
+        f"""
+        select
+            c.`{link_field}` as source_name,
+            coalesce(sum(c.`{qty_field}`), 0) as used_qty,
+            group_concat(distinct p.name order by p.modified desc separator '\\n') as downstream_names
+        from `tab{config['child_doctype']}` c
+        join `tab{config['parent_doctype']}` p on p.name = c.parent
+        where c.`{link_field}` in ({placeholders})
+          and p.docstatus < 2
+        group by c.`{link_field}`
+        """,
+        tuple(source_names),
+        as_dict=True,
+    )
+
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        names = [name for name in str(row.get("downstream_names") or "").split("\n") if name]
+        result[row.get("source_name")] = {
+            "used_qty": flt(row.get("used_qty")),
+            "downstream_names": names,
+            "target_stage": config["target_stage"],
+            "target_doctype": _OPEN_PROCUREMENT_DRAFT_CONFIG[config["target_stage"]]["doctype"],
+        }
+    return result
+
+
+def _open_draft_progress_label(stage_key: str, progress_status: str) -> str:
+    labels = {
+        "purchase_request": {
+            "open": _("Open / Not Ordered"),
+            "partial": _("Partially Ordered"),
+            "done": _("Done / Fully Ordered"),
+        },
+        "purchase_order": {
+            "open": _("Open / Not Received"),
+            "partial": _("Partially Received"),
+            "done": _("Done / Fully Received"),
+        },
+        "purchase_receipt": {
+            "open": _("Open / Not Invoiced"),
+            "partial": _("Partially Invoiced"),
+            "done": _("Done / Fully Invoiced"),
+        },
+        "purchase_invoice": {
+            "open": _("Open / Review & Submit"),
+            "partial": _("Open / Review & Submit"),
+            "done": _("Submitted"),
+        },
+    }
+    return labels.get(stage_key, {}).get(progress_status) or _(progress_status.title())
+
+
+def _open_draft_next_action(stage_key: str, progress_status: str, has_next_document: bool) -> str:
+    next_labels = {
+        "purchase_request": _("Order"),
+        "purchase_order": _("Receipt"),
+        "purchase_receipt": _("Invoice"),
+    }
+    if stage_key == "purchase_invoice":
+        return _("Review / Submit")
+    target = next_labels.get(stage_key) or _("Next Stage")
+    if progress_status == "done" and has_next_document:
+        return _("Open linked {0}").format(target)
+    if progress_status == "partial":
+        return _("Continue remaining to {0}").format(target)
+    return _("Continue to {0}").format(target)
+
+
+def _linked_item_rows(parent_doctype: str, parent_name: str, desired_fields: list[str]) -> list[dict[str, Any]]:
+    items_field = frappe.get_meta(parent_doctype).get_field("items")
+    child_doctype = items_field.options if items_field else None
+    if not child_doctype or not frappe.db.exists("DocType", child_doctype):
+        return []
+    available = set(frappe.get_meta(child_doctype).get_valid_columns())
+    fields = [field for field in desired_fields if field in available]
+    if not fields:
+        return []
+    return frappe.get_all(
+        child_doctype,
+        filters={"parent": parent_name, "parenttype": parent_doctype},
+        fields=fields,
+        order_by="idx asc",
+        limit_page_length=1000,
+    )
+
+
+def _procurement_linked_documents(source_type: str, source_name: str) -> dict[str, Any]:
+    """Resolve the full Request -> Order -> Receipt -> Invoice chain from official rows.
+
+    The page stores links in browser localStorage for convenience, but official child-row
+    links are the source of truth after the page is closed and reopened.
+    """
+    stage_doctypes = {
+        "purchase_request": "Material Request",
+        "purchase_order": "Purchase Order",
+        "purchase_receipt": "Purchase Receipt",
+        "purchase_invoice": "Purchase Invoice",
+    }
+    if source_type not in stage_doctypes or not source_name:
+        return {}
+
+    names: dict[str, list[str]] = {key: [] for key in stage_doctypes}
+
+    def add(stage: str, value: Any) -> None:
+        value = str(value or "").strip()
+        if value and value not in names[stage] and frappe.db.exists(stage_doctypes[stage], value):
+            names[stage].append(value)
+
+    add(source_type, source_name)
+
+    if source_type == "purchase_order":
+        for row in _linked_item_rows("Purchase Order", source_name, ["material_request"]):
+            add("purchase_request", row.get("material_request"))
+
+    elif source_type == "purchase_receipt":
+        for row in _linked_item_rows("Purchase Receipt", source_name, ["purchase_order", "material_request"]):
+            add("purchase_order", row.get("purchase_order"))
+            add("purchase_request", row.get("material_request"))
+        for order_name in list(names["purchase_order"]):
+            for row in _linked_item_rows("Purchase Order", order_name, ["material_request"]):
+                add("purchase_request", row.get("material_request"))
+
+    elif source_type == "purchase_invoice":
+        for row in _linked_item_rows(
+            "Purchase Invoice",
+            source_name,
+            ["purchase_receipt", "purchase_order", "material_request"],
+        ):
+            add("purchase_receipt", row.get("purchase_receipt"))
+            add("purchase_order", row.get("purchase_order"))
+            add("purchase_request", row.get("material_request"))
+        for receipt_name in list(names["purchase_receipt"]):
+            for row in _linked_item_rows("Purchase Receipt", receipt_name, ["purchase_order", "material_request"]):
+                add("purchase_order", row.get("purchase_order"))
+                add("purchase_request", row.get("material_request"))
+        for order_name in list(names["purchase_order"]):
+            for row in _linked_item_rows("Purchase Order", order_name, ["material_request"]):
+                add("purchase_request", row.get("material_request"))
+
+    linked: dict[str, Any] = {}
+    all_links: dict[str, list[str]] = {}
+    for stage, doctype in stage_doctypes.items():
+        if names[stage]:
+            linked[stage] = {"doctype": doctype, "name": names[stage][0]}
+            all_links[stage] = names[stage]
+    if all_links:
+        linked["all"] = all_links
+        linked["has_multiple"] = any(len(values) > 1 for values in all_links.values())
+    return linked
+
+
+def _open_procurement_drafts(
+    company: str | None,
+    *,
+    supplier: str | None = None,
+    stage: str | None = None,
+    search_text: str | None = None,
+    progress_status: str | None = "active",
+    limit: int = 60,
+) -> dict[str, Any]:
+    selected_stage = (stage or "").strip().lower()
+    if selected_stage in {"all", "all_stages"}:
+        selected_stage = ""
+    selected_progress = (progress_status or "active").strip().lower()
+    if selected_progress not in {"active", "open", "partial", "done", "all"}:
+        selected_progress = "active"
+
+    stage_keys = [selected_stage] if selected_stage in _OPEN_PROCUREMENT_DRAFT_CONFIG else list(_OPEN_PROCUREMENT_DRAFT_CONFIG)
+    per_stage_limit = max(20, min(cint(limit) or 60, 120))
+    search_text = (search_text or "").strip()
+    all_drafts: list[dict[str, Any]] = []
+
+    for stage_key in stage_keys:
+        config = _OPEN_PROCUREMENT_DRAFT_CONFIG[stage_key]
+        doctype = config["doctype"]
+        if not frappe.db.exists("DocType", doctype) or not frappe.has_permission(doctype, "read"):
+            continue
+
+        available = set(frappe.get_meta(doctype).get_valid_columns())
+        supplier_field = next((field for field in config["supplier_fields"] if field in available), None)
+        if supplier and not supplier_field:
+            continue
+
+        filters: dict[str, Any] = {"docstatus": 0, **config["filters"]}
+        if company and "company" in available:
+            filters["company"] = company
+        if supplier and supplier_field:
+            filters[supplier_field] = supplier
+        if search_text:
+            filters["name"] = ["like", f"%{search_text}%"]
+
+        desired_fields = [
+            "name", "company", "status", "creation", "modified", "owner",
+            "grand_total", "rounded_total", "net_total", "total_qty",
+            *config["date_fields"], *config["supplier_fields"], "supplier_name",
+        ]
+        rows = frappe.get_list(
+            doctype,
+            filters=filters,
+            fields=[field for field in desired_fields if field in available],
+            order_by="modified desc",
+            limit_page_length=per_stage_limit,
+        )
+        row_names = [row.get("name") for row in rows if row.get("name")]
+        item_stats = _open_draft_item_stats(doctype, row_names)
+        downstream = _open_draft_downstream_progress(stage_key, row_names)
+
+        for row in rows:
+            row = frappe._dict(row)
+            supplier_name = row.get("supplier_name") or ""
+            supplier_value = row.get(supplier_field) if supplier_field else ""
+            document_date = next((row.get(field) for field in config["date_fields"] if row.get(field)), None)
+            created_on = row.get("creation") or row.get("modified") or now_datetime()
+            days_open = max(0, cint(date_diff(nowdate(), getdate(created_on))))
+            stats = item_stats.get(row.get("name"), {})
+            total_qty = flt(row.get("total_qty")) or flt(stats.get("total_qty"))
+            grand_total = flt(row.get("grand_total") or row.get("rounded_total") or row.get("net_total"))
+            progress = downstream.get(row.get("name"), {})
+            used_qty = flt(progress.get("used_qty"))
+            remaining_qty = max(total_qty - used_qty, 0)
+
+            if stage_key == "purchase_invoice":
+                operational_status = "open"
+            elif total_qty > 0 and used_qty >= total_qty - 0.0001:
+                operational_status = "done"
+            elif used_qty > 0.0001:
+                operational_status = "partial"
+            else:
+                operational_status = "open"
+
+            downstream_names = progress.get("downstream_names") or []
+            next_document_name = downstream_names[0] if downstream_names else ""
+            next_document_stage = progress.get("target_stage") or ""
+            next_document_doctype = progress.get("target_doctype") or ""
+            next_action = _open_draft_next_action(stage_key, operational_status, bool(next_document_name))
+
+            all_drafts.append({
+                "stage": stage_key,
+                "stage_label": _(config["label"]),
+                "doctype": doctype,
+                "name": row.get("name"),
+                "company": row.get("company") or company or "",
+                "supplier": supplier_value or "",
+                "supplier_name": supplier_name,
+                "date": document_date,
+                "status": row.get("status") or _("Draft"),
+                "modified": row.get("modified"),
+                "owner": row.get("owner") or "",
+                "days_open": days_open,
+                "items_count": cint(stats.get("items_count")),
+                "total_qty": total_qty,
+                "used_qty": used_qty,
+                "remaining_qty": remaining_qty,
+                "grand_total": grand_total,
+                "operational_status": operational_status,
+                "operational_status_label": _open_draft_progress_label(stage_key, operational_status),
+                "next_action": next_action,
+                "next_document_name": next_document_name,
+                "next_document_stage": next_document_stage,
+                "next_document_doctype": next_document_doctype,
+                "next_documents_count": len(downstream_names),
+                "route": f"/app/{doctype.lower().replace(' ', '-')}/{row.get('name')}",
+            })
+
+    supplier_ids = sorted({row["supplier"] for row in all_drafts if row.get("supplier") and not row.get("supplier_name")})
+    supplier_names = {}
+    if supplier_ids:
+        supplier_names = {
+            row.get("name"): row.get("supplier_name")
+            for row in frappe.get_all(
+                "Supplier",
+                filters={"name": ["in", supplier_ids]},
+                fields=["name", "supplier_name"],
+                limit_page_length=len(supplier_ids),
+            )
+        }
+    for row in all_drafts:
+        if not row.get("supplier_name") and row.get("supplier"):
+            row["supplier_name"] = supplier_names.get(row["supplier"]) or row["supplier"]
+
+    progress_counts = {"open": 0, "partial": 0, "done": 0}
+    for row in all_drafts:
+        status_key = row.get("operational_status") or "open"
+        progress_counts[status_key] = progress_counts.get(status_key, 0) + 1
+
+    if selected_progress == "active":
+        drafts = [row for row in all_drafts if row.get("operational_status") in {"open", "partial"}]
+    elif selected_progress == "all":
+        drafts = list(all_drafts)
+    else:
+        drafts = [row for row in all_drafts if row.get("operational_status") == selected_progress]
+
+    drafts.sort(key=lambda row: str(row.get("modified") or ""), reverse=True)
+    max_results = max(1, min(cint(limit) or 60, 120))
+    drafts = drafts[:max_results]
+    counts = {key: 0 for key in _OPEN_PROCUREMENT_DRAFT_CONFIG}
+    for row in drafts:
+        counts[row["stage"]] = counts.get(row["stage"], 0) + 1
+
+    return {
+        "drafts": drafts,
+        "counts": counts,
+        "progress_counts": progress_counts,
+        "total": len(drafts),
+        "all_status_total": len(all_drafts),
+        "filters": {
+            "company": company or "",
+            "supplier": supplier or "",
+            "stage": selected_stage,
+            "search_text": search_text,
+            "progress_status": selected_progress,
+        },
+    }
+
+
+@frappe.whitelist()
+def get_open_procurement_drafts(
+    company: str | None = None,
+    supplier: str | None = None,
+    stage: str | None = None,
+    search_text: str | None = None,
+    progress_status: str | None = "active",
+    limit: int = 60,
+):
+    _require_read_access()
+    company = company or _default_company()
+    if supplier and not frappe.db.exists("Supplier", supplier):
+        frappe.throw(_("Supplier does not exist."))
+    return _open_procurement_drafts(
+        company,
+        supplier=supplier or None,
+        stage=stage or None,
+        search_text=search_text or None,
+        progress_status=progress_status or "active",
+        limit=limit,
+    )
+
+
 @frappe.whitelist()
 def get_bootstrap(company: str | None = None):
     _require_read_access()
@@ -201,6 +651,7 @@ def get_bootstrap(company: str | None = None):
         "posting_date": nowdate(),
         "purchase_settings": dict(settings),
         "item_tax_templates": item_tax_templates,
+        "open_procurement_drafts": _open_procurement_drafts(company, limit=60),
         "recent_invoices": _recent_invoices(company),
         "can_create": bool(frappe.has_permission("Purchase Invoice", "create")),
         "can_submit": bool(frappe.has_permission("Purchase Invoice", "submit")),
@@ -1444,6 +1895,12 @@ def _purchase_page_item_row(doc, row) -> dict:
         "risk_confirmed": cint(row.get("custom_purchase_risk_confirmed")),
         "risk_confirmation_reason": row.get("custom_purchase_risk_confirmation_reason") or "",
         "risk_metrics": movement_risk,
+        "purchase_order": row.get("purchase_order") or "",
+        "purchase_order_item": row.get("po_detail") or row.get("purchase_order_item") or "",
+        "purchase_receipt": row.get("purchase_receipt") or "",
+        "purchase_receipt_item": row.get("pr_detail") or row.get("purchase_receipt_item") or "",
+        "material_request": row.get("material_request") or "",
+        "material_request_item": row.get("material_request_item") or "",
     }
 
 
@@ -1494,6 +1951,7 @@ def load_invoice(name: str):
     return {
         "invoice": _invoice_response(doc),
         "payload": _purchase_invoice_page_payload(doc),
+        "procurement_links": _procurement_linked_documents("purchase_invoice", doc.name),
     }
 
 
@@ -1534,6 +1992,7 @@ def save_draft(payload):
     _require_create_access()
     payload = _parse_payload(payload)
     _validate_header(payload)
+    _enrich_procurement_items_from_latest_link(payload)
     settings = get_purchase_settings()
     _validate_near_expiry_confirmation_before_save(payload, settings)
 
@@ -1679,6 +2138,148 @@ def _doc_fieldnames(doctype: str) -> set[str]:
 def _child_values(doctype: str, values: dict[str, Any]) -> dict[str, Any]:
     available = _doc_fieldnames(doctype)
     return {key: value for key, value in values.items() if key in available}
+
+
+def _payload_procurement_links(payload: frappe._dict) -> frappe._dict:
+    links = payload.get("procurement_links") or {}
+    if isinstance(links, str):
+        try:
+            links = frappe.parse_json(links)
+        except Exception:
+            links = {}
+    return frappe._dict(links if isinstance(links, dict) else {})
+
+
+def _linked_source_name(payload: frappe._dict, source_type: str) -> str:
+    key_by_type = {
+        "purchase_request": "purchase_request",
+        "purchase_order": "purchase_order",
+        "purchase_receipt": "purchase_receipt",
+    }
+    key = key_by_type.get(source_type)
+    if not key:
+        return ""
+    links = _payload_procurement_links(payload)
+    return str(links.get(key) or payload.get(key) or "").strip()
+
+
+def _source_row_quantity(row) -> float:
+    for fieldname in ("qty", "received_qty", "accepted_qty", "stock_qty"):
+        value = row.get(fieldname)
+        if value not in (None, ""):
+            return abs(flt(value))
+    return 0.0
+
+
+def _enrich_procurement_items_from_linked_source(payload: frappe._dict, source_type: str) -> bool:
+    """Attach official ERPNext parent/child references before creating the next draft.
+
+    Operators may create Request -> Order -> Receipt -> Invoice directly from the same
+    page without reloading each document. In that flow the visible rows originally come
+    from the page, so they do not yet contain the child-row names assigned by ERPNext.
+    This helper resolves the latest linked draft and safely maps matching item rows back
+    to its official children before building the downstream document.
+    """
+    source_name = _linked_source_name(payload, source_type)
+    source_doctype_by_type = {
+        "purchase_request": "Material Request",
+        "purchase_order": "Purchase Order",
+        "purchase_receipt": "Purchase Receipt",
+    }
+    source_doctype = source_doctype_by_type.get(source_type)
+    if not source_doctype or not source_name or not frappe.db.exists(source_doctype, source_name):
+        return False
+
+    source_doc = frappe.get_doc(source_doctype, source_name)
+    source_rows = [row for row in (source_doc.get("items") or []) if row.get("item_code")]
+    if not source_rows:
+        return False
+
+    rows_by_item: dict[str, list[Any]] = {}
+    rows_by_name: dict[str, Any] = {}
+    for source_row in source_rows:
+        rows_by_item.setdefault(source_row.get("item_code"), []).append(source_row)
+        if source_row.get("name"):
+            rows_by_name[source_row.get("name")] = source_row
+
+    assigned_qty: dict[str, float] = {}
+    enriched_items = []
+    changed = False
+
+    for raw in payload.get("items") or []:
+        row = frappe._dict(dict(raw))
+        item_code = row.get("item_code")
+        row_qty = abs(flt(row.get("qty")))
+
+        if source_type == "purchase_request":
+            parent_field = "material_request"
+            detail_field = "material_request_item"
+        elif source_type == "purchase_order":
+            parent_field = "purchase_order"
+            detail_field = "purchase_order_item"
+        else:
+            parent_field = "purchase_receipt"
+            detail_field = "purchase_receipt_item"
+
+        candidate = None
+        existing_detail = row.get(detail_field) or row.get("source_detail")
+        if existing_detail and existing_detail in rows_by_name:
+            possible = rows_by_name[existing_detail]
+            if not item_code or possible.get("item_code") == item_code:
+                candidate = possible
+
+        if candidate is None and item_code:
+            candidates = rows_by_item.get(item_code) or []
+            if candidates:
+                candidate = next(
+                    (
+                        source_row
+                        for source_row in candidates
+                        if _source_row_quantity(source_row)
+                        - assigned_qty.get(source_row.get("name") or "", 0.0)
+                        + 0.000001
+                        >= row_qty
+                    ),
+                    candidates[0],
+                )
+
+        if candidate is not None:
+            candidate_name = candidate.get("name") or ""
+            row[parent_field] = source_name
+            row[detail_field] = candidate_name
+            row["source_doctype"] = source_doctype
+            row["source_name"] = source_name
+            row["source_detail"] = candidate_name
+
+            if source_type == "purchase_order":
+                row["material_request"] = candidate.get("material_request") or row.get("material_request") or ""
+                row["material_request_item"] = candidate.get("material_request_item") or row.get("material_request_item") or ""
+            elif source_type == "purchase_receipt":
+                row["purchase_order"] = candidate.get("purchase_order") or row.get("purchase_order") or ""
+                row["purchase_order_item"] = (
+                    candidate.get("purchase_order_item")
+                    or candidate.get("po_detail")
+                    or row.get("purchase_order_item")
+                    or row.get("po_detail")
+                    or ""
+                )
+                row["material_request"] = candidate.get("material_request") or row.get("material_request") or ""
+                row["material_request_item"] = candidate.get("material_request_item") or row.get("material_request_item") or ""
+
+            assigned_qty[candidate_name] = assigned_qty.get(candidate_name, 0.0) + row_qty
+            changed = True
+
+        enriched_items.append(row)
+
+    payload["items"] = enriched_items
+    return changed
+
+
+def _enrich_procurement_items_from_latest_link(payload: frappe._dict) -> bool:
+    for source_type in ("purchase_receipt", "purchase_order", "purchase_request"):
+        if _linked_source_name(payload, source_type):
+            return _enrich_procurement_items_from_linked_source(payload, source_type)
+    return False
 
 
 def _procurement_schedule_date(payload: frappe._dict):
@@ -2360,6 +2961,7 @@ def get_procurement_source_items(source_type: str, source_name: str):
         "target_kind": config["target"],
         "link_key": config["link_key"],
         "document": _procurement_response(doc),
+        "linked_documents": _procurement_linked_documents(source_type, doc.name),
         "company": doc.get("company") or "",
         "supplier": doc.get("supplier") or "",
         "warehouse": doc.get("set_warehouse") or (items[0].get("warehouse") if items else ""),
@@ -2404,6 +3006,7 @@ def create_purchase_order_draft(payload):
     _require_document_create_access("Purchase Order")
     payload = _parse_payload(payload)
     _validate_procurement_payload(payload, require_supplier=True)
+    _enrich_procurement_items_from_linked_source(payload, "purchase_request")
     schedule_date = _procurement_schedule_date(payload)
 
     doc = frappe.new_doc("Purchase Order")
@@ -2455,6 +3058,7 @@ def create_purchase_receipt_draft(payload):
     _require_document_create_access("Purchase Receipt")
     payload = _parse_payload(payload)
     _validate_procurement_payload(payload, require_supplier=True)
+    _enrich_procurement_items_from_linked_source(payload, "purchase_order")
 
     doc = frappe.new_doc("Purchase Receipt")
     doc.company = payload.get("company")
@@ -2508,6 +3112,7 @@ def create_purchase_invoice_draft(payload):
     _require_document_create_access("Purchase Invoice")
     payload = _parse_payload(payload)
     _validate_procurement_payload(payload, require_supplier=True)
+    _enrich_procurement_items_from_latest_link(payload)
     settings = get_purchase_settings()
     _validate_near_expiry_confirmation_before_save(payload, settings)
 
