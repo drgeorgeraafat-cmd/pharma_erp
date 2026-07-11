@@ -28,7 +28,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.activeRowIndex = null;
         this.recentPanelOpen = false;
         this.openDraftsPanelOpen = false;
-        this.wideMode = true;
+        this.wideMode = false;
         this.initialRenderComplete = false;
         this.supplierInvoiceTotalManual = false;
         this.supplierInvoiceTotalAutoUpdating = false;
@@ -106,11 +106,11 @@ class PurchaseInvoiceManagementPageV1 {
         if ($("#purchase-invoice-management-v1-style").length) return;
         $("head").append(`
             <style id="purchase-invoice-management-v1-style">
-                .pimv1 { direction: rtl; text-align: right; padding: 0 0 38px; width: 100%; max-width: none; }
-                .pimv1 * { box-sizing: border-box; }
-                .pimv1-layout-wide { width: 100% !important; max-width: none !important; }
-                .pimv1-container-wide { width: 100% !important; max-width: none !important; padding-left: 14px !important; padding-right: 14px !important; }
-                .pimv1-main-wide { width: 100% !important; max-width: none !important; }
+                .pimv1 { direction: rtl; text-align: right; padding: 0 0 38px; width: auto; min-width: 0; max-width: 100%; overflow-x: clip; }
+                .pimv1, .pimv1 * { box-sizing: border-box; }
+                .pimv1-layout-wide { flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; max-width: 100% !important; }
+                .pimv1-container-wide { width: auto !important; max-width: none !important; margin-left: 0 !important; margin-right: 0 !important; padding-left: 14px !important; padding-right: 14px !important; }
+                .pimv1-main-wide { width: auto !important; min-width: 0 !important; max-width: 100% !important; }
                 .pimv1-fullscreen-target:fullscreen { background: var(--bg-color); overflow: auto; padding: 10px; }
                 .pimv1-fullscreen-target:fullscreen .layout-main-section-wrapper,
                 .pimv1-fullscreen-target:fullscreen .layout-main-section { width: 100% !important; max-width: none !important; }
@@ -414,6 +414,179 @@ class PurchaseInvoiceManagementPageV1 {
                 .pimv1-recent-filter-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-start; margin-top: 10px; flex-wrap: wrap; }
                 .pimv1-recent-status { color: var(--text-muted); font-size: 12px; margin-inline-start: auto; }
                 .pimv1-recent-results { margin-top: 10px; overflow-x: auto; }
+
+                /* v0.7.61.1 corrective responsive layout containment */
+                .pimv1-fullscreen-target,
+                .pimv1-fullscreen-target .page-body,
+                .pimv1-fullscreen-target .page-content,
+                .pimv1-fullscreen-target .layout-main,
+                .pimv1-fullscreen-target .layout-main-section-wrapper,
+                .pimv1-fullscreen-target .layout-main-section,
+                .pimv1-fullscreen-target .container,
+                .pimv1 {
+                    min-width: 0 !important;
+                }
+                .pimv1-fullscreen-target,
+                .pimv1-fullscreen-target .page-body,
+                .pimv1-fullscreen-target .page-content {
+                    max-width: 100% !important;
+                    overflow-x: clip !important;
+                }
+                .pimv1-fullscreen-target .layout-main,
+                .pimv1-fullscreen-target .layout-main-section-wrapper,
+                .pimv1-fullscreen-target .layout-main-section {
+                    max-width: 100% !important;
+                }
+                .pimv1-layout-wide {
+                    flex: 1 1 0 !important;
+                    width: auto !important;
+                    min-width: 0 !important;
+                    max-width: 100% !important;
+                }
+                .pimv1-container-wide {
+                    width: auto !important;
+                    max-width: none !important;
+                    margin-inline: 0 !important;
+                    padding-inline: 14px !important;
+                }
+                .pimv1-main-wide {
+                    width: auto !important;
+                    min-width: 0 !important;
+                    max-width: 100% !important;
+                }
+                .pimv1 > *,
+                .pimv1-grid,
+                .pimv1-section,
+                .pimv1-card,
+                .pimv1-hero,
+                .pimv1-hero-copy,
+                .pimv1-hero-actions,
+                .pimv1-workflow-section,
+                .pimv1-workflow-grid,
+                .pimv1-workflow-step,
+                .pimv1-section-title,
+                .pimv1-section-title > *,
+                .pimv1-match-content,
+                .pimv1-match-docs,
+                .pimv1-stage-summary,
+                .pimv1-open-drafts-section,
+                .pimv1-open-drafts-panel,
+                .pimv1-open-drafts-toolbar,
+                .pimv1-open-drafts-summary,
+                .pimv1-open-drafts-filters,
+                .pimv1-open-drafts-filters > *,
+                .pimv1-recent-panel,
+                .pimv1-recent-filters,
+                .pimv1-summary,
+                .pimv1-summary > * {
+                    min-width: 0;
+                    max-width: 100%;
+                }
+                .pimv1 > *,
+                .pimv1-section,
+                .pimv1-workflow-section,
+                .pimv1-hero {
+                    width: auto;
+                }
+                .pimv1-hero-copy {
+                    min-width: 0;
+                    flex: 1 1 360px;
+                }
+                .pimv1-hero-actions {
+                    min-width: 0;
+                    flex: 1 1 520px;
+                }
+                .pimv1-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+                .pimv1-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+                .pimv1-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .pimv1 h2,
+                .pimv1 h4,
+                .pimv1 p,
+                .pimv1 .text-muted,
+                .pimv1-help,
+                .pimv1-workflow-note,
+                .pimv1-stage-note,
+                .pimv1-next-step-note,
+                .pimv1-summary-row,
+                .pimv1-validation-panel {
+                    overflow-wrap: anywhere;
+                    word-break: normal;
+                }
+                .pimv1-summary-row {
+                    flex-wrap: wrap;
+                }
+                .pimv1-match-docs {
+                    width: 100%;
+                    align-items: stretch;
+                }
+                .pimv1-match-doc {
+                    min-width: 0;
+                    max-width: 100%;
+                    white-space: normal;
+                    overflow-wrap: anywhere;
+                    line-height: 1.35;
+                }
+                .pimv1-match-details,
+                .pimv1-match-table-wrap,
+                .pimv1-table-wrap,
+                .pimv1-open-drafts-results,
+                .pimv1-recent-results,
+                .pimv1-history {
+                    width: auto;
+                    max-width: 100%;
+                    min-width: 0;
+                    overflow-x: auto !important;
+                    overscroll-behavior-inline: contain;
+                    scrollbar-gutter: stable;
+                }
+                .pimv1-table-wrap { overflow-y: hidden; }
+                .pimv1-items-list { min-width: 1180px; }
+                .pimv1-open-drafts-results { overflow-y: auto !important; }
+                .pimv1-open-drafts-table {
+                    width: max-content;
+                    min-width: max(100%, 1280px);
+                }
+                .pimv1-open-drafts-table th,
+                .pimv1-open-drafts-table td { max-width: 260px; }
+                .pimv1-open-draft-chain,
+                .pimv1-open-draft-actions { min-width: 0; }
+                .pimv1-open-draft-actions .btn { white-space: normal; }
+                .pimv1-collapsible-title > div {
+                    min-width: 0;
+                    max-width: 100%;
+                }
+                .pimv1-collapsible-meta {
+                    flex: 0 0 auto;
+                    white-space: nowrap;
+                }
+                @media (max-width: 1450px) {
+                    .pimv1-hero { align-items: flex-start; }
+                    .pimv1-open-drafts-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+                    .pimv1-open-drafts-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                    .pimv1-open-drafts-filter-actions { grid-column: 1 / -1; }
+                }
+                @media (max-width: 980px) {
+                    .pimv1-section,
+                    .pimv1-workflow-section { padding: 12px; }
+                    .pimv1-section-title {
+                        align-items: flex-start;
+                        flex-direction: column;
+                    }
+                    .pimv1-section-title .pimv1-actions { width: 100%; }
+                    .pimv1-barcode {
+                        flex: 1 1 240px;
+                        min-width: 0;
+                    }
+                    .pimv1-match-doc { flex: 1 1 220px; }
+                }
+                @media (max-width: 760px) {
+                    .pimv1-container-wide { padding-inline: 8px !important; }
+                    .pimv1-collapsible-title { align-items: flex-start; }
+                    .pimv1-collapsible-meta { white-space: normal; }
+                    .pimv1-open-drafts-summary { grid-template-columns: 1fr 1fr; }
+                    .pimv1-match-doc { flex-basis: 100%; }
+                }
+
                 @media (max-width: 1250px) {
                     .pimv1-metrics { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
                     .pimv1-workflow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
