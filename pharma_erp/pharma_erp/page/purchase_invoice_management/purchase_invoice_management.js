@@ -42,6 +42,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.loadingInvoice = false;
         this.procurementLinks = this.loadProcurementLinks();
         this.procurementMatchPreview = null;
+        this.printIdentityCache = {};
 
         this.addStyles();
         this.setupLayoutControls();
@@ -559,6 +560,31 @@ class PurchaseInvoiceManagementPageV1 {
                     flex: 0 0 auto;
                     white-space: nowrap;
                 }
+                .pimv1-print-preview-shell { direction: rtl; text-align: right; color: var(--text-color); background: var(--card-bg); padding: 14px; border: 1px solid var(--border-color); border-radius: 12px; max-height: 68vh; overflow: auto; }
+                .pimv1-print-identity { display: flex; align-items: center; gap: 12px; padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); }
+                .pimv1-print-identity img { width: 80px; max-height: 64px; object-fit: contain; }
+                .pimv1-print-title { font-size: 19px; font-weight: 900; margin: 0 0 3px; }
+                .pimv1-print-subtitle { color: var(--text-muted); font-size: 11px; }
+                .pimv1-print-meta, .pimv1-print-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
+                .pimv1-print-box { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; min-width: 0; }
+                .pimv1-print-box b { display: block; color: var(--text-muted); font-size: 10px; margin-bottom: 3px; }
+                .pimv1-print-stage-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
+                .pimv1-print-stage { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; min-width: 0; }
+                .pimv1-print-stage h5 { margin: 0 0 5px; font-weight: 900; }
+                .pimv1-print-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
+                .pimv1-print-table th, .pimv1-print-table td { border: 1px solid var(--border-color); padding: 6px; text-align: right; vertical-align: top; }
+                .pimv1-print-table th { background: var(--control-bg); white-space: nowrap; }
+                .pimv1-print-status { display: inline-flex; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 900; border: 1px solid var(--border-color); }
+                .pimv1-print-status.matched, .pimv1-print-status.done { background: var(--green-100); color: var(--green-700); }
+                .pimv1-print-status.warning, .pimv1-print-status.partial { background: var(--yellow-100); color: var(--yellow-700); }
+                .pimv1-print-status.mismatch, .pimv1-print-status.cancelled { background: var(--red-100); color: var(--red-700); }
+                .pimv1-print-status.direct, .pimv1-print-status.open { background: var(--blue-100); color: var(--blue-700); }
+                .pimv1-print-section { margin-top: 12px; }
+                .pimv1-print-section h4 { margin: 0 0 6px; font-weight: 900; }
+                .pimv1-print-warning { border: 1px solid var(--yellow-300); background: var(--yellow-50); border-radius: 8px; padding: 9px; margin-top: 8px; }
+                @media (max-width: 980px) {
+                    .pimv1-print-meta, .pimv1-print-totals, .pimv1-print-stage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                }
                 @media (max-width: 1450px) {
                     .pimv1-hero { align-items: flex-start; }
                     .pimv1-open-drafts-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -681,6 +707,7 @@ class PurchaseInvoiceManagementPageV1 {
                         <div class="pimv1-context-actions">
                             <button type="button" class="btn btn-default btn-sm" data-action="supplier-running-account">${__("Supplier Account")}</button>
                             <button type="button" class="btn btn-default btn-sm" data-action="returns-management">${__("Returns")}</button>
+                            <button type="button" class="btn btn-default btn-sm" data-action="preview-procurement-summary">${__("Summary / Print")}</button>
                         </div>
                         <div class="pimv1-primary-actions" aria-label="${__("Invoice Actions")}">
                             <button type="button" class="btn btn-default btn-sm pimv1-new-draft-btn" data-action="page-new-draft">＋ ${__("New Draft")}</button>
@@ -813,6 +840,7 @@ class PurchaseInvoiceManagementPageV1 {
                     <div class="pimv1-section-title">
                         <div><h4>${__("Procurement Match Preview")}</h4><span class="text-muted">${__("Next Step and stage status stay visible; detailed quantities are collapsed by default.")}</span></div>
                         <div class="pimv1-actions">
+                            <button type="button" class="btn btn-default btn-sm" data-action="preview-procurement-summary">${__("Preview / Print")}</button>
                             <button type="button" class="btn btn-default btn-sm" data-action="refresh-procurement-match">${__("Refresh Match")}</button>
                             <button type="button" class="btn btn-default btn-sm" data-action="clear-procurement-links">${__("Clear Links")}</button>
                         </div>
@@ -1026,6 +1054,10 @@ all`,
         this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
         this.$main.on("click.pimv1", "[data-action='supplier-running-account']", () => this.openSupplierRunningAccount());
         this.$main.on("click.pimv1", "[data-action='returns-management']", () => this.openReturnsManagement());
+        this.$main.on("click.pimv1", "[data-action='preview-procurement-summary']", (event) => {
+            const invoiceName = $(event.currentTarget).data("name") || this.draftName || "";
+            this.openProcurementSummaryPreview(invoiceName);
+        });
         this.$main.on("click.pimv1", "[data-action='load-purchase-request']", () => this.openProcurementSourcePicker("purchase_request"));
         this.$main.on("click.pimv1", "[data-action='load-purchase-order']", () => this.openProcurementSourcePicker("purchase_order"));
         this.$main.on("click.pimv1", "[data-action='load-purchase-receipt']", () => this.openProcurementSourcePicker("purchase_receipt"));
@@ -3940,7 +3972,18 @@ all`,
         this.$main.find("[data-role='saved-status']").text(invoice.status || __("Submitted"));
         this.renderRecentInvoices(this.bootstrap.recent_invoices);
         await this.refreshOpenProcurementDrafts({ silent: true });
-        frappe.show_alert({ message: __("Purchase Invoice {0} submitted successfully.", [invoice.name || this.draftName]), indicator: "green" }, 7);
+        const submittedProcurement = Array.isArray(message.submitted_procurement)
+            ? message.submitted_procurement
+            : [];
+        const submittedChainText = submittedProcurement.length
+            ? __(" Linked procurement stages submitted: {0}.", [
+                submittedProcurement.map((row) => row.name).join(" → "),
+            ])
+            : "";
+        frappe.show_alert({
+            message: __("Purchase Invoice {0} submitted successfully.", [invoice.name || this.draftName]) + submittedChainText,
+            indicator: "green",
+        }, 9);
         return invoice;
     }
 
@@ -4324,11 +4367,186 @@ all`,
                 <td><div class="pimv1-recent-actions">
                     ${cint(row.docstatus) === 0 ? `<button type="button" class="btn btn-xs btn-primary" data-action="load-draft" data-name="${this.escape(row.name)}">${__("Open in Page")}</button>` : ""}
                     ${cint(row.docstatus) === 1 && !cint(row.is_return) ? `<button type="button" class="btn btn-xs btn-warning" data-action="create-purchase-return" data-name="${this.escape(row.name)}">${__("Create Return")}</button>` : ""}
+                    <button type="button" class="btn btn-xs btn-default" data-action="preview-procurement-summary" data-name="${this.escape(row.name)}">${__("Summary / Print")}</button>
                     <button type="button" class="btn btn-xs btn-default" data-action="open-invoice" data-name="${this.escape(row.name)}">${__("Official Document")}</button>
                 </div></td>
             </tr>`).join("")}
             </tbody></table>
         `);
+    }
+
+    async getPrintIdentity(company) {
+        const key = company || "__default__";
+        if (this.printIdentityCache[key]) return this.printIdentityCache[key];
+        try {
+            const response = await frappe.call({
+                method: "pharma_erp.pharma_erp.print_settings.get_print_identity",
+                args: { company: company || "" },
+            });
+            this.printIdentityCache[key] = response.message || {};
+        } catch (error) {
+            console.warn("Unable to load print identity", error);
+            this.printIdentityCache[key] = {
+                company: company || "",
+                name_lines: [company || ""].filter(Boolean),
+                display_title: company || "",
+            };
+        }
+        return this.printIdentityCache[key];
+    }
+
+    procurementPrintHeaderHtml(identity = {}, invoice = {}) {
+        const nameLines = Array.isArray(identity.name_lines) && identity.name_lines.length
+            ? identity.name_lines
+            : [identity.display_title || invoice.company || ""].filter(Boolean);
+        const logo = identity.logo || "";
+        const contactLines = [
+            identity.phone ? `${__("Phone")}: ${identity.phone}` : "",
+            identity.address || "",
+        ].filter(Boolean);
+        return `
+            <div class="pimv1-print-identity">
+                ${logo ? `<img src="${this.escape(logo)}" alt="">` : ""}
+                <div>
+                    ${nameLines.map((line) => `<div style="font-size:17px;font-weight:900;line-height:1.3">${this.escape(line)}</div>`).join("")}
+                    ${contactLines.map((line) => `<div class="pimv1-print-subtitle">${this.escape(line)}</div>`).join("")}
+                    ${identity.footer_note ? `<div class="pimv1-print-subtitle">${this.escape(identity.footer_note)}</div>` : ""}
+                </div>
+            </div>`;
+    }
+
+    procurementPrintDate(value) {
+        if (!value) return "—";
+        try { return frappe.datetime.str_to_user(value); } catch (error) { return String(value); }
+    }
+
+    procurementSummaryContent(data, identity = {}) {
+        const invoice = data.invoice || {};
+        const totals = data.totals || {};
+        const match = data.match || {};
+        const matchSummary = match.summary || {};
+        const rows = match.rows || [];
+        const decision = data.decision || {};
+        const status = String(matchSummary.match_status || (data.is_direct_invoice ? "direct" : "matched")).toLowerCase();
+        const statusLabel = matchSummary.status_label || (data.is_direct_invoice ? __("Direct Invoice") : __("Matched"));
+        const statusBadge = `<span class="pimv1-print-status ${this.escape(status)}">${this.escape(statusLabel)}</span>`;
+        const stageHtml = (data.stages || []).map((stage) => {
+            const docs = stage.documents || [];
+            const documentsHtml = docs.length ? docs.map((doc) => `
+                <div style="margin-top:5px;line-height:1.55">
+                    <strong>${this.escape(doc.name)}</strong><br>
+                    <span class="pimv1-print-status ${this.escape(doc.operational_status || "open")}">${this.escape(doc.operational_status_label || doc.status || "")}</span>
+                    <div class="pimv1-print-subtitle">${this.escape(this.procurementPrintDate(doc.date))} · ${__("Qty")}: ${this.number(doc.total_qty)}${doc.remaining_qty > 0 ? ` · ${__("Remaining")}: ${this.number(doc.remaining_qty)}` : ""}</div>
+                </div>`).join("") : `<div class="pimv1-print-subtitle">${__("Not linked")}</div>`;
+            return `<div class="pimv1-print-stage"><h5>${this.escape(stage.stage_label || stage.stage || "")}</h5>${documentsHtml}</div>`;
+        }).join("");
+
+        const issueRows = (matchSummary.issues || []).map((issue) => `<li><strong>${this.escape((issue.severity || "warning").toUpperCase())}</strong>${issue.item_name || issue.item_code ? ` — ${this.escape(issue.item_name || issue.item_code)}` : ""}: ${this.escape(issue.message || issue.code || "")}</li>`).join("");
+        const itemsHtml = rows.length ? rows.map((row, index) => `
+            <tr>
+                <td>${index + 1}</td>
+                <td><strong>${this.escape(row.item_name || row.item_code || "")}</strong><div class="pimv1-print-subtitle">${this.escape(row.item_code || "")}</div></td>
+                <td>${this.number(row.requested_qty)}</td>
+                <td>${this.number(row.ordered_qty)}</td>
+                <td>${this.number(row.received_qty)}</td>
+                <td>${this.number(row.invoiced_qty)}</td>
+                <td><span class="pimv1-print-status ${this.escape(row.status || status)}">${this.escape(row.status === "direct" ? __("Direct") : (row.status || statusLabel))}</span>${row.issues_text ? `<div class="pimv1-print-subtitle">${this.escape(row.issues_text)}</div>` : ""}</td>
+            </tr>`).join("") : `<tr><td colspan="7">${__("No item rows were found.")}</td></tr>`;
+
+        const totalBoxes = [
+            [__("Supplier Invoice Gross"), totals.supplier_invoice_gross],
+            [__("Supplier Discount"), totals.supplier_discount],
+            [__("Additional Line Discount"), totals.additional_line_discount],
+            [__("Net Before VAT"), totals.net_before_vat],
+            [__("Item VAT"), totals.item_vat],
+            [__("Bonus VAT"), totals.bonus_vat],
+            [__("Shipping / Charges"), totals.shipping],
+            [__("Invoice Discount"), totals.invoice_discount],
+            [__("Fraction Adjustment"), totals.fraction_adjustment],
+            [__("Grand Total"), totals.grand_total],
+            [__("Supplier Invoice Total"), totals.supplier_invoice_total],
+            [__("Outstanding"), totals.outstanding_amount],
+        ].map(([label, value]) => `<div class="pimv1-print-box"><b>${this.escape(label)}</b><strong>${this.money(value || 0)}</strong></div>`).join("");
+
+        return `
+            ${this.procurementPrintHeaderHtml(identity, invoice)}
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+                <div><div class="pimv1-print-title">${__("Operational Procurement Summary")}</div><div class="pimv1-print-subtitle">${data.is_direct_invoice ? __("Direct purchase invoice without an upstream procurement cycle.") : __("Request → Order → Receipt → Invoice")}</div></div>
+                <div>${statusBadge}</div>
+            </div>
+            <div class="pimv1-print-meta">
+                <div class="pimv1-print-box"><b>${__("Purchase Invoice")}</b><strong>${this.escape(invoice.name || "—")}</strong></div>
+                <div class="pimv1-print-box"><b>${__("Supplier")}</b><strong>${this.escape(invoice.supplier_name || invoice.supplier || "—")}</strong></div>
+                <div class="pimv1-print-box"><b>${__("Supplier Bill")}</b><strong>${this.escape(invoice.bill_no || "—")}</strong></div>
+                <div class="pimv1-print-box"><b>${__("Status")}</b><strong>${this.escape(invoice.status || "—")}</strong></div>
+                <div class="pimv1-print-box"><b>${__("Posting Date")}</b><strong>${this.escape(this.procurementPrintDate(invoice.posting_date))}</strong></div>
+                <div class="pimv1-print-box"><b>${__("Due Date")}</b><strong>${this.escape(this.procurementPrintDate(invoice.due_date))}</strong></div>
+                <div class="pimv1-print-box"><b>${__("Warehouse")}</b><strong>${this.escape(invoice.warehouse || "—")}</strong></div>
+                <div class="pimv1-print-box"><b>${__("Classification")}</b><strong>${this.escape(invoice.payment_classification || "—")}</strong></div>
+            </div>
+            <div class="pimv1-print-section"><h4>${__("Procurement Stages")}</h4><div class="pimv1-print-stage-grid">${stageHtml}</div></div>
+            <div class="pimv1-print-section"><h4>${__("Quantity Match")}</h4>
+                <table class="pimv1-print-table"><thead><tr><th>#</th><th>${__("Item")}</th><th>${__("Requested")}</th><th>${__("Ordered")}</th><th>${__("Received")}</th><th>${__("Invoiced")}</th><th>${__("Match")}</th></tr></thead><tbody>${itemsHtml}</tbody></table>
+            </div>
+            ${(issueRows || decision.reason) ? `<div class="pimv1-print-section pimv1-print-warning"><h4>${__("Operational Review")}</h4>${issueRows ? `<ul style="margin:5px 0;padding-inline-start:18px">${issueRows}</ul>` : ""}${decision.reason ? `<div><strong>${__("Accepted Warning Reason")}:</strong> ${this.escape(decision.reason)}</div><div class="pimv1-print-subtitle">${this.escape(decision.user || "")} · ${this.escape(this.procurementPrintDate(decision.creation))}</div>` : ""}</div>` : ""}
+            <div class="pimv1-print-section"><h4>${__("Invoice Totals")}</h4><div class="pimv1-print-totals">${totalBoxes}</div></div>
+            ${invoice.remarks ? `<div class="pimv1-print-section"><h4>${__("Notes")}</h4><div class="pimv1-print-box">${this.escape(invoice.remarks)}</div></div>` : ""}
+            <div class="pimv1-print-generated">${__("Generated by")}: ${this.escape((data.generated || {}).by || "")} · ${this.escape(this.procurementPrintDate((data.generated || {}).at))}</div>`;
+    }
+
+    procurementPrintDocument(data, identity) {
+        const popup = window.open("", "_blank");
+        if (!popup) {
+            frappe.msgprint(__("Please allow popups to print."));
+            return;
+        }
+        const content = this.procurementSummaryContent(data, identity);
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${this.escape((data.invoice || {}).name || __("Operational Procurement Summary"))}</title><style>
+            @page{size:A4 portrait;margin:7mm}html,body{font-family:Arial,Tahoma,sans-serif;color:#111;margin:0;font-size:10.5px;direction:rtl;text-align:right}.pimv1-print-identity{display:flex;align-items:center;gap:12px;padding-bottom:8px;margin-bottom:9px;border-bottom:1px solid #ccc}.pimv1-print-identity img{width:28mm;max-height:20mm;object-fit:contain}.pimv1-print-title{font-size:18px;font-weight:900;margin-bottom:2px}.pimv1-print-subtitle{color:#555;font-size:9.5px;line-height:1.35}.pimv1-print-meta,.pimv1-print-totals{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:7px 0}.pimv1-print-box,.pimv1-print-stage{border:1px solid #ccc;border-radius:5px;padding:5px;min-width:0}.pimv1-print-box b{display:block;color:#555;font-size:9px;margin-bottom:2px}.pimv1-print-stage-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:6px 0}.pimv1-print-stage h5{margin:0 0 3px;font-size:11px}.pimv1-print-table{width:100%;border-collapse:collapse;font-size:9.5px;margin-top:5px}.pimv1-print-table th,.pimv1-print-table td{border:1px solid #ccc;padding:4px;text-align:right;vertical-align:top}.pimv1-print-table th{background:#f2f2f2;white-space:nowrap}.pimv1-print-status{display:inline-block;padding:2px 5px;border:1px solid #bbb;border-radius:999px;font-weight:800;font-size:8.5px}.pimv1-print-status.matched,.pimv1-print-status.done{background:#e8f7ee}.pimv1-print-status.warning,.pimv1-print-status.partial{background:#fff4d6}.pimv1-print-status.mismatch,.pimv1-print-status.cancelled{background:#fde8e8}.pimv1-print-status.direct,.pimv1-print-status.open{background:#e8f1ff}.pimv1-print-section{margin-top:8px;page-break-inside:avoid}.pimv1-print-section h4{margin:0 0 4px;font-size:12px}.pimv1-print-warning{border:1px solid #e0b84f;background:#fff9e8;border-radius:5px;padding:6px}.pimv1-print-totals .pimv1-print-box strong{white-space:nowrap}.pimv1-print-page{padding-bottom:9mm}.pimv1-print-generated{margin-top:6px;padding-top:3px;border-top:1px solid #ddd;color:#555;font-size:8.5px;line-height:1.2;text-align:right}@media print{html,body{height:auto!important;overflow:visible!important}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.pimv1-print-generated{position:fixed;right:0;left:0;bottom:0;margin:0;padding:3px 0 0;background:#fff;border-top:1px solid #ddd}.pimv1-print-section{break-inside:avoid;page-break-inside:avoid}}
+        </style></head><body onload="setTimeout(function(){window.focus();window.print();},300)"><main class="pimv1-print-page">${content}</main></body></html>`;
+        popup.document.open();
+        popup.document.write(html);
+        popup.document.close();
+    }
+
+    async openProcurementSummaryPreview(invoiceName = "") {
+        invoiceName = String(invoiceName || this.draftName || "").trim();
+        if (!invoiceName) {
+            frappe.msgprint({
+                title: __("Operational Procurement Summary"),
+                message: __("Save the Purchase Invoice as a Draft first, then open Summary / Print. The summary uses official saved documents and links."),
+                indicator: "orange",
+            });
+            return;
+        }
+        try {
+            const response = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.get_procurement_operational_summary",
+                args: { invoice_name: invoiceName },
+                freeze: true,
+                freeze_message: __("Preparing operational procurement summary..."),
+            });
+            const data = response.message || {};
+            const identity = await this.getPrintIdentity((data.invoice || {}).company || this.value("company"));
+            const dialog = new frappe.ui.Dialog({
+                title: __("Operational Procurement Summary"),
+                size: "extra-large",
+                fields: [{ fieldtype: "HTML", fieldname: "summary_preview" }],
+                primary_action_label: __("Print A4"),
+                primary_action: () => this.procurementPrintDocument(data, identity),
+                secondary_action_label: __("Close"),
+                secondary_action: () => dialog.hide(),
+            });
+            dialog.fields_dict.summary_preview.$wrapper.html(`<div class="pimv1-print-preview-shell">${this.procurementSummaryContent(data, identity)}</div>`);
+            dialog.show();
+        } catch (error) {
+            console.error("Unable to prepare procurement summary", error);
+            frappe.msgprint({
+                title: __("Operational Procurement Summary"),
+                message: this.escape(error.message || error),
+                indicator: "red",
+            });
+        }
     }
 
     parseFlexibleDate(value) {

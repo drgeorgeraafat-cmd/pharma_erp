@@ -142,6 +142,7 @@ def before_submit_purchase_invoice(doc, method=None):
     if cint(doc.get("is_return")):
         return
 
+    _enforce_purchase_invoice_stock_mode(doc)
     settings = get_purchase_settings()
     _validate_batch_conflict_approvals(doc, settings)
     bill_no = (doc.get("bill_no") or "").strip()
@@ -199,14 +200,40 @@ def on_submit_purchase_invoice(doc, method=None):
         _set_invoice_review_status(doc.name, "Pending Review")
 
 
+
+def _purchase_invoice_has_official_receipt_link(doc) -> bool:
+    return any(
+        row.get("purchase_receipt") or row.get("pr_detail")
+        for row in (doc.get("items") or [])
+    )
+
+
+def _enforce_purchase_invoice_stock_mode(doc) -> bool:
+    # Keep receipt-backed invoices accounting-only and direct invoices stock-updating.
+    receipt_backed = _purchase_invoice_has_official_receipt_link(doc)
+
+    if receipt_backed:
+        doc.update_stock = 0
+        if (
+            doc.meta.has_field("custom_purchase_entry_mode")
+            and doc.get("custom_purchase_entry_mode") == "Quick Invoice & Receipt"
+        ):
+            doc.custom_purchase_entry_mode = "Against Purchase Order"
+        return True
+
+    if doc.get("custom_purchase_entry_mode") == "Quick Invoice & Receipt":
+        doc.update_stock = 1
+
+    return False
+
+
 def _set_purchase_defaults(doc, settings):
     if doc.meta.has_field("custom_purchase_entry_mode") and not doc.get(
         "custom_purchase_entry_mode"
     ):
         doc.custom_purchase_entry_mode = settings.default_entry_mode
 
-    if doc.get("custom_purchase_entry_mode") == "Quick Invoice & Receipt":
-        doc.update_stock = 1
+    _enforce_purchase_invoice_stock_mode(doc)
 
     if doc.supplier and doc.meta.has_field("custom_payment_classification"):
         if not doc.get("custom_payment_classification") and _has_field(

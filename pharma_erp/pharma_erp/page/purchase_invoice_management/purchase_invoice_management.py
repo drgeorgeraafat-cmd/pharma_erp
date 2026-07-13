@@ -7,6 +7,7 @@ stock and accounting document in ERPNext.
 from __future__ import annotations
 
 import calendar
+import html
 import json
 import re
 from datetime import date, datetime
@@ -2221,12 +2222,15 @@ def save_draft(payload):
     if doc.meta.has_field("custom_expected_claim_period_to"):
         doc.custom_expected_claim_period_to = claim_period.get("period_to")
     doc.due_date = payload.get("due_date") or doc.posting_date
-    doc.update_stock = 1
+    is_receipt_backed = _purchase_invoice_has_linked_receipt(payload=payload, doc=doc)
+    doc.update_stock = 0 if is_receipt_backed else 1
     doc.set_warehouse = payload.get("warehouse")
     doc.buying_price_list = payload.get("buying_price_list") or _default_buying_price_list()
 
     if doc.meta.has_field("custom_purchase_entry_mode"):
-        doc.custom_purchase_entry_mode = "Quick Invoice & Receipt"
+        doc.custom_purchase_entry_mode = (
+            "Against Purchase Order" if is_receipt_backed else "Quick Invoice & Receipt"
+        )
     if doc.meta.has_field("custom_payment_classification"):
         doc.custom_payment_classification = payload.get("payment_classification") or ""
     if doc.meta.has_field("custom_exclude_from_supplier_claim"):
@@ -2258,6 +2262,14 @@ def save_draft(payload):
     doc.apply_discount_on = "Net Total"
     doc.additional_discount_percentage = invoice_discount
     _apply_exact_supplier_total(doc, payload, settings)
+
+    # Re-evaluate after all invoice rows and official receipt links are populated.
+    is_receipt_backed = _purchase_invoice_has_linked_receipt(payload=payload, doc=doc)
+    doc.update_stock = 0 if is_receipt_backed else 1
+    if doc.meta.has_field("custom_purchase_entry_mode"):
+        doc.custom_purchase_entry_mode = (
+            "Against Purchase Order" if is_receipt_backed else "Quick Invoice & Receipt"
+        )
 
     if invoice_name:
         doc.save()
@@ -2464,6 +2476,46 @@ def _enrich_procurement_items_from_latest_link(payload: frappe._dict) -> bool:
     for source_type in ("purchase_receipt", "purchase_order", "purchase_request"):
         if _linked_source_name(payload, source_type):
             return _enrich_procurement_items_from_linked_source(payload, source_type)
+    return False
+
+
+
+def _purchase_invoice_has_linked_receipt(payload: frappe._dict | None = None, doc=None) -> bool:
+    # Return True when a Purchase Invoice is backed by an official Purchase Receipt.
+    # A Purchase Receipt already posts the stock ledger. Any Purchase Invoice linked
+    # to it must keep update_stock disabled, including drafts re-opened and saved here.
+    if payload is not None:
+        payload = frappe._dict(payload)
+        if _linked_source_name(payload, "purchase_receipt"):
+            return True
+
+        for raw in payload.get("items") or []:
+            row = frappe._dict(raw)
+            if (
+                row.get("purchase_receipt")
+                or row.get("purchase_receipt_item")
+                or row.get("pr_detail")
+            ):
+                return True
+
+    if doc is not None:
+        for row in doc.get("items") or []:
+            if (
+                row.get("purchase_receipt")
+                or row.get("purchase_receipt_item")
+                or row.get("pr_detail")
+            ):
+                return True
+
+        if getattr(doc, "name", None) and not getattr(doc, "is_new", lambda: False)():
+            try:
+                linked = _procurement_linked_documents("purchase_invoice", doc.name)
+                if linked.get("purchase_receipt"):
+                    return True
+            except Exception:
+                # Official child-row references above remain the primary check.
+                pass
+
     return False
 
 
@@ -2837,6 +2889,271 @@ def get_procurement_match_preview(links):
         "missing": missing,
         "summary": summary,
         "rows": rows,
+    }
+
+
+_PROCUREMENT_SUMMARY_STAGE_CONFIG = {
+    "purchase_request": {"doctype": "Material Request", "label": _("Request")},
+    "purchase_order": {"doctype": "Purchase Order", "label": _("Order")},
+    "purchase_receipt": {"doctype": "Purchase Receipt", "label": _("Receipt")},
+    "purchase_invoice": {"doctype": "Purchase Invoice", "label": _("Invoice")},
+}
+
+
+def _procurement_document_warehouse(doc) -> str:
+    warehouse = (
+        doc.get("set_warehouse")
+        or doc.get("warehouse")
+        or doc.get("target_warehouse")
+        or doc.get("from_warehouse")
+    )
+    if warehouse:
+        return warehouse
+    for row in doc.get("items") or []:
+        warehouse = row.get("warehouse") or row.get("target_warehouse") or row.get("from_warehouse")
+        if warehouse:
+            return warehouse
+    return ""
+
+
+def _procurement_stage_document_summary(stage_key: str, doc) -> dict[str, Any]:
+    total_qty = flt(doc.get("total_qty")) or sum(flt(row.get("qty")) for row in (doc.get("items") or []))
+    used_qty = 0.0
+    remaining_qty = total_qty
+
+    if cint(doc.docstatus) == 2:
+        operational_status = "cancelled"
+        operational_status_label = _("Cancelled")
+    elif stage_key == "purchase_invoice":
+        operational_status = "done" if cint(doc.docstatus) == 1 else "open"
+        operational_status_label = _("Submitted") if cint(doc.docstatus) == 1 else _("Open / Review & Submit")
+    else:
+        progress = _open_draft_downstream_progress(stage_key, [doc.name]).get(doc.name, {})
+        used_qty = flt(progress.get("used_qty"))
+        remaining_qty = max(total_qty - used_qty, 0.0)
+        if total_qty > 0 and used_qty >= total_qty - 0.0001:
+            operational_status = "done"
+        elif used_qty > 0.0001:
+            operational_status = "partial"
+        else:
+            operational_status = "open"
+        operational_status_label = _open_draft_progress_label(stage_key, operational_status)
+
+    supplier = doc.get("supplier") or ""
+    supplier_name = doc.get("supplier_name") or supplier
+    document_date = doc.get("posting_date") or doc.get("transaction_date") or doc.get("schedule_date")
+    return {
+        "stage": stage_key,
+        "stage_label": _PROCUREMENT_SUMMARY_STAGE_CONFIG[stage_key]["label"],
+        "doctype": doc.doctype,
+        "name": doc.name,
+        "docstatus": cint(doc.docstatus),
+        "status": doc.get("status") or ("Draft" if cint(doc.docstatus) == 0 else "Submitted"),
+        "operational_status": operational_status,
+        "operational_status_label": operational_status_label,
+        "supplier": supplier,
+        "supplier_name": supplier_name,
+        "date": document_date,
+        "warehouse": _procurement_document_warehouse(doc),
+        "items_count": len(doc.get("items") or []),
+        "total_qty": total_qty,
+        "used_qty": used_qty,
+        "remaining_qty": remaining_qty,
+        "grand_total": flt(doc.get("grand_total") or doc.get("rounded_total") or doc.get("net_total")),
+        "route": f"/app/{doc.doctype.lower().replace(' ', '-')}/{doc.name}",
+    }
+
+
+def _plain_comment_value(content: str, label: str) -> str:
+    pattern = rf"<b>\s*{re.escape(label)}\s*:\s*</b>\s*(.*?)</div>"
+    match = re.search(pattern, content or "", flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    value = re.sub(r"<[^>]+>", " ", match.group(1))
+    return re.sub(r"\s+", " ", html.unescape(value)).strip()
+
+
+def _latest_procurement_match_decision(invoice_name: str) -> dict[str, Any]:
+    if not frappe.db.exists("DocType", "Comment"):
+        return {}
+    rows = frappe.get_all(
+        "Comment",
+        filters={
+            "reference_doctype": "Purchase Invoice",
+            "reference_name": invoice_name,
+            "comment_type": "Comment",
+        },
+        fields=["content", "creation", "comment_by", "comment_email"],
+        order_by="creation desc",
+        limit_page_length=30,
+    )
+    for row in rows:
+        content = row.get("content") or ""
+        if "Procurement Match Decision" not in content:
+            continue
+        return {
+            "status": _plain_comment_value(content, "Status"),
+            "decision": _plain_comment_value(content, "Decision"),
+            "reason": _plain_comment_value(content, "Reason"),
+            "creation": row.get("creation"),
+            "user": row.get("comment_by") or row.get("comment_email") or "",
+        }
+    return {}
+
+
+def _purchase_invoice_operational_totals(doc) -> dict[str, Any]:
+    normal_rows = [row for row in (doc.get("items") or []) if not cint(row.get("custom_is_bonus_item"))]
+    bonus_rows = [row for row in (doc.get("items") or []) if cint(row.get("custom_is_bonus_item"))]
+
+    supplier_invoice_gross = sum(
+        flt(row.qty) * flt(row.get("custom_supplier_base_price") or row.get("price_list_rate"))
+        for row in normal_rows
+    )
+    supplier_discount = sum(
+        flt(row.qty)
+        * flt(row.get("custom_supplier_base_price") or row.get("price_list_rate"))
+        * max(0.0, min(100.0, flt(row.get("custom_supplier_discount_percentage"))))
+        / 100.0
+        for row in normal_rows
+    )
+    additional_line_discount = 0.0
+    for row in normal_rows:
+        supplier_price = flt(row.get("custom_supplier_base_price") or row.get("price_list_rate"))
+        supplier_discount_pct = max(0.0, min(100.0, flt(row.get("custom_supplier_discount_percentage"))))
+        additional_discount_pct = max(0.0, min(100.0, flt(row.get("custom_additional_discount"))))
+        additional_line_discount += (
+            flt(row.qty)
+            * supplier_price
+            * (1.0 - supplier_discount_pct / 100.0)
+            * additional_discount_pct
+            / 100.0
+        )
+
+    net_before_vat = sum(flt(row.qty) * flt(row.get("custom_net_before_vat")) for row in normal_rows)
+    item_vat = sum(flt(row.get("custom_total_vat_amount")) for row in normal_rows)
+    bonus_vat = sum(flt(row.get("custom_total_vat_amount")) for row in bonus_rows)
+    bonus_retail_value = sum(flt(row.qty) * flt(row.get("custom_selling_price")) for row in bonus_rows)
+
+    fraction_labels = {
+        _("Supplier Invoice Fraction Adjustment").strip().casefold(),
+        "supplier invoice fraction adjustment",
+    }
+    bonus_labels = {_("Bonus Item VAT").strip().casefold(), "bonus item vat"}
+    shipping = 0.0
+    official_fraction_adjustment = 0.0
+    official_bonus_vat = 0.0
+    for tax in doc.get("taxes") or []:
+        description = str(tax.get("description") or "").strip().casefold()
+        amount = flt(tax.get("tax_amount"))
+        signed_amount = -amount if tax.get("add_deduct_tax") == "Deduct" else amount
+        if description in fraction_labels:
+            official_fraction_adjustment += signed_amount
+        elif description in bonus_labels:
+            official_bonus_vat += signed_amount
+        elif tax.get("charge_type") == "Actual":
+            shipping += signed_amount
+
+    supplier_invoice_total = flt(doc.get("custom_supplier_invoice_total")) or flt(doc.grand_total)
+    return {
+        "currency": doc.currency or "",
+        "supplier_invoice_gross": supplier_invoice_gross,
+        "supplier_discount": supplier_discount,
+        "additional_line_discount": additional_line_discount,
+        "invoice_discount": flt(doc.get("discount_amount")),
+        "net_before_vat": net_before_vat or flt(doc.net_total),
+        "item_vat": item_vat,
+        "bonus_vat": official_bonus_vat or bonus_vat,
+        "total_vat": item_vat + (official_bonus_vat or bonus_vat),
+        "shipping": shipping,
+        "fraction_adjustment": flt(doc.get("custom_fraction_adjustment")) or official_fraction_adjustment,
+        "total_taxes_and_charges": flt(doc.total_taxes_and_charges),
+        "grand_total": flt(doc.grand_total),
+        "supplier_invoice_total": supplier_invoice_total,
+        "outstanding_amount": flt(doc.outstanding_amount),
+        "bonus_retail_value": bonus_retail_value,
+    }
+
+
+@frappe.whitelist()
+def get_procurement_operational_summary(invoice_name: str):
+    """Return an A4-ready, read-only operational summary for one purchase cycle."""
+    _require_read_access()
+    invoice_name = (invoice_name or "").strip()
+    if not invoice_name or not frappe.db.exists("Purchase Invoice", invoice_name):
+        frappe.throw(_("Purchase Invoice was not found."))
+
+    invoice = frappe.get_doc("Purchase Invoice", invoice_name)
+    invoice.check_permission("read")
+
+    linked = _procurement_linked_documents("purchase_invoice", invoice.name)
+    all_links = dict(linked.get("all") or {})
+    all_links.setdefault("purchase_invoice", [])
+    if invoice.name not in all_links["purchase_invoice"]:
+        all_links["purchase_invoice"].append(invoice.name)
+
+    stages = []
+    primary_links: dict[str, str] = {}
+    missing = []
+    for stage_key, config in _PROCUREMENT_SUMMARY_STAGE_CONFIG.items():
+        documents = []
+        for name in all_links.get(stage_key, []):
+            if not name or not frappe.db.exists(config["doctype"], name):
+                missing.append({"stage": stage_key, "doctype": config["doctype"], "name": name or "", "reason": "not_found"})
+                continue
+            document = frappe.get_doc(config["doctype"], name)
+            try:
+                document.check_permission("read")
+            except frappe.PermissionError:
+                missing.append({"stage": stage_key, "doctype": config["doctype"], "name": name, "reason": "no_permission"})
+                continue
+            documents.append(_procurement_stage_document_summary(stage_key, document))
+        if documents:
+            primary_links[stage_key] = documents[0]["name"]
+        stages.append({
+            "stage": stage_key,
+            "stage_label": config["label"],
+            "documents": documents,
+        })
+
+    has_upstream = any(primary_links.get(key) for key in ("purchase_request", "purchase_order", "purchase_receipt"))
+    match = get_procurement_match_preview(primary_links)
+    if not has_upstream:
+        for row in match.get("rows") or []:
+            row["status"] = "direct"
+            row["issues"] = []
+            row["issues_text"] = ""
+        match["summary"]["issues"] = []
+        match["summary"]["issues_count"] = 0
+        match["summary"]["match_status"] = "direct"
+        match["summary"]["status_label"] = _("Direct Invoice")
+
+    return {
+        "invoice": {
+            "name": invoice.name,
+            "docstatus": cint(invoice.docstatus),
+            "status": invoice.status or ("Draft" if cint(invoice.docstatus) == 0 else "Submitted"),
+            "company": invoice.company,
+            "supplier": invoice.supplier,
+            "supplier_name": invoice.supplier_name or invoice.supplier,
+            "warehouse": _procurement_document_warehouse(invoice),
+            "posting_date": invoice.posting_date,
+            "bill_no": invoice.bill_no or "",
+            "bill_date": invoice.bill_date,
+            "due_date": invoice.due_date,
+            "payment_classification": invoice.get("custom_payment_classification") or "",
+            "remarks": invoice.remarks or "",
+            "route": f"/app/purchase-invoice/{invoice.name}",
+        },
+        "is_direct_invoice": 0 if has_upstream else 1,
+        "stages": stages,
+        "match": match,
+        "decision": _latest_procurement_match_decision(invoice.name),
+        "totals": _purchase_invoice_operational_totals(invoice),
+        "missing": missing,
+        "generated": {
+            "at": now_datetime(),
+            "by": frappe.utils.get_fullname(frappe.session.user) or frappe.session.user,
+        },
     }
 
 
@@ -3450,6 +3767,105 @@ def log_procurement_match_decision(payload):
     return {"ok": True, "invoice": doc.name}
 
 
+
+def _submit_linked_procurement_chain(invoice_doc) -> list[dict]:
+    # Submit Request -> Order -> Receipt drafts before their linked invoice.
+    # Purchase Receipt is the only stage that posts stock; the linked
+    # Purchase Invoice remains update_stock = 0.
+    linked = _procurement_linked_documents("purchase_invoice", invoice_doc.name)
+    all_links = linked.get("all") or {}
+
+    stage_specs = (
+        ("purchase_request", "Material Request", _("Purchase Request")),
+        ("purchase_order", "Purchase Order", _("Purchase Order")),
+        ("purchase_receipt", "Purchase Receipt", _("Purchase Receipt")),
+    )
+
+    planned = []
+    seen = set()
+
+    for stage_key, doctype, label in stage_specs:
+        names = list(all_links.get(stage_key) or [])
+        if not names and linked.get(stage_key):
+            name = (linked.get(stage_key) or {}).get("name")
+            if name:
+                names = [name]
+
+        for name in names:
+            key = (doctype, name)
+            if not name or key in seen:
+                continue
+            seen.add(key)
+
+            if not frappe.db.exists(doctype, name):
+                frappe.throw(
+                    _("Linked {0} {1} no longer exists.").format(
+                        label, frappe.bold(name)
+                    )
+                )
+
+            stage_doc = frappe.get_doc(doctype, name)
+
+            if stage_doc.docstatus == 2:
+                frappe.throw(
+                    _("Linked {0} {1} is cancelled and the procurement chain cannot be submitted.").format(
+                        label, frappe.bold(name)
+                    )
+                )
+
+            if (
+                stage_doc.get("company")
+                and invoice_doc.get("company")
+                and stage_doc.company != invoice_doc.company
+            ):
+                frappe.throw(
+                    _("Linked {0} {1} belongs to a different company.").format(
+                        label, frappe.bold(name)
+                    )
+                )
+
+            if (
+                doctype in {"Purchase Order", "Purchase Receipt"}
+                and stage_doc.get("supplier")
+                and invoice_doc.get("supplier")
+                and stage_doc.supplier != invoice_doc.supplier
+            ):
+                frappe.throw(
+                    _("Linked {0} {1} belongs to a different supplier.").format(
+                        label, frappe.bold(name)
+                    )
+                )
+
+            if stage_doc.docstatus == 0:
+                stage_doc.check_permission("submit")
+                planned.append((stage_key, doctype, label, stage_doc))
+
+    submitted = []
+    for stage_key, doctype, label, stage_doc in planned:
+        try:
+            stage_doc.submit()
+            stage_doc.reload()
+        except Exception as exc:
+            frappe.throw(
+                _("Unable to submit {0} {1}. ERPNext message: {2}").format(
+                    label,
+                    frappe.bold(stage_doc.name),
+                    frappe.utils.escape_html(str(exc)),
+                )
+            )
+
+        submitted.append(
+            {
+                "stage": stage_key,
+                "doctype": doctype,
+                "name": stage_doc.name,
+                "docstatus": stage_doc.docstatus,
+            }
+        )
+
+    return submitted
+
+
 @frappe.whitelist()
 def submit_invoice(name: str):
     _require_create_access()
@@ -3465,6 +3881,17 @@ def submit_invoice(name: str):
         doc.meta.has_field("disable_rounded_total")
         and not cint(doc.get("disable_rounded_total"))
     )
+    # Normalize the stock flag before any recalculation or intermediate save.
+    # Purchase Receipt has already posted stock, so its linked invoice must never update stock again.
+    if _purchase_invoice_has_linked_receipt(doc=doc) and cint(doc.get("update_stock")):
+        doc.update_stock = 0
+
+    # Official upstream drafts must be submitted before any intermediate
+    # invoice save, otherwise ERPNext rejects links to Draft documents.
+    if _purchase_invoice_has_linked_receipt(doc=doc):
+        doc.update_stock = 0
+    submitted_procurement = _submit_linked_procurement_chain(doc)
+
     _disable_purchase_invoice_rounded_total(doc)
     if rounded_total_was_enabled:
         if hasattr(doc, "calculate_taxes_and_totals"):
@@ -3472,10 +3899,36 @@ def submit_invoice(name: str):
         doc.save()
         doc.reload()
 
+    # Final persisted invariant after upstream chain submission and any intermediate save.
+    if _purchase_invoice_has_linked_receipt(doc=doc):
+        doc.update_stock = 0
+        if (
+            doc.meta.has_field("custom_purchase_entry_mode")
+            and doc.get("custom_purchase_entry_mode") == "Quick Invoice & Receipt"
+        ):
+            doc.custom_purchase_entry_mode = "Against Purchase Order"
+        doc.save()
+        doc.reload()
+
+        persisted_update_stock = cint(
+            frappe.db.get_value("Purchase Invoice", doc.name, "update_stock")
+        )
+        if persisted_update_stock:
+            frappe.throw(
+                _(
+                    "Safety guard stopped submission because Purchase Invoice {0} "
+                    "is linked to a Purchase Receipt but Update Stock is still enabled."
+                ).format(frappe.bold(doc.name))
+            )
+
     _validate_purchase_risk_before_submit(doc)
     doc.submit()
     doc.reload()
-    return {"invoice": _invoice_response(doc), "recent_invoices": _recent_invoices(doc.company)}
+    return {
+        "invoice": _invoice_response(doc),
+        "recent_invoices": _recent_invoices(doc.company),
+        "submitted_procurement": submitted_procurement,
+    }
 
 
 @frappe.whitelist()

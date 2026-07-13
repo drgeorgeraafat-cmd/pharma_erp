@@ -1,11 +1,29 @@
-function sync_purchase_entry_mode(frm) {
+function has_linked_purchase_receipt(frm) {
+    return (frm.doc.items || []).some(
+        (row) => row.purchase_receipt || row.pr_detail
+    );
+}
+
+async function sync_purchase_entry_mode(frm) {
+    if (has_linked_purchase_receipt(frm)) {
+        if (frm.doc.custom_purchase_entry_mode === "Quick Invoice & Receipt") {
+            await frm.set_value(
+                "custom_purchase_entry_mode",
+                "Against Purchase Order"
+            );
+        }
+        if (frm.doc.update_stock) {
+            await frm.set_value("update_stock", 0);
+        }
+        return;
+    }
+
     if (
         frm.doc.custom_purchase_entry_mode === "Quick Invoice & Receipt" &&
         !frm.doc.update_stock
     ) {
-        return frm.set_value("update_stock", 1);
+        await frm.set_value("update_stock", 1);
     }
-    return Promise.resolve();
 }
 
 async function sync_supplier_payment_classification(frm, force = false) {
