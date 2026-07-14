@@ -43,6 +43,8 @@ class PurchaseInvoiceManagementPageV1 {
         this.procurementLinks = this.loadProcurementLinks();
         this.procurementMatchPreview = null;
         this.printIdentityCache = {};
+        this.supplierSettlementContext = null;
+        this.supplierSettlementLoading = false;
 
         this.addStyles();
         this.setupLayoutControls();
@@ -143,6 +145,23 @@ class PurchaseInvoiceManagementPageV1 {
                 }
                 .pimv1-save-submit-btn { box-shadow: 0 1px 2px rgba(0, 0, 0, .16); }
                 .pimv1-context-actions .btn { font-weight: 700; }
+                .pimv1-settlement-section { padding: 13px 14px; }
+                .pimv1-settlement-grid { display:grid; grid-template-columns:repeat(6,minmax(135px,1fr)); gap:9px; margin-top:10px; }
+                .pimv1-settlement-card { border:1px solid var(--border-color); border-radius:12px; padding:10px 11px; background:var(--control-bg); min-width:0; }
+                .pimv1-settlement-label { color:var(--text-muted); font-size:11px; }
+                .pimv1-settlement-value { font-size:16px; font-weight:900; margin-top:4px; overflow-wrap:anywhere; }
+                .pimv1-settlement-note { color:var(--text-muted); font-size:11px; margin-top:4px; line-height:1.4; }
+                .pimv1-settlement-actions { display:flex; gap:7px; flex-wrap:wrap; margin-top:11px; }
+                .pimv1-settlement-actions .btn { font-weight:800; }
+                .pimv1-settlement-status { display:inline-flex; border-radius:999px; padding:4px 9px; background:#eef4ff; color:#175cd3; border:1px solid #b7ccff; font-size:11px; font-weight:900; }
+                .pimv1-settlement-status.is-paid { background:#eaf7ee; color:#1f7a3f; border-color:#bde5c8; }
+                .pimv1-settlement-status.is-attention { background:#fff7e6; color:#9a6500; border-color:#ffd591; }
+                .pimv1-settlement-warning { margin-top:10px; padding:9px 11px; border-radius:10px; background:#fff7e6; border:1px solid #ffd591; color:#8a5a12; font-size:12px; line-height:1.5; }
+                .pimv1-settlement-empty { padding:14px; border:1px dashed var(--border-color); border-radius:12px; background:var(--control-bg); color:var(--text-muted); }
+                .pimv1-settlement-return-table { width:100%; border-collapse:collapse; font-size:12px; }
+                .pimv1-settlement-return-table th,.pimv1-settlement-return-table td { padding:6px; border-bottom:1px solid var(--border-color); text-align:right; }
+                @media(max-width:1150px){.pimv1-settlement-grid{grid-template-columns:repeat(3,minmax(150px,1fr));}}
+                @media(max-width:700px){.pimv1-settlement-grid{grid-template-columns:1fr;}}
                 .pimv1-doc-badge { border-radius: 999px; padding: 7px 12px; background: var(--blue-100); color: var(--blue-700); font-weight: 700; white-space: nowrap; }
                 .pimv1-workflow-section { padding: 13px 14px; }
                 .pimv1-workflow-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
@@ -874,6 +893,17 @@ class PurchaseInvoiceManagementPageV1 {
                     </div>
                 </div>
 
+                <div class="pimv1-section pimv1-settlement-section">
+                    <div class="pimv1-section-title">
+                        <div>
+                            <h4>${__("Supplier Settlement")}</h4>
+                            <span class="text-muted">${__("Use the established Supplier Running Account rules without duplicating payment or claim accounting logic.")}</span>
+                        </div>
+                        <button type="button" class="btn btn-default btn-sm" data-action="refresh-supplier-settlement">${__("Refresh Settlement")}</button>
+                    </div>
+                    <div data-role="supplier-settlement"></div>
+                </div>
+
                 <div class="pimv1-section">
                     <button type="button" class="pimv1-collapsible-title" data-action="toggle-recent">
                         <h4>${__("Recent Purchase Invoices")}</h4>
@@ -908,6 +938,7 @@ class PurchaseInvoiceManagementPageV1 {
         this.renderOpenProcurementDrafts(this.openProcurementDrafts);
         this.renderRecentInvoices(this.bootstrap.recent_invoices || []);
         this.refreshCards();
+        this.renderSupplierSettlement();
         this.renderProcurementMatchPreview();
         this.fetchProcurementMatchPreview();
         this.offerLocalDraftRestore();
@@ -1053,6 +1084,14 @@ all`,
         this.$main.on("click.pimv1", "[data-action='page-save-draft']", () => this.saveDraft());
         this.$main.on("click.pimv1", "[data-action='page-save-submit']", () => this.saveAndSubmit());
         this.$main.on("click.pimv1", "[data-action='supplier-running-account']", () => this.openSupplierRunningAccount());
+        this.$main.on("click.pimv1", "[data-action='refresh-supplier-settlement']", () => this.refreshSupplierSettlement());
+        this.$main.on("click.pimv1", "[data-action='create-settlement-payment']", () => this.openSettlementPaymentDraftDialog());
+        this.$main.on("click.pimv1", "[data-action='create-settlement-claim']", () => this.openSettlementClaimDraftDialog());
+        this.$main.on("click.pimv1", "[data-action='use-settlement-advance']", () => this.openSettlementAdvanceDialog());
+        this.$main.on("click.pimv1", "[data-action='open-linked-supplier-claim']", (event) => {
+            const name = $(event.currentTarget).data("name");
+            if (name) frappe.set_route("Form", "Supplier Claim", name);
+        });
         this.$main.on("click.pimv1", "[data-action='returns-management']", () => this.openReturnsManagement());
         this.$main.on("click.pimv1", "[data-action='preview-procurement-summary']", (event) => {
             const invoiceName = $(event.currentTarget).data("name") || this.draftName || "";
@@ -3460,10 +3499,337 @@ all`,
         };
     }
 
+
+    renderSupplierSettlement() {
+        const $container = this.$main.find("[data-role='supplier-settlement']");
+        if (!$container.length) return;
+        if (this.supplierSettlementLoading) {
+            $container.html(`<div class="pimv1-settlement-empty">${__("Loading supplier settlement...")}</div>`);
+            return;
+        }
+        if (!this.draftName) {
+            $container.html(`<div class="pimv1-settlement-empty">${__("Save the Purchase Invoice first. Settlement actions become available after the invoice is submitted.")}</div>`);
+            return;
+        }
+        const c = this.supplierSettlementContext;
+        if (!c || c.invoice !== this.draftName) {
+            $container.html(`<div class="pimv1-settlement-empty">${__("Settlement information has not been loaded yet.")} <button type="button" class="btn btn-xs btn-default" data-action="refresh-supplier-settlement">${__("Load")}</button></div>`);
+            return;
+        }
+        const actions = c.actions || {};
+        const statusClass = c.settlement_status === "Paid" ? "is-paid" : (["Draft", "Cancelled"].includes(c.settlement_status) ? "is-attention" : "");
+        const claimLink = c.linked_supplier_claim
+            ? `<span class="pimv1-link" data-action="open-linked-supplier-claim" data-name="${this.escape(c.linked_supplier_claim)}">${this.escape(c.linked_supplier_claim)}</span>`
+            : "—";
+        const actionButtons = [
+            actions.create_payment_draft ? `<button type="button" class="btn btn-primary btn-sm" data-action="create-settlement-payment">${__("Create Payment Draft")}</button>` : "",
+            actions.create_claim_draft ? `<button type="button" class="btn btn-primary btn-sm" data-action="create-settlement-claim">${__("Create Supplier Claim Draft")}</button>` : "",
+            actions.use_existing_advance ? `<button type="button" class="btn btn-warning btn-sm" data-action="use-settlement-advance">${__("Use Existing Advance")}</button>` : "",
+            actions.open_supplier_account ? `<button type="button" class="btn btn-default btn-sm" data-action="supplier-running-account">${__("Open Supplier Account")}</button>` : "",
+        ].filter(Boolean).join("");
+        const settlementDocstatus = cint(c.docstatus);
+        const documentNote = settlementDocstatus === 0
+            ? `<div class="pimv1-settlement-warning">${__("The invoice must be submitted before payment, claim or advance-allocation actions are available.")}</div>`
+            : (settlementDocstatus === 2
+                ? `<div class="pimv1-settlement-warning">${__("This invoice is cancelled. Settlement actions are not available.")}</div>`
+                : "");
+        const claimNote = c.classification === "Claim Invoice" && c.linked_supplier_claim
+            ? `<div class="pimv1-settlement-warning">${__("This invoice is already linked to Supplier Claim {0}. Payment or advance allocation requires intentional review in the Supplier Account.", [c.linked_supplier_claim])}</div>`
+            : "";
+        $container.html(`
+            <div class="pimv1-settlement-grid">
+                <div class="pimv1-settlement-card"><div class="pimv1-settlement-label">${__("Settlement Status")}</div><div class="pimv1-settlement-value"><span class="pimv1-settlement-status ${statusClass}">${this.escape(c.settlement_status || "—")}</span></div><div class="pimv1-settlement-note">${this.escape(c.invoice_status || "")}</div></div>
+                <div class="pimv1-settlement-card"><div class="pimv1-settlement-label">${__("Classification")}</div><div class="pimv1-settlement-value">${this.escape(c.classification || "—")}</div><div class="pimv1-settlement-note">${__("Controls the recommended settlement action")}</div></div>
+                <div class="pimv1-settlement-card"><div class="pimv1-settlement-label">${__("Outstanding")}</div><div class="pimv1-settlement-value">${this.money(c.outstanding_amount)}</div><div class="pimv1-settlement-note">${__("Paid")}: ${this.money(c.paid_amount)}</div></div>
+                <div class="pimv1-settlement-card"><div class="pimv1-settlement-label">${__("Supplier Balance")}</div><div class="pimv1-settlement-value">${this.money(c.supplier_balance)}</div><div class="pimv1-settlement-note">${this.escape(c.supplier_name || c.supplier || "")}</div></div>
+                <div class="pimv1-settlement-card"><div class="pimv1-settlement-label">${__("Unallocated Advances")}</div><div class="pimv1-settlement-value">${this.money(c.unallocated_advance_total)}</div><div class="pimv1-settlement-note">${(c.unallocated_advances || []).length} ${__("available payment(s)")}</div></div>
+                <div class="pimv1-settlement-card"><div class="pimv1-settlement-label">${__("Supplier Claim")}</div><div class="pimv1-settlement-value">${claimLink}</div><div class="pimv1-settlement-note">${this.escape(c.linked_supplier_claim_status || "")}</div></div>
+            </div>
+            ${documentNote}${claimNote}
+            <div class="pimv1-settlement-actions">${actionButtons || `<span class="text-muted">${__("No settlement action is currently available.")}</span>`}</div>
+        `);
+    }
+
+    async refreshSupplierSettlement(options = {}) {
+        if (!this.draftName) {
+            this.supplierSettlementContext = null;
+            this.renderSupplierSettlement();
+            return null;
+        }
+        this.supplierSettlementLoading = true;
+        this.renderSupplierSettlement();
+        try {
+            const response = await frappe.call({
+                method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.get_invoice_settlement_context",
+                args: { name: this.draftName },
+                freeze: !options.silent,
+                freeze_message: __("Loading supplier settlement..."),
+            });
+            this.supplierSettlementContext = response.message || null;
+            return this.supplierSettlementContext;
+        } catch (error) {
+            this.supplierSettlementContext = null;
+            if (!options.silent) throw error;
+            console.warn("Unable to load supplier settlement", error);
+            return null;
+        } finally {
+            this.supplierSettlementLoading = false;
+            this.renderSupplierSettlement();
+        }
+    }
+
+    async settlementContextOrRefresh() {
+        if (!this.draftName) {
+            frappe.msgprint(__("Save the Purchase Invoice first."));
+            return null;
+        }
+        if (this.supplierSettlementContext && this.supplierSettlementContext.invoice === this.draftName) {
+            return this.supplierSettlementContext;
+        }
+        return await this.refreshSupplierSettlement();
+    }
+
+    async openSettlementPaymentDraftDialog() {
+        const c = await this.settlementContextOrRefresh();
+        if (!c || !c.actions || !c.actions.create_payment_draft) {
+            frappe.msgprint(__("A Payment Draft is not available for this invoice classification or status."));
+            return;
+        }
+        const defaultsResponse = await frappe.call({
+            method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.get_supplier_payment_defaults",
+            args: { company: c.company, supplier: c.supplier },
+        });
+        const d = defaultsResponse.message || {};
+        const dialog = new frappe.ui.Dialog({
+            title: __("Create Payment Draft for {0}", [c.invoice]),
+            fields: [
+                { fieldname: "posting_date", fieldtype: "Date", label: __("Posting Date"), default: frappe.datetime.get_today(), reqd: 1 },
+                { fieldname: "amount", fieldtype: "Currency", label: __("Payment Amount"), default: c.outstanding_amount, reqd: 1, description: __("Any amount above the invoice allocation remains an unallocated supplier advance.") },
+                { fieldname: "allocated_amount", fieldtype: "Currency", label: __("Allocate to This Invoice"), default: c.outstanding_amount, reqd: 1 },
+                { fieldtype: "Column Break" },
+                { fieldname: "mode_of_payment", fieldtype: "Link", label: __("Mode of Payment"), options: "Mode of Payment", default: d.mode_of_payment || "" },
+                { fieldname: "paid_from", fieldtype: "Link", label: __("Paid From Account"), options: "Account", default: d.paid_from || "", reqd: 1, get_query: () => ({ filters: { company: c.company, is_group: 0 } }) },
+                { fieldname: "reference_no", fieldtype: "Data", label: __("Reference No") },
+                { fieldtype: "Section Break" },
+                { fieldname: "remarks", fieldtype: "Small Text", label: __("Remarks"), default: __("Draft payment for Purchase Invoice {0} created from Purchase & Invoice Management.", [c.invoice]) },
+            ],
+            primary_action_label: __("Create Draft"),
+            primary_action: async (values) => {
+                const amount = flt(values.amount || 0);
+                const allocated = flt(values.allocated_amount || 0);
+                if (amount <= 0 || allocated <= 0 || allocated - amount > 0.005 || allocated - flt(c.outstanding_amount) > 0.005) {
+                    frappe.msgprint(__("Enter valid payment and allocation amounts. Allocation cannot exceed the payment or invoice outstanding."));
+                    return;
+                }
+                dialog.hide();
+                const response = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.create_supplier_payment_draft",
+                    args: { args: {
+                        company: c.company,
+                        supplier: c.supplier,
+                        posting_date: values.posting_date,
+                        amount,
+                        mode_of_payment: values.mode_of_payment || "",
+                        paid_from: values.paid_from,
+                        allocation_mode: "Selected Invoices",
+                        invoices: [{ invoice: c.invoice, allocated_amount: allocated }],
+                        reference_no: values.reference_no || "",
+                        remarks: values.remarks || "",
+                    } },
+                    freeze: true,
+                    freeze_message: __("Creating draft Payment Entry..."),
+                });
+                const out = response.message || {};
+                if (out.name) {
+                    frappe.show_alert({ message: __("Draft Payment Entry created: {0}", [out.name]), indicator: "green" }, 7);
+                    frappe.set_route("Form", "Payment Entry", out.name);
+                }
+            },
+        });
+        dialog.show();
+    }
+
+    async openSettlementClaimDraftDialog() {
+        const c = await this.settlementContextOrRefresh();
+        if (!c || !c.actions || !c.actions.create_claim_draft) {
+            frappe.msgprint(__("A Supplier Claim Draft is not available for this invoice classification or status."));
+            return;
+        }
+        const fromDate = c.expected_claim_period_from || c.posting_date || frappe.datetime.get_today();
+        const toDate = c.expected_claim_period_to || c.due_date || frappe.datetime.get_today();
+        const candidateResponse = await frappe.call({
+            method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.get_supplier_claim_draft_candidates",
+            args: { company: c.company, supplier: c.supplier, from_date: fromDate, to_date: toDate, limit: 500 },
+            freeze: true,
+            freeze_message: __("Loading claim invoices and return credits..."),
+        });
+        const candidates = candidateResponse.message || [];
+        const returnCredits = candidates.filter((row) => cint(row.is_return)).map((row) => ({ ...row, selected: false, selected_amount: Math.abs(flt(row.included_amount || row.outstanding_amount || 0)) }));
+        const dialog = new frappe.ui.Dialog({
+            title: __("Create Supplier Claim Draft for {0}", [c.invoice]),
+            fields: [
+                { fieldname: "period_from", fieldtype: "Date", label: __("Period From"), default: fromDate, reqd: 1 },
+                { fieldname: "period_to", fieldtype: "Date", label: __("Period To"), default: toDate, reqd: 1 },
+                { fieldname: "invoice_amount", fieldtype: "Currency", label: __("Current Invoice Included Amount"), default: c.outstanding_amount, reqd: 1 },
+                { fieldtype: "Column Break" },
+                { fieldname: "net_amount_to_pay", fieldtype: "Currency", label: __("Net Amount To Pay"), default: c.outstanding_amount, reqd: 1 },
+                { fieldname: "payment_due_date", fieldtype: "Date", label: __("Payment Due Date"), default: c.due_date || "" },
+                { fieldtype: "Section Break", label: __("Available Return Credits") },
+                { fieldname: "return_credits_html", fieldtype: "HTML" },
+                { fieldtype: "Section Break" },
+                { fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), default: __("Draft Supplier Claim created from Purchase & Invoice Management. Review before Submit.") },
+            ],
+            primary_action_label: __("Create Draft"),
+            primary_action: async (values) => {
+                const invoiceAmount = flt(values.invoice_amount || 0);
+                if (invoiceAmount <= 0 || invoiceAmount - flt(c.outstanding_amount) > 0.005) {
+                    frappe.msgprint(__("Current invoice included amount must be greater than zero and cannot exceed its outstanding amount."));
+                    return;
+                }
+                const selectedReturns = returnCredits.filter((row) => row.selected && flt(row.selected_amount) > 0).map((row) => ({ purchase_invoice: row.purchase_invoice, included_amount: -Math.abs(flt(row.selected_amount)) }));
+                const returnTotal = selectedReturns.reduce((sum, row) => sum + Math.abs(flt(row.included_amount)), 0);
+                const systemTotal = invoiceAmount - returnTotal;
+                const net = flt(values.net_amount_to_pay || 0);
+                if (systemTotal < -0.005 || net < -0.005 || net - systemTotal > 0.005) {
+                    frappe.msgprint(__("Return credits cannot exceed the invoice amount, and Net Amount To Pay must be between zero and the system claim total."));
+                    return;
+                }
+                dialog.hide();
+                const response = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.create_supplier_claim_draft",
+                    args: { args: {
+                        company: c.company,
+                        supplier: c.supplier,
+                        period_from: values.period_from,
+                        period_to: values.period_to,
+                        payment_due_date: values.payment_due_date || "",
+                        net_amount_to_pay: net,
+                        invoices: [{ purchase_invoice: c.invoice, included_amount: invoiceAmount }, ...selectedReturns],
+                        notes: values.notes || "",
+                    } },
+                    freeze: true,
+                    freeze_message: __("Creating draft Supplier Claim..."),
+                });
+                const out = response.message || {};
+                if (out.name) {
+                    frappe.show_alert({ message: __("Draft Supplier Claim created: {0}", [out.name]), indicator: "green" }, 7);
+                    await this.refreshSupplierSettlement({ silent: true });
+                    frappe.set_route("Form", "Supplier Claim", out.name);
+                }
+            },
+        });
+        dialog.__autoNetAmount = true;
+        const selectedReturnTotal = () => returnCredits
+            .filter((row) => row.selected)
+            .reduce((sum, row) => sum + Math.abs(flt(row.selected_amount || 0)), 0);
+        const syncClaimNetAmount = () => {
+            if (!dialog.__autoNetAmount) return;
+            const invoiceAmount = flt(dialog.get_value("invoice_amount") || 0);
+            dialog.set_value("net_amount_to_pay", Math.max(invoiceAmount - selectedReturnTotal(), 0));
+        };
+        const renderReturns = () => {
+            const field = dialog.fields_dict.return_credits_html;
+            if (!returnCredits.length) {
+                field.$wrapper.html(`<div class="pimv1-settlement-empty">${__("No open Return Credits / Debit Notes are available in this claim period.")}</div>`);
+                return;
+            }
+            field.$wrapper.html(`<div class="pimv1-settlement-warning">${__("Return credits are never selected automatically. Tick only the credits reviewed for this claim. Selected credit total")}: <strong data-role="selected-return-total">${this.money(selectedReturnTotal())}</strong></div><table class="pimv1-settlement-return-table"><thead><tr><th>${__("Use")}</th><th>${__("Document")}</th><th>${__("Outstanding Credit")}</th><th>${__("Include")}</th></tr></thead><tbody>${returnCredits.map((row, index) => `<tr><td><input type="checkbox" class="pimv1-claim-return-use" data-index="${index}" ${row.selected ? "checked" : ""}></td><td>${this.escape(row.purchase_invoice)}</td><td>${this.money(Math.abs(flt(row.outstanding_amount)))}</td><td><input type="number" step="0.01" min="0" class="form-control input-sm pimv1-claim-return-amount" data-index="${index}" value="${flt(row.selected_amount)}"></td></tr>`).join("")}</tbody></table>`);
+            field.$wrapper.find(".pimv1-claim-return-use").on("change", (event) => {
+                const row = returnCredits[Number($(event.currentTarget).data("index"))];
+                if (row) row.selected = Boolean(event.currentTarget.checked);
+                field.$wrapper.find("[data-role='selected-return-total']").text(this.money(selectedReturnTotal()));
+                syncClaimNetAmount();
+            });
+            field.$wrapper.find(".pimv1-claim-return-amount").on("change input", (event) => {
+                const row = returnCredits[Number($(event.currentTarget).data("index"))];
+                if (row) row.selected_amount = Math.min(Math.abs(flt(event.currentTarget.value || 0)), Math.abs(flt(row.outstanding_amount || 0)));
+                field.$wrapper.find("[data-role='selected-return-total']").text(this.money(selectedReturnTotal()));
+                syncClaimNetAmount();
+            });
+        };
+        dialog.show();
+        renderReturns();
+        if (dialog.fields_dict.invoice_amount && dialog.fields_dict.invoice_amount.$input) {
+            dialog.fields_dict.invoice_amount.$input.on("change input", syncClaimNetAmount);
+        }
+        if (dialog.fields_dict.net_amount_to_pay && dialog.fields_dict.net_amount_to_pay.$input) {
+            dialog.fields_dict.net_amount_to_pay.$input.on("change input", () => { dialog.__autoNetAmount = false; });
+        }
+    }
+
+    async openSettlementAdvanceDialog() {
+        const c = await this.refreshSupplierSettlement();
+        if (!c || !c.actions || !c.actions.use_existing_advance) {
+            frappe.msgprint(__("No usable supplier advance is currently available."));
+            return;
+        }
+        const advances = c.unallocated_advances || [];
+        const options = advances.map((row) => row.payment_entry).join("\n");
+        const dialog = new frappe.ui.Dialog({
+            title: __("Use Existing Supplier Advance"),
+            fields: [
+                { fieldname: "payment_entry", fieldtype: "Select", label: __("Payment Entry"), options, default: advances[0] ? advances[0].payment_entry : "", reqd: 1 },
+                { fieldname: "available_advance", fieldtype: "Currency", label: __("Available Advance"), read_only: 1, default: advances[0] ? advances[0].unallocated_amount : 0 },
+                { fieldname: "allocated_amount", fieldtype: "Currency", label: __("Allocate to Invoice"), default: Math.min(flt(c.outstanding_amount), advances[0] ? flt(advances[0].unallocated_amount) : 0), reqd: 1 },
+                { fieldtype: "Section Break" },
+                { fieldname: "safety_note", fieldtype: "HTML", options: `<div class="pimv1-settlement-warning">${__("This is an explicit reconciliation action. Review the Payment Entry, invoice outstanding and any Supplier Claim link before applying.")}</div>` },
+            ],
+            primary_action_label: __("Preview & Apply"),
+            primary_action: async (values) => {
+                const amount = flt(values.allocated_amount || 0);
+                if (amount <= 0 || amount - flt(values.available_advance) > 0.005 || amount - flt(c.outstanding_amount) > 0.005) {
+                    frappe.msgprint(__("Allocation must be greater than zero and cannot exceed the available advance or invoice outstanding."));
+                    return;
+                }
+                const args = {
+                    company: c.company,
+                    supplier: c.supplier,
+                    payment_entry: values.payment_entry,
+                    invoices: [{ invoice: c.invoice, allocated_amount: amount }],
+                    include_claim_linked: c.linked_supplier_claim ? 1 : 0,
+                };
+                const previewResponse = await frappe.call({
+                    method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.preview_supplier_advance_allocation",
+                    args: { args },
+                    freeze: true,
+                    freeze_message: __("Validating advance allocation..."),
+                });
+                const preview = previewResponse.message || {};
+                const warning = preview.linked_claim_count
+                    ? `<div class="text-danger"><strong>${__("Warning")}: ${__("This invoice is linked to a Supplier Claim. Continue only after intentional review.")}</strong></div>`
+                    : "";
+                frappe.confirm(`${warning}<div style="line-height:1.8"><div>${__("Payment Entry")}: <strong>${this.escape(values.payment_entry)}</strong></div><div>${__("Allocate")}: <strong>${this.money(preview.allocated_total)}</strong></div><div>${__("Remaining Advance")}: <strong>${this.money(preview.remaining_advance)}</strong></div></div>`, async () => {
+                    dialog.hide();
+                    const response = await frappe.call({
+                        method: "pharma_erp.pharma_erp.page.supplier_running_account.supplier_running_account.reconcile_supplier_advance_against_invoices",
+                        args: { args: { ...args, confirm_claim_linked: preview.linked_claim_count ? 1 : 0 } },
+                        freeze: true,
+                        freeze_message: __("Applying supplier advance..."),
+                    });
+                    const out = response.message || {};
+                    frappe.show_alert({ message: __("Supplier advance applied from {0}.", [out.payment_entry || values.payment_entry]), indicator: "green" }, 8);
+                    await this.refreshSupplierSettlement({ silent: true });
+                });
+            },
+        });
+        const updateAdvance = () => {
+            const selected = advances.find((row) => row.payment_entry === dialog.get_value("payment_entry"));
+            const available = selected ? flt(selected.unallocated_amount) : 0;
+            dialog.set_value("available_advance", available);
+            dialog.set_value("allocated_amount", Math.min(flt(c.outstanding_amount), available));
+        };
+        dialog.show();
+        if (dialog.fields_dict.payment_entry && dialog.fields_dict.payment_entry.$input) {
+            dialog.fields_dict.payment_entry.$input.on("change", updateAdvance);
+        }
+    }
+
     openSupplierRunningAccount() {
         frappe.route_options = {
             company: this.value("company"),
             supplier: this.value("supplier"),
+            purchase_invoice: this.draftName || "",
+            settlement_classification: this.value("payment_classification") || "",
         };
         frappe.set_route("supplier-running-account");
     }
@@ -3508,6 +3874,7 @@ all`,
             this.clearLocalDraft();
             this.renderRecentInvoices(this.bootstrap.recent_invoices);
             await this.refreshOpenProcurementDrafts({ silent: true });
+            await this.refreshSupplierSettlement({ silent: true });
             if (!options.silent) {
                 frappe.show_alert({ message: __("Purchase Invoice {0} saved as Draft.", [invoice.name]), indicator: "green" }, 7);
             }
@@ -3541,6 +3908,8 @@ all`,
             this.lastAutoSupplierInvoiceTotal = 0;
             this.procurementLinks = {};
             this.procurementMatchPreview = null;
+            this.supplierSettlementContext = null;
+            this.supplierSettlementLoading = false;
             this.saveProcurementLinks();
             this.clearLocalDraft();
 
@@ -3581,6 +3950,7 @@ all`,
 
             this.renderRows();
             this.refreshCards();
+            this.renderSupplierSettlement();
             this.renderProcurementMatchPreview();
             window.scrollTo({ top: 0, behavior: "smooth" });
             frappe.show_alert({
@@ -3972,6 +4342,7 @@ all`,
         this.$main.find("[data-role='saved-status']").text(invoice.status || __("Submitted"));
         this.renderRecentInvoices(this.bootstrap.recent_invoices);
         await this.refreshOpenProcurementDrafts({ silent: true });
+        await this.refreshSupplierSettlement({ silent: true });
         const submittedProcurement = Array.isArray(message.submitted_procurement)
             ? message.submitted_procurement
             : [];
@@ -4011,6 +4382,7 @@ all`,
             this.$main.find("[data-role='draft-badge']").text(`${invoice.name || this.draftName} • ${invoice.status || __("Cancelled")}`);
             this.renderRecentInvoices(this.bootstrap.recent_invoices);
             await this.refreshOpenProcurementDrafts({ silent: true });
+            await this.refreshSupplierSettlement({ silent: true });
             frappe.show_alert({ message: __("Purchase Invoice cancelled."), indicator: "orange" }, 6);
         });
     }
@@ -4025,23 +4397,31 @@ all`,
                     method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.load_invoice",
                     args: { name: invoiceName },
                     freeze: true,
-                    freeze_message: __("Loading Purchase Invoice Draft..."),
+                    freeze_message: __("Loading Purchase Invoice..."),
                 });
                 const message = response.message || {};
-                await this.applyLoadedInvoice(message.payload || {}, message.invoice || {}, message.procurement_links || {});
+                const invoice = message.invoice || {};
+                await this.applyLoadedInvoice(message.payload || {}, invoice, message.procurement_links || {});
                 this.toggleRecentPanel(false);
-                frappe.show_alert({ message: __("Draft {0} loaded into the purchase page.", [invoiceName]), indicator: "green" }, 6);
+                const readOnly = cint(invoice.docstatus) !== 0 || cint(message.read_only);
+                frappe.show_alert({
+                    message: readOnly
+                        ? __("Invoice {0} opened in read-only settlement mode.", [invoiceName])
+                        : __("Draft {0} loaded into the purchase page.", [invoiceName]),
+                    indicator: readOnly ? "blue" : "green",
+                }, 7);
             } catch (error) {
+                console.error("Unable to open Purchase Invoice", error);
                 frappe.msgprint({
-                    title: __("Unable to Load Draft"),
-                    message: this.escape(error.message || error),
+                    title: __("Unable to Open Invoice"),
+                    message: __("Purchase Invoice {0} could not be opened. Refresh the page and try again.", [invoiceName]),
                     indicator: "red",
                 });
             }
         };
 
         if ((this.rows.length || this.draftName) && this.draftName !== invoiceName) {
-            frappe.confirm(__("Open draft {0} and replace the current page data?", [invoiceName]), load);
+            frappe.confirm(__("Open invoice {0} and replace the current page data?", [invoiceName]), load);
         } else {
             await load();
         }
@@ -4096,6 +4476,7 @@ all`,
         this.renderSummary();
         this.applyProcurementChain(procurementLinks || {}, { replace: true });
         await this.fetchProcurementMatchPreview(false);
+        await this.refreshSupplierSettlement({ silent: true });
     }
 
     localDraftKey() {
@@ -4365,7 +4746,7 @@ all`,
                 <td>${this.money(row.grand_total)}</td>
                 <td>${this.money(row.outstanding_amount)}</td>
                 <td><div class="pimv1-recent-actions">
-                    ${cint(row.docstatus) === 0 ? `<button type="button" class="btn btn-xs btn-primary" data-action="load-draft" data-name="${this.escape(row.name)}">${__("Open in Page")}</button>` : ""}
+                    <button type="button" class="btn btn-xs btn-primary" data-action="load-draft" data-name="${this.escape(row.name)}">${__("Open in Page")}</button>
                     ${cint(row.docstatus) === 1 && !cint(row.is_return) ? `<button type="button" class="btn btn-xs btn-warning" data-action="create-purchase-return" data-name="${this.escape(row.name)}">${__("Create Return")}</button>` : ""}
                     <button type="button" class="btn btn-xs btn-default" data-action="preview-procurement-summary" data-name="${this.escape(row.name)}">${__("Summary / Print")}</button>
                     <button type="button" class="btn btn-xs btn-default" data-action="open-invoice" data-name="${this.escape(row.name)}">${__("Official Document")}</button>

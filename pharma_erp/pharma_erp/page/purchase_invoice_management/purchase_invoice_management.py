@@ -663,6 +663,160 @@ def get_bootstrap(company: str | None = None):
     }
 
 
+def _purchase_invoice_linked_supplier_claim(invoice_name: str) -> str:
+    if not invoice_name:
+        return ""
+    if "custom_supplier_claim" in _safe_fields("Purchase Invoice", ["custom_supplier_claim"]):
+        claim = frappe.db.get_value("Purchase Invoice", invoice_name, "custom_supplier_claim")
+        if claim:
+            return claim
+    if frappe.db.exists("DocType", "Supplier Claim Invoice"):
+        return frappe.db.get_value(
+            "Supplier Claim Invoice",
+            {"purchase_invoice": invoice_name, "parenttype": "Supplier Claim"},
+            "parent",
+        ) or ""
+    return ""
+
+
+@frappe.whitelist()
+def get_invoice_settlement_context(name: str):
+    """Read-only settlement snapshot for one Purchase Invoice.
+
+    Financial actions continue to use the established Supplier Running Account
+    APIs so payment, claim and advance rules remain centralized.
+    """
+    _require_read_access()
+    invoice_name = (name or "").strip()
+    if not invoice_name or not frappe.db.exists("Purchase Invoice", invoice_name):
+        frappe.throw(_("Select a valid Purchase Invoice."))
+    if not frappe.has_permission("Purchase Invoice", "read", invoice_name):
+        frappe.throw(_("You are not permitted to read Purchase Invoice {0}.").format(frappe.bold(invoice_name)), frappe.PermissionError)
+
+    requested_fields = [
+        "name", "company", "supplier", "supplier_name", "docstatus", "status",
+        "posting_date", "due_date", "currency", "grand_total", "rounded_total",
+        "outstanding_amount", "custom_payment_classification",
+        "custom_expected_claim_period_from", "custom_expected_claim_period_to",
+    ]
+    fields = _safe_fields("Purchase Invoice", requested_fields)
+    # docstatus is a standard Frappe column, not a DocField returned by meta.
+    # Include it explicitly so Submitted/Cancelled invoices do not appear as Draft.
+    if "docstatus" not in fields:
+        fields.append("docstatus")
+    invoice = frappe.db.get_value("Purchase Invoice", invoice_name, fields, as_dict=True) or frappe._dict()
+    classification = invoice.get("custom_payment_classification") or ""
+    outstanding = flt(invoice.get("outstanding_amount"), 2)
+    grand_total = flt(invoice.get("rounded_total") or invoice.get("grand_total"), 2)
+    paid_amount = max(0.0, flt(grand_total - outstanding, 2))
+
+    linked_claim = _purchase_invoice_linked_supplier_claim(invoice_name)
+    linked_claim_status = ""
+    linked_claim_docstatus = None
+    if linked_claim and frappe.db.exists("Supplier Claim", linked_claim):
+        claim_values = frappe.db.get_value("Supplier Claim", linked_claim, ["status", "docstatus"], as_dict=True) or frappe._dict()
+        linked_claim_status = claim_values.get("status") or ""
+        linked_claim_docstatus = cint(claim_values.get("docstatus"))
+
+    advances = []
+    can_read_advances = bool(frappe.has_permission("Payment Entry", "read"))
+    if can_read_advances and invoice.get("company") and invoice.get("supplier"):
+        rows = frappe.get_all(
+            "Payment Entry",
+            filters={
+                "company": invoice.company,
+                "party_type": "Supplier",
+                "party": invoice.supplier,
+                "docstatus": 1,
+                "payment_type": "Pay",
+                "unallocated_amount": [">", 0.005],
+            },
+            fields=[
+                "name", "posting_date", "mode_of_payment", "paid_from",
+                "paid_amount", "unallocated_amount", "reference_no",
+            ],
+            order_by="posting_date asc, creation asc",
+            limit_page_length=100,
+        )
+        advances = [
+            {
+                "payment_entry": row.name,
+                "posting_date": row.posting_date,
+                "mode_of_payment": row.mode_of_payment or "",
+                "paid_from": row.paid_from or "",
+                "paid_amount": flt(row.paid_amount, 2),
+                "unallocated_amount": flt(row.unallocated_amount, 2),
+                "reference_no": row.reference_no or "",
+            }
+            for row in rows
+        ]
+
+    if cint(invoice.get("docstatus")) == 0:
+        settlement_status = "Draft"
+    elif cint(invoice.get("docstatus")) == 2:
+        settlement_status = "Cancelled"
+    elif outstanding <= 0.005:
+        settlement_status = "Paid"
+    elif linked_claim:
+        settlement_status = "Allocated to Claim"
+    elif paid_amount > 0.005:
+        settlement_status = "Partly Paid"
+    else:
+        settlement_status = "Unpaid"
+
+    submitted_open = cint(invoice.get("docstatus")) == 1 and outstanding > 0.005
+    claim_invoice = classification == "Claim Invoice"
+    can_create_payment = bool(
+        submitted_open
+        and not claim_invoice
+        and frappe.has_permission("Payment Entry", "create")
+    )
+    can_create_claim = bool(
+        submitted_open
+        and claim_invoice
+        and not linked_claim
+        and frappe.db.exists("DocType", "Supplier Claim")
+        and frappe.has_permission("Supplier Claim", "create")
+    )
+    can_use_advance = bool(
+        submitted_open
+        and advances
+        and frappe.has_permission("Payment Entry", "write")
+    )
+
+    return {
+        "invoice": invoice_name,
+        "company": invoice.get("company") or "",
+        "supplier": invoice.get("supplier") or "",
+        "supplier_name": invoice.get("supplier_name") or invoice.get("supplier") or "",
+        "docstatus": cint(invoice.get("docstatus")),
+        "invoice_status": invoice.get("status") or "",
+        "settlement_status": settlement_status,
+        "classification": classification,
+        "posting_date": invoice.get("posting_date"),
+        "due_date": invoice.get("due_date"),
+        "currency": invoice.get("currency") or frappe.db.get_value("Company", invoice.get("company"), "default_currency") or "",
+        "grand_total": grand_total,
+        "outstanding_amount": outstanding,
+        "paid_amount": paid_amount,
+        "supplier_balance": flt(_supplier_balance(invoice.get("supplier"), invoice.get("company")), 2),
+        "linked_supplier_claim": linked_claim,
+        "linked_supplier_claim_status": linked_claim_status,
+        "linked_supplier_claim_docstatus": linked_claim_docstatus,
+        "expected_claim_period_from": invoice.get("custom_expected_claim_period_from"),
+        "expected_claim_period_to": invoice.get("custom_expected_claim_period_to"),
+        "unallocated_advances": advances,
+        "unallocated_advance_total": flt(sum(flt(row.get("unallocated_amount")) for row in advances), 2),
+        "actions": {
+            "create_payment_draft": can_create_payment,
+            "create_claim_draft": can_create_claim,
+            "use_existing_advance": can_use_advance,
+            "open_supplier_account": bool(invoice.get("supplier") and frappe.has_permission("Supplier", "read", invoice.get("supplier"))),
+        },
+        "draft_only_actions": 1,
+    }
+
+
 @frappe.whitelist()
 def search_purchase_invoices(
     company: str | None = None,
@@ -2129,12 +2283,11 @@ def load_invoice(name: str):
         frappe.throw(_("Purchase Invoice was not found."))
     doc = frappe.get_doc("Purchase Invoice", name)
     doc.check_permission("read")
-    if doc.docstatus != 0:
-        frappe.throw(_("Only Draft Purchase Invoices can be opened for editing on this page."))
     return {
         "invoice": _invoice_response(doc),
         "payload": _purchase_invoice_page_payload(doc),
         "procurement_links": _procurement_linked_documents("purchase_invoice", doc.name),
+        "read_only": cint(doc.docstatus) != 0,
     }
 
 
