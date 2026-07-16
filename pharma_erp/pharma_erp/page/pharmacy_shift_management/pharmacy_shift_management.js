@@ -128,14 +128,17 @@ class PharmacyShiftManagementV24 {
 
                 <div class="psm24-actions">
                     ${this.action("📊", __("مراجعة المبيعات"), "review-sales")}
+                    ${this.action("📋", __("مراجعة التقرير الكامل"), "review-cashflow")}
                     ${!shift.is_under_review ? this.action("💵", __("دخول نقدية"), "cash-in") : ""}
                     ${!shift.is_under_review ? this.action("💸", __("خروج نقدية"), "cash-out") : ""}
                     ${!shift.is_under_review ? this.action("👤", __("صرف سلفة موظف"), "employee-advance") : ""}
                     ${this.action("💳", __("تقفيل ماكينة فيزا"), "close-terminal")}
                     ${this.action("🏦", __("تسوية بنك الفيزا"), "bank-settlement")}
                     ${this.action("🛵", __("تسوية عهدة طيار"), "delivery-settlement")}
+                    ${!shift.is_under_review ? this.action("🔒", __("بدء مراجعة وتجميد Snapshot"), "begin-review") : ""}
                     ${!shift.is_under_review ? this.action("⏸️", __("تجميد الوردية وفتح وردية جديدة"), "rollover-shift") : ""}
-                    ${this.action("✅", __("مراجعة وإغلاق الوردية"), "close-shift")}
+                    ${shift.is_under_review && shift.can_cancel_review ? this.action("↩️", __("إلغاء المراجعة وإعادة فتح الوردية"), "cancel-review") : ""}
+                    ${shift.is_under_review ? this.action("✅", __("اعتماد وترحيل وإغلاق"), "close-shift") : ""}
                 </div>
 
                 <div class="psm24-section">
@@ -158,7 +161,7 @@ class PharmacyShiftManagementV24 {
                                 : __("النقدية المتوقعة"),
                             shift.is_under_review
                                 ? shift.review_actual_cash
-                                : cash.expected_cash,
+                                : flt(this.data.cashflow?.expected_cash || cash.expected_cash),
                         )}
                     </div>
                 </div>
@@ -168,8 +171,10 @@ class PharmacyShiftManagementV24 {
                         <h4>بيانات تجميد ومراجعة الوردية</h4>
                         <div class="psm24-grid">
                             ${this.moneyCard("النقدية المتوقعة وقت التجميد", shift.review_expected_cash || 0)}
-                            ${this.infoCard("العد الفعلي", "يتم عند الاعتماد النهائي")}
-                            ${this.infoCard("قرار العجز أو الزيادة", "لم يُحدد بعد")}
+                            ${this.moneyCard("العد الفعلي المجمد", shift.review_actual_cash || 0)}
+                            ${this.moneyCard("فرق العد المجمد", shift.review_difference || 0)}
+                            ${this.moneyCard("رصيد GL وقت التجميد", shift.review_gl_balance || 0)}
+                            ${this.infoCard("مرجع العد", shift.review_cash_reference || "-")}
                             ${this.moneyCard("عهدة الوردية الجديدة", shift.rollover_new_opening_balance || 0)}
                             ${this.infoCard("الوردية الجديدة", shift.rollover_new_shift || this.data.active_shift || "-")}
                             ${this.infoCard("وقت توقف المبيعات", shift.cutoff_time ? frappe.datetime.str_to_user(shift.cutoff_time) : "-")}
@@ -182,8 +187,10 @@ class PharmacyShiftManagementV24 {
                     </div>
                 ` : ""}
 
+                ${this.renderWarnings(this.data.warnings || [])}
                 ${this.renderUnderReviewShifts(this.data.under_review_shifts || [], shift.name)}
                 ${this.renderPaymentSummary(this.data.payment_summary || [])}
+                ${this.renderCashflowReport(this.data.cashflow || {})}
                 ${this.renderElectronicReview()}
                 ${this.renderDeliveryDrivers(this.data.delivery_drivers || [])}
                 ${this.renderTerminals(this.data.terminals || [])}
@@ -337,6 +344,133 @@ class PharmacyShiftManagementV24 {
                         </div>
                     `).join("")}
                 </div>
+            </div>
+        `;
+    }
+
+    renderWarnings(rows) {
+        if (!rows.length) return "";
+        return `
+            <div class="psm24-section">
+                <h4>${__("تحذيرات الوردية")}</h4>
+                ${rows.map((row) => `
+                    <div class="psm24-alert">
+                        <strong>${frappe.utils.escape_html(row.message || "")}</strong>
+                    </div>
+                `).join("")}
+            </div>
+        `;
+    }
+
+    cashflowActionButtons(row) {
+        const openDoctype = row.open_doctype || row.voucher_type || "";
+        const openName = row.open_name || row.voucher_no || "";
+        const openButton = openDoctype && openName
+            ? `<button class="btn btn-xs btn-default psm64-open-doc" data-doctype="${frappe.utils.escape_html(openDoctype)}" data-name="${frappe.utils.escape_html(openName)}">${__("فتح")}</button>`
+            : "";
+        const cancelButton = row.can_cancel && !this.data.shift?.is_under_review
+            ? `<button class="btn btn-xs btn-danger psm64-cancel-cashflow" data-doctype="${frappe.utils.escape_html(row.cancel_doctype || "")}" data-name="${frappe.utils.escape_html(row.cancel_name || "")}" data-label="${frappe.utils.escape_html(row.voucher_no || "")}">${__("إلغاء آمن")}</button>`
+            : "";
+        return `<div class="d-flex flex-wrap gap-2">${openButton}${cancelButton}</div>`;
+    }
+
+    cashflowDetailsTable(rows) {
+        return `
+            <div class="psm24-table mt-3">
+                <table class="table table-bordered table-hover">
+                    <thead><tr>
+                        <th>${__("الفئة")}</th><th>${__("الاتجاه")}</th><th>${__("المستند")}</th>
+                        <th>${__("الطرف")}</th><th>${__("المبلغ")}</th><th>${__("المستخدم")}</th>
+                        <th>${__("الوقت")}</th><th>${__("البيان")}</th><th>${__("الإجراءات")}</th>
+                    </tr></thead>
+                    <tbody>${(rows || []).map((row) => `<tr>
+                        <td>${frappe.utils.escape_html(row.category || "")}</td>
+                        <td>${frappe.utils.escape_html(row.direction || "")}</td>
+                        <td>${frappe.utils.escape_html(row.voucher_no || "")}</td>
+                        <td>${frappe.utils.escape_html(row.party || "")}</td>
+                        <td>${format_currency(flt(row.amount), "EGP")}</td>
+                        <td>${frappe.utils.escape_html(row.user || "")}</td>
+                        <td>${row.time ? frappe.datetime.str_to_user(row.time) : "-"}</td>
+                        <td>${frappe.utils.escape_html(row.note || "")}</td>
+                        <td>${this.cashflowActionButtons(row)}</td>
+                    </tr>`).join("")}</tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    cashflowReportBody(report, expanded = false) {
+        if (!report || !report.sales) return "";
+        const sales = report.sales || {};
+        const receipts = report.receipts || {};
+        const payments = report.payments || {};
+        const gl = report.gl || {};
+        const rows = report.details || [];
+        const cards = (items) => items.map(([label, value]) => this.moneyCard(label, value)).join("");
+        return `
+            <h5>${__("المبيعات")}</h5>
+            <div class="psm24-grid">
+                ${cards([
+                    [__("Cash"), sales.cash], [__("Card"), sales.card],
+                    [__("InstaPay"), sales.instapay], [__("Wallet"), sales.wallet],
+                    [__("Prepaid"), sales.prepaid], [__("Returns"), sales.returns],
+                    [__("Net Sales"), sales.net_sales],
+                ])}
+            </div>
+            <h5 class="mt-4">${__("المقبوضات غير البيعية")}</h5>
+            <div class="psm24-grid">
+                ${cards([
+                    [__("Opening Float"), receipts.opening_float],
+                    [__("Main Safe / Till Refill"), receipts.main_safe_refill],
+                    [__("Supplier Receipts"), receipts.supplier_receipts],
+                    [__("Driver Cash Deposits"), receipts.driver_cash_deposits],
+                    [__("Other Cash Receipts"), receipts.other_cash_receipts],
+                ])}
+            </div>
+            <h5 class="mt-4">${__("المدفوعات")}</h5>
+            <div class="psm24-grid">
+                ${cards([
+                    [__("Supplier Payments"), payments.supplier_payments],
+                    [__("Operating Expenses"), payments.operating_expenses],
+                    [__("Employee Advances"), payments.employee_advances],
+                    [__("Transfers to Main Safe"), payments.transfers_to_main_safe],
+                    [__("Customer Cash Refunds"), payments.customer_cash_refunds],
+                    [__("Other Cash Payments"), payments.other_cash_payments],
+                ])}
+            </div>
+            <h5 class="mt-4">${__("تسوية الدرج")}</h5>
+            <div class="psm24-grid">
+                ${this.moneyCard(__("Expected Cash"), report.expected_cash)}
+                ${this.moneyCard(__("GL Balance"), gl.closing_balance)}
+                ${this.moneyCard(__("Control Difference"), report.control_difference)}
+                ${this.moneyCard(__("Gross Cash In"), gl.cash_in)}
+                ${this.moneyCard(__("Gross Cash Out"), gl.cash_out)}
+            </div>
+            ${this.data.shift?.is_under_review ? `
+                <div class="alert alert-warning mt-3 mb-0">
+                    ${__("الوردية تحت المراجعة؛ فتح المستندات متاح لكن الإلغاء متوقف حتى إلغاء المراجعة وإعادة فتح الوردية.")}
+                </div>
+            ` : ""}
+            ${expanded ? this.cashflowDetailsTable(rows) : `
+                <details class="mt-4">
+                    <summary style="cursor:pointer;font-weight:700">${__("تفاصيل كل الحركات")}</summary>
+                    ${this.cashflowDetailsTable(rows)}
+                </details>
+            `}
+        `;
+    }
+
+    renderCashflowReport(report) {
+        if (!report || !report.sales) return "";
+        return `
+            <div class="psm24-section">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h4 class="mb-0">${__("تقرير التدفق النقدي الكامل")}</h4>
+                    <button class="btn btn-primary btn-sm" data-action="review-cashflow">
+                        ${__("مراجعة التقرير الكامل")}
+                    </button>
+                </div>
+                <div class="mt-3">${this.cashflowReportBody(report, false)}</div>
             </div>
         `;
     }
@@ -1000,6 +1134,15 @@ class PharmacyShiftManagementV24 {
             .on("click.psm24", "[data-action='review-sales']", () =>
                 this.reviewSales(),
             )
+            .on("click.psm24", "[data-action='review-cashflow']", () =>
+                this.showCashflowReview(),
+            )
+            .on("click.psm24", "[data-action='begin-review']", () =>
+                this.showBeginReviewDialog(),
+            )
+            .on("click.psm24", "[data-action='cancel-review']", () =>
+                this.showCancelReviewDialog(),
+            )
             .on("click.psm24", "[data-action='cash-in']", () =>
                 this.showCashInDialog(),
             )
@@ -1062,6 +1205,23 @@ class PharmacyShiftManagementV24 {
                     flt($button.attr("data-amount")),
                 );
             })
+            .on("click.psm24", ".psm64-open-doc", (event) => {
+                event.preventDefault();
+                const $button = $(event.currentTarget);
+                frappe.set_route(
+                    "Form",
+                    $button.attr("data-doctype"),
+                    $button.attr("data-name"),
+                );
+            })
+            .on("click.psm24", ".psm64-cancel-cashflow", (event) => {
+                const $button = $(event.currentTarget);
+                this.showCancelCashflowDialog(
+                    $button.attr("data-doctype"),
+                    $button.attr("data-name"),
+                    $button.attr("data-label"),
+                );
+            })
             .on("click.psm24", ".psm24-open-doc", (event) => {
                 event.preventDefault();
                 const $link = $(event.currentTarget);
@@ -1073,8 +1233,228 @@ class PharmacyShiftManagementV24 {
             });
     }
 
+    showCashflowReview() {
+        const dialog = new frappe.ui.Dialog({
+            title: __("مراجعة التقرير الكامل للمبيعات والمقبوضات والمدفوعات"),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "cashflow_html",
+                    fieldtype: "HTML",
+                },
+            ],
+        });
+        dialog.fields_dict.cashflow_html.$wrapper.html(
+            `<div class="psm24 p-2">${this.cashflowReportBody(this.data.cashflow || {}, true)}</div>`,
+        );
+        dialog.$wrapper
+            .off(".psm64")
+            .on("click.psm64", ".psm64-open-doc", (event) => {
+                const $button = $(event.currentTarget);
+                dialog.hide();
+                frappe.set_route(
+                    "Form",
+                    $button.attr("data-doctype"),
+                    $button.attr("data-name"),
+                );
+            })
+            .on("click.psm64", ".psm64-cancel-cashflow", (event) => {
+                const $button = $(event.currentTarget);
+                dialog.hide();
+                this.showCancelCashflowDialog(
+                    $button.attr("data-doctype"),
+                    $button.attr("data-name"),
+                    $button.attr("data-label"),
+                );
+            });
+        dialog.show();
+    }
+
+    showCancelCashflowDialog(doctype, name, label) {
+        if (this.data.shift?.is_under_review) {
+            frappe.msgprint({
+                title: __("الوردية مجمدة"),
+                indicator: "orange",
+                message: __("ألغِ المراجعة وأعد فتح الوردية أولًا قبل إلغاء أي حركة نقدية."),
+            });
+            return;
+        }
+        const dialog = new frappe.ui.Dialog({
+            title: __("إلغاء حركة نقدية مرتبطة بالوردية"),
+            fields: [
+                {
+                    fieldname: "document_info",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-warning">${__("سيتم إلغاء المستند وعكس أثره المحاسبي الرسمي. لا يتم حذف المستند.")}<br><strong>${frappe.utils.escape_html(label || name || "")}</strong></div>`,
+                },
+                {
+                    label: __("سبب الإلغاء"),
+                    fieldname: "reason",
+                    fieldtype: "Small Text",
+                    reqd: 1,
+                },
+            ],
+            primary_action_label: __("إلغاء آمن وعكس الأثر"),
+            primary_action: async (values) => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.cancel_cashflow_document",
+                    args: {
+                        shift_name: this.data.shift.name,
+                        doctype,
+                        name,
+                        reason: values.reason,
+                    },
+                    freeze: true,
+                    freeze_message: __("جاري إلغاء المستند وعكس الأثر المحاسبي..."),
+                });
+                dialog.hide();
+                frappe.msgprint({
+                    title: __("تم الإلغاء الآمن"),
+                    indicator: "green",
+                    message: `${frappe.utils.escape_html(response.message?.cancelled_doctype || doctype)} ${frappe.utils.escape_html(response.message?.cancelled_name || name)}<br>${__("Expected Cash")}: ${format_currency(flt(response.message?.expected_cash), "EGP")}<br>${__("GL Balance")}: ${format_currency(flt(response.message?.gl_balance), "EGP")}<br>${__("Control Difference")}: ${format_currency(flt(response.message?.control_difference), "EGP")}`,
+                });
+                await this.refresh();
+            },
+        });
+        dialog.show();
+    }
+
+    showBeginReviewDialog() {
+        const expected = flt(this.data.cashflow?.expected_cash || 0);
+        const glBalance = flt(this.data.cashflow?.gl?.closing_balance || 0);
+        const dialog = new frappe.ui.Dialog({
+            title: __("بدء مراجعة وتجميد Snapshot"),
+            size: "large",
+            fields: [
+                {
+                    fieldname: "review_notice",
+                    fieldtype: "HTML",
+                    options: `
+                        <div class="alert alert-info">
+                            ${__("سيتم تجميد تقرير المبيعات والمقبوضات والمدفوعات ورصيد GL عند هذه اللحظة.")}
+                            <br>${__("لن يتم فتح وردية جديدة ولن تُنشأ قيود إغلاق الآن.")}
+                            <br>${__("بعد التجميد تُمنع الإضافات والإلغاءات حتى الاعتماد النهائي أو إلغاء المراجعة.")}
+                        </div>
+                    `,
+                },
+                {
+                    label: __("النقدية المتوقعة"),
+                    fieldname: "expected_cash",
+                    fieldtype: "Currency",
+                    default: expected,
+                    read_only: 1,
+                },
+                {
+                    label: __("رصيد GL الفعلي"),
+                    fieldname: "gl_balance",
+                    fieldtype: "Currency",
+                    default: glBalance,
+                    read_only: 1,
+                },
+                {
+                    label: __("النقدية المعدودة والمعزولة"),
+                    fieldname: "counted_cash",
+                    fieldtype: "Currency",
+                    default: expected,
+                    reqd: 1,
+                },
+                {
+                    label: __("فرق العد"),
+                    fieldname: "difference",
+                    fieldtype: "Currency",
+                    default: 0,
+                    read_only: 1,
+                },
+                {
+                    label: __("مرجع ظرف / عد النقدية"),
+                    fieldname: "cash_reference",
+                    fieldtype: "Data",
+                    reqd: 1,
+                },
+                {
+                    label: __("ملاحظات المراجعة"),
+                    fieldname: "review_notes",
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("بدء المراجعة وتجميد Snapshot"),
+            primary_action: async (values) => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.begin_shift_review",
+                    args: {
+                        shift_name: this.data.shift.name,
+                        counted_cash: values.counted_cash,
+                        cash_reference: values.cash_reference,
+                        review_notes: values.review_notes || "",
+                    },
+                    freeze: true,
+                    freeze_message: __("جاري تجميد التقرير والرصيد وبدء المراجعة..."),
+                });
+                dialog.hide();
+                frappe.msgprint({
+                    title: __("تم تجميد الوردية للمراجعة"),
+                    indicator: "green",
+                    message: `${frappe.utils.escape_html(response.message?.name || "-")}<br>${__("Expected Cash")}: ${format_currency(flt(response.message?.expected_cash), "EGP")}<br>${__("GL Balance")}: ${format_currency(flt(response.message?.gl_balance), "EGP")}<br>${__("Actual Cash")}: ${format_currency(flt(response.message?.actual_cash), "EGP")}<br>${__("Difference")}: ${format_currency(flt(response.message?.difference), "EGP")}`,
+                });
+                this.selectedShift = response.message?.name || this.data.shift.name;
+                await this.refresh();
+            },
+        });
+        dialog.show();
+        const countedField = dialog.get_field("counted_cash");
+        countedField.df.onchange = () => {
+            dialog.set_value(
+                "difference",
+                flt(dialog.get_value("counted_cash")) - expected,
+            );
+        };
+        countedField.refresh();
+    }
+
+    showCancelReviewDialog() {
+        const dialog = new frappe.ui.Dialog({
+            title: __("إلغاء المراجعة وإعادة فتح الوردية"),
+            fields: [
+                {
+                    fieldname: "warning",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-warning">${__("سيتم حذف Snapshot المراجعة فقط وإعادة الوردية إلى Active. لن يُلغى أي مستند مالي.")}</div>`,
+                },
+                {
+                    label: __("سبب إلغاء المراجعة"),
+                    fieldname: "reason",
+                    fieldtype: "Small Text",
+                    reqd: 1,
+                },
+            ],
+            primary_action_label: __("إلغاء المراجعة وإعادة الفتح"),
+            primary_action: async (values) => {
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.cancel_shift_review",
+                    args: {
+                        shift_name: this.data.shift.name,
+                        reason: values.reason,
+                    },
+                    freeze: true,
+                    freeze_message: __("جاري إلغاء المراجعة وإعادة فتح الوردية..."),
+                });
+                dialog.hide();
+                this.selectedShift = "";
+                frappe.show_alert({
+                    message: `${response.message?.name || ""} — ${__("تمت إعادة فتح الوردية")}`,
+                    indicator: "green",
+                });
+                await this.refresh();
+            },
+        });
+        dialog.show();
+    }
+
     async showRolloverDialog() {
-        const expected = flt(this.data.cash?.expected_cash || 0);
+        const expected = flt(this.data.cashflow?.expected_cash || 0);
         const transferResponse = await frappe.call({
             method:
                 "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.get_transferable_delivery_orders",
@@ -1747,7 +2127,7 @@ class PharmacyShiftManagementV24 {
                     fieldname: "action_type",
                     fieldtype: "Select",
                     options:
-                        "Employee Advance\nOperating Expense\nSupplier Payment",
+                        "Employee Advance\nOperating Expense\nSupplier Payment\nTransfer to Main Safe\nOther Cash Payment",
                     default: defaultType,
                     reqd: 1,
                 },
@@ -1823,6 +2203,18 @@ class PharmacyShiftManagementV24 {
                     }),
                 },
                 {
+                    label: __("الحساب المقابل"),
+                    fieldname: "target_account",
+                    fieldtype: "Link",
+                    options: "Account",
+                    depends_on: 'eval:doc.action_type=="Other Cash Payment" || doc.action_type=="Transfer to Main Safe"',
+                    mandatory_depends_on: 'eval:doc.action_type=="Other Cash Payment"',
+                    default: "Main Safe - C",
+                    get_query: () => ({
+                        filters: { company: this.data.shift.company, is_group: 0 },
+                    }),
+                },
+                {
                     label: __("المبلغ"),
                     fieldname: "amount",
                     fieldtype: "Currency",
@@ -1868,7 +2260,9 @@ class PharmacyShiftManagementV24 {
             indicator: "green",
             message: `${__("المستند")}: ${frappe.utils.escape_html(
                 result.name || "-",
-            )}<br>${__("القيد")}: ${frappe.utils.escape_html(
+            )}<br>${__("Payment Entry")}: ${frappe.utils.escape_html(
+                result.payment_entry || "-",
+            )}<br>${__("Journal Entry")}: ${frappe.utils.escape_html(
                 result.journal_entry || "-",
             )}`,
         });
@@ -2212,6 +2606,14 @@ class PharmacyShiftManagementV24 {
     }
 
     closeShift() {
+        if (!this.data.shift?.is_under_review) {
+            frappe.msgprint({
+                title: __("ابدأ المراجعة أولًا"),
+                indicator: "orange",
+                message: __("اضغط بدء مراجعة وتجميد Snapshot قبل الاعتماد والترحيل والإغلاق."),
+            });
+            return;
+        }
         const unbatchedTerminals = (this.data.terminals || []).filter(
             (terminal) => flt(terminal.unbatched_count) > 0,
         );
@@ -2308,9 +2710,12 @@ class PharmacyShiftManagementV24 {
         const isUnderReview = Boolean(this.data.shift?.is_under_review);
         const expected = isUnderReview
             ? flt(this.data.shift.review_expected_cash)
-            : flt(this.data.cash.expected_cash);
-        const counted = expected;
-        const difference = 0;
+            : flt(this.data.cashflow?.expected_cash || this.data.cash.expected_cash);
+        const hasFrozenCount = Boolean(this.data.shift?.review_cash_reference);
+        const counted = hasFrozenCount
+            ? flt(this.data.shift.review_actual_cash)
+            : expected;
+        const difference = counted - expected;
 
         let dialog;
         const fields = [
@@ -2340,11 +2745,11 @@ class PharmacyShiftManagementV24 {
                 fieldname: "actual_cash",
                 fieldtype: "Currency",
                 default: counted,
-                read_only: 0,
+                read_only: hasFrozenCount ? 1 : 0,
                 reqd: 1,
-                description: isUnderReview
-                    ? __("أدخل العد النهائي الآن؛ لم يتم تسجيل عد عند تجميد الوردية.")
-                    : "",
+                description: hasFrozenCount
+                    ? __("تم تجميد هذا العد عند بدء المراجعة. ألغِ المراجعة لتغييره.")
+                    : __("أدخل العد النهائي للوردية التي تم تجميدها عند فتح وردية جديدة."),
             },
             {
                 label: __("فرق النقدية"),

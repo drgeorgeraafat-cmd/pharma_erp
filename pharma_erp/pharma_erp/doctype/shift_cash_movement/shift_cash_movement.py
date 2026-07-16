@@ -3,13 +3,13 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint, flt, get_datetime, getdate, now_datetime, nowdate
 
-from erpnext.accounts.utils import get_balance_on
 
 from pharma_erp.treasury_access import (
     can_emergency_submit_treasury,
     can_manage_treasury,
     can_operate_treasury,
 )
+from pharma_erp.shift_cash_integrity import validate_shift_cash_movement_guard
 
 
 MOVEMENT_RULES = {
@@ -59,6 +59,8 @@ class ShiftCashMovement(Document):
         self.approved_at = None
         self.approval_note = None
         self.journal_entry = None
+        if self.meta.has_field("payment_entry"):
+            self.payment_entry = None
         self.posted_by = None
         self.posted_at = None
 
@@ -95,19 +97,25 @@ class ShiftCashMovement(Document):
         )
 
     def on_submit(self):
-        journal_name = self._ensure_journal_entry()
+        values = {
+            "status": "Posted",
+            "request_status": "Approved",
+            "posted_by": frappe.session.user,
+            "posted_at": now_datetime(),
+            "approved_by": self.approved_by or frappe.session.user,
+            "approved_at": self.approved_at or now_datetime(),
+        }
+        if self.movement_type == "Supplier Payment":
+            values["payment_entry"] = self._ensure_payment_entry()
+            values["journal_entry"] = None
+        else:
+            values["journal_entry"] = self._ensure_journal_entry()
+            if self.meta.has_field("payment_entry"):
+                values["payment_entry"] = None
         frappe.db.set_value(
             self.doctype,
             self.name,
-            {
-                "journal_entry": journal_name,
-                "status": "Posted",
-                "request_status": "Approved",
-                "posted_by": frappe.session.user,
-                "posted_at": now_datetime(),
-                "approved_by": self.approved_by or frappe.session.user,
-                "approved_at": self.approved_at or now_datetime(),
-            },
+            values,
             update_modified=False,
         )
 
@@ -118,13 +126,27 @@ class ShiftCashMovement(Document):
                 frappe.PermissionError,
             )
 
-        if not self.journal_entry:
-            return
+        payment_entry = self.get("payment_entry") if self.meta.has_field("payment_entry") else None
+        if payment_entry:
+            payment = frappe.get_doc("Payment Entry", payment_entry)
+            if payment.docstatus == 1:
+                payment.flags.from_shift_cash_movement_cancel = True
+                payment.flags.ignore_permissions = True
+                # The submitted Shift Cash Movement intentionally links back to
+                # this Payment Entry. During the parent-driven cancellation,
+                # bypass only Frappe's generic backlink check so the linked
+                # Payment Entry can be cancelled first. Manual Payment Entry
+                # cancellation remains blocked by the dedicated hook.
+                payment.flags.ignore_links = True
+                payment.cancel()
+            elif payment.docstatus == 0:
+                frappe.delete_doc("Payment Entry", payment.name, ignore_permissions=True)
 
-        journal = frappe.get_doc("Journal Entry", self.journal_entry)
-        if journal.docstatus == 1:
-            journal.flags.ignore_permissions = True
-            journal.cancel()
+        if self.journal_entry:
+            journal = frappe.get_doc("Journal Entry", self.journal_entry)
+            if journal.docstatus == 1:
+                journal.flags.ignore_permissions = True
+                journal.cancel()
 
     def on_cancel(self):
         frappe.db.set_value(
@@ -342,7 +364,9 @@ class ShiftCashMovement(Document):
                     drawer.current_active_shift
                 )
             )
-        if self._shift_is_closed(shift):
+        allow_review = bool(getattr(self.flags, "allow_under_review_shift_posting", False))
+        state = str(shift.get("custom_shift_operational_status") or "").strip()
+        if self._shift_is_closed(shift) and not (allow_review and state == "Under Review" and cint(shift.get("docstatus")) == 0):
             frappe.throw(_("Cash movements cannot be posted to a closed shift."))
 
     @staticmethod
@@ -428,8 +452,6 @@ class ShiftCashMovement(Document):
                 frappe.throw(_("Purchase Invoice belongs to another Supplier."))
             if flt(invoice.outstanding_amount) <= 0:
                 frappe.throw(_("Purchase Invoice has no outstanding amount."))
-            if self.amount > flt(invoice.outstanding_amount) + 0.000001:
-                frappe.throw(_("Payment amount cannot exceed Purchase Invoice outstanding amount."))
 
         if rule.get("requires_employee") and not self.employee:
             frappe.throw(_("Employee is required for Employee Advance."))
@@ -453,23 +475,9 @@ class ShiftCashMovement(Document):
             )
 
     def _validate_source_balance(self, source):
-        if source.root_type != "Asset" or source.account_type not in ("Cash", "Bank"):
+        if self.direction != "Out":
             return
-        balance = flt(
-            get_balance_on(
-                account=source.name,
-                date=get_datetime(self.movement_date or now_datetime()).date(),
-                company=self.company,
-                in_account_currency=True,
-            )
-        )
-        if self.amount > balance + 0.000001:
-            frappe.throw(
-                _("Insufficient balance in {0}. Available balance is {1}.").format(
-                    source.name,
-                    frappe.format_value(balance, {"fieldtype": "Currency", "options": source.account_currency}),
-                )
-            )
+        validate_shift_cash_movement_guard(self)
 
     def _lock_source_account(self):
         if self.source_account:
@@ -477,6 +485,88 @@ class ShiftCashMovement(Document):
                 "select name from `tabAccount` where name=%s for update",
                 (self.source_account,),
             )
+
+    def _ensure_payment_entry(self):
+        if not self.meta.has_field("payment_entry"):
+            frappe.throw(_("Shift Cash Movement payment_entry field is not installed."))
+
+        linked = self.get("payment_entry") or frappe.db.get_value(
+            self.doctype, self.name, "payment_entry"
+        )
+        if linked:
+            status = frappe.db.get_value("Payment Entry", linked, "docstatus")
+            if status == 1:
+                return linked
+            if status == 2:
+                frappe.throw(_("Linked Payment Entry is cancelled."))
+
+        amount = flt(self.amount)
+        pe = frappe.new_doc("Payment Entry")
+        pe.payment_type = "Pay"
+        pe.company = self.company
+        pe.posting_date = get_datetime(self.movement_date or now_datetime()).date()
+        pe.party_type = "Supplier"
+        pe.party = self.supplier
+        pe.mode_of_payment = "Cash"
+        pe.paid_from = self.source_account
+        pe.paid_to = self.target_account
+        pe.paid_amount = amount
+        pe.received_amount = amount
+        pe.source_exchange_rate = 1
+        pe.target_exchange_rate = 1
+        pe.remarks = (
+            f"Shift supplier payment {self.name} / {self.shift_reference} / {self.description}"
+        )
+        if pe.meta.has_field("custom_pharmacy_shift"):
+            pe.custom_pharmacy_shift = self.shift_reference
+        if pe.meta.has_field("custom_shift_cash_movement"):
+            pe.custom_shift_cash_movement = self.name
+
+        company_currency = frappe.get_cached_value("Company", self.company, "default_currency")
+        pe.paid_from_account_currency = (
+            frappe.get_cached_value("Account", self.source_account, "account_currency")
+            or company_currency
+        )
+        pe.paid_to_account_currency = (
+            frappe.get_cached_value("Account", self.target_account, "account_currency")
+            or company_currency
+        )
+
+        if self.purchase_invoice:
+            invoice = frappe.db.get_value(
+                "Purchase Invoice",
+                self.purchase_invoice,
+                ["grand_total", "rounded_total", "outstanding_amount"],
+                as_dict=True,
+            ) or {}
+            outstanding = flt(invoice.get("outstanding_amount"))
+            allocated = min(amount, max(outstanding, 0))
+            if allocated > 0:
+                total = flt(invoice.get("rounded_total")) or flt(invoice.get("grand_total"))
+                pe.append(
+                    "references",
+                    {
+                        "reference_doctype": "Purchase Invoice",
+                        "reference_name": self.purchase_invoice,
+                        "total_amount": total,
+                        "outstanding_amount": outstanding,
+                        "allocated_amount": allocated,
+                    },
+                )
+
+        try:
+            pe.set_missing_values()
+        except Exception:
+            pass
+        try:
+            pe.set_amounts()
+        except Exception:
+            pass
+        pe.flags.ignore_permissions = True
+        pe.insert(ignore_permissions=True)
+        pe.flags.ignore_permissions = True
+        pe.submit()
+        return pe.name
 
     def _ensure_journal_entry(self):
         linked = self.journal_entry or frappe.db.get_value(
@@ -524,8 +614,14 @@ class ShiftCashMovement(Document):
 
         journal.append("accounts", debit_row)
         journal.append("accounts", credit_row)
+        if journal.meta.has_field("custom_pharmacy_shift"):
+            journal.custom_pharmacy_shift = self.shift_reference
+        if getattr(self.flags, "allow_under_review_shift_posting", False):
+            journal.flags.allow_under_review_shift_posting = True
         journal.flags.ignore_permissions = True
         journal.insert(ignore_permissions=True)
+        if getattr(self.flags, "allow_under_review_shift_posting", False):
+            journal.flags.allow_under_review_shift_posting = True
         journal.flags.ignore_permissions = True
         journal.submit()
         return journal.name

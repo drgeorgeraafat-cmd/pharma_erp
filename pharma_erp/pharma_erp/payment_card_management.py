@@ -1,3 +1,5 @@
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_datetime, now_datetime, nowdate
@@ -1383,6 +1385,479 @@ def _payment_summary(shift):
     )
 
 
+
+def _cashflow_row(
+    category,
+    direction,
+    amount,
+    doctype,
+    name,
+    party="",
+    user="",
+    timestamp=None,
+    note="",
+    *,
+    open_doctype=None,
+    open_name=None,
+    can_cancel=False,
+    cancel_doctype=None,
+    cancel_name=None,
+):
+    return {
+        "category": category,
+        "direction": direction,
+        "amount": _money(amount),
+        "voucher_type": doctype,
+        "voucher_no": name,
+        "party": party or "",
+        "user": user or "",
+        "time": timestamp,
+        "note": note or "",
+        "open_doctype": open_doctype or doctype,
+        "open_name": open_name or name,
+        "can_cancel": bool(can_cancel),
+        "cancel_doctype": cancel_doctype or "",
+        "cancel_name": cancel_name or "",
+    }
+
+
+def _shift_gl_control(shift, account):
+    start_time, end_time = _shift_window(shift)
+    opening = frappe.db.sql(
+        """
+        select coalesce(sum(debit-credit), 0)
+        from `tabGL Entry`
+        where company=%s and account=%s and is_cancelled=0 and creation < %s
+        """,
+        (shift.company, account, start_time),
+    )[0][0]
+    movement = frappe.db.sql(
+        """
+        select coalesce(sum(debit), 0), coalesce(sum(credit), 0),
+               coalesce(sum(debit-credit), 0)
+        from `tabGL Entry`
+        where company=%s and account=%s and is_cancelled=0
+          and creation >= %s and creation <= %s
+        """,
+        (shift.company, account, start_time, end_time),
+    )[0]
+    closing = _money(opening + movement[2])
+    return {
+        "opening_balance": _money(opening),
+        "cash_in": _money(movement[0]),
+        "cash_out": _money(movement[1]),
+        "net_movement": _money(movement[2]),
+        "closing_balance": closing,
+    }
+
+
+def _full_cashflow_report(shift):
+    """Explain every cash inflow/outflow for the selected shift.
+
+    Sales are reported independently. Expected cash is then built from cash
+    sales plus non-sales receipts minus all cash payments. Payment Entries that
+    settle Sales Invoices are excluded from non-sales categories to prevent
+    double counting.
+    """
+    account = shift.get("cash_account") or CASH_ACCOUNT
+    start_time, end_time = _shift_window(shift)
+    sales_rows = _payment_rows(shift)
+
+    sales = {
+        "cash": 0.0,
+        "card": 0.0,
+        "instapay": 0.0,
+        "wallet": 0.0,
+        "prepaid": 0.0,
+        "returns": 0.0,
+        "net_sales": 0.0,
+    }
+    details = []
+    cash_refunds_from_sales = 0.0
+    for row in sales_rows:
+        amount = _money(row.amount)
+        mode = str(row.mode_of_payment or "").strip().lower()
+        sales["net_sales"] += amount
+        if amount < 0:
+            sales["returns"] += abs(amount)
+        if mode == "cash":
+            if amount >= 0:
+                sales["cash"] += amount
+            else:
+                cash_refunds_from_sales += abs(amount)
+        elif mode in ("credit card", "card"):
+            sales["card"] += amount
+        elif mode in ("insta pay", "instapay"):
+            sales["instapay"] += amount
+        elif mode in ("wallet", "mobile wallet"):
+            sales["wallet"] += amount
+        details.append(
+            _cashflow_row(
+                "Cash Sale" if mode == "cash" and amount >= 0 else "Sales / Returns",
+                "In" if amount >= 0 else "Out",
+                abs(amount),
+                row.payment_source_type,
+                row.payment_source_name,
+                row.customer_name or row.customer,
+                "",
+                row.transaction_time,
+                row.mode_of_payment,
+                open_doctype=(
+                    "Payment Entry"
+                    if row.payment_source_type == "Payment Entry"
+                    else "Sales Invoice"
+                ),
+                open_name=(
+                    row.payment_source_name
+                    if row.payment_source_type == "Payment Entry"
+                    else row.sales_invoice
+                ),
+            )
+        )
+
+    if _has_field("Sales Invoice", "custom_prepaid_amount"):
+        prepaid = frappe.db.sql(
+            f"""
+            select coalesce(sum(custom_prepaid_amount), 0)
+            from `tabSales Invoice`
+            where docstatus=1
+              and coalesce({SHIFT_LINK_FIELD}, '')=%s
+            """,
+            (shift.name,),
+        )[0][0]
+        sales["prepaid"] = _money(prepaid)
+
+    receipts = {
+        "opening_float": 0.0,
+        "main_safe_refill": 0.0,
+        "supplier_receipts": 0.0,
+        "driver_cash_deposits": 0.0,
+        "other_cash_receipts": 0.0,
+    }
+    payments = {
+        "supplier_payments": 0.0,
+        "operating_expenses": 0.0,
+        "employee_advances": 0.0,
+        "transfers_to_main_safe": 0.0,
+        "customer_cash_refunds": _money(cash_refunds_from_sales),
+        "other_cash_payments": 0.0,
+    }
+
+    movement_fields = [
+        "name", "movement_type", "direction", "amount", "source_account",
+        "target_account", "supplier", "employee", "creation", "owner", "description",
+        "journal_entry",
+    ]
+    if _has_field("Shift Cash Movement", "payment_entry"):
+        movement_fields.append("payment_entry")
+    movements = frappe.get_all(
+        "Shift Cash Movement",
+        filters={"shift_reference": shift.name, "docstatus": 1},
+        fields=movement_fields,
+        order_by="movement_date asc, creation asc",
+        limit_page_length=5000,
+    )
+    linked_payment_entries = set()
+    linked_journal_entries = set()
+    movement_category = {
+        "Opening Float": ("receipts", "opening_float", "Opening Float"),
+        "Till Refill": ("receipts", "main_safe_refill", "Main Safe / Till Refill"),
+        "Under Review Driver Cash Deposit": ("receipts", "driver_cash_deposits", "Driver Cash Deposit"),
+        "Other Cash Receipt": ("receipts", "other_cash_receipts", "Other Cash Receipt"),
+        "Supplier Payment": ("payments", "supplier_payments", "Supplier Payment"),
+        "Operating Expense": ("payments", "operating_expenses", "Operating Expense"),
+        "Employee Advance": ("payments", "employee_advances", "Employee Advance"),
+        "Transfer to Main Safe": ("payments", "transfers_to_main_safe", "Transfer to Main Safe"),
+        "Return Opening Float": ("payments", "transfers_to_main_safe", "Return Opening Float"),
+        "Cash Sales Deposit": ("payments", "transfers_to_main_safe", "Cash Sales Deposit"),
+        "Unused Till Refill Return": ("payments", "transfers_to_main_safe", "Unused Till Refill Return"),
+        "Other Cash Return": ("payments", "other_cash_payments", "Other Cash Return"),
+        "Customer Cash Refund": ("payments", "customer_cash_refunds", "Customer Cash Refund"),
+        "Other Cash Payment": ("payments", "other_cash_payments", "Other Cash Payment"),
+    }
+    closing_names = {
+        shift.get("closing_cash_movement"),
+        shift.get("opening_float_return_movement"),
+        shift.get("cash_sales_deposit_movement"),
+        shift.get("till_refill_return_movement"),
+        shift.get("other_cash_return_movement"),
+    }
+    for row in movements:
+        if row.name in closing_names or row.movement_type in {
+            "Return Opening Float",
+            "Cash Sales Deposit",
+            "Unused Till Refill Return",
+            "Other Cash Return",
+            "Approved Shift Cash Deposit",
+        }:
+            continue
+        if row.get("payment_entry"):
+            linked_payment_entries.add(row.payment_entry)
+        if row.get("journal_entry"):
+            linked_journal_entries.add(row.journal_entry)
+        target = movement_category.get(row.movement_type)
+        if not target:
+            target = (
+                "receipts" if row.direction == "In" else "payments",
+                "other_cash_receipts" if row.direction == "In" else "other_cash_payments",
+                row.movement_type or "Other Cash Movement",
+            )
+        bucket = receipts if target[0] == "receipts" else payments
+        bucket[target[1]] = _money(bucket[target[1]] + row.amount)
+        details.append(
+            _cashflow_row(
+                target[2], row.direction, row.amount, "Shift Cash Movement", row.name,
+                row.supplier or row.employee or "", row.owner, row.creation, row.description,
+                can_cancel=(row.movement_type != "Opening Float"),
+                cancel_doctype="Shift Cash Movement",
+                cancel_name=row.name,
+            )
+        )
+
+    # Employee Cash Advance has its own official document and Journal Entry.
+    advances = frappe.get_all(
+        "Employee Cash Advance",
+        filters={"shift_reference": shift.name, "docstatus": 1},
+        fields=["name", "employee", "advance_amount", "creation", "owner", "purpose", "journal_entry"],
+        limit_page_length=5000,
+    )
+    for row in advances:
+        if row.get("journal_entry"):
+            linked_journal_entries.add(row.journal_entry)
+        payments["employee_advances"] = _money(payments["employee_advances"] + row.advance_amount)
+        details.append(
+            _cashflow_row(
+                "Employee Advance",
+                "Out",
+                row.advance_amount,
+                "Employee Cash Advance",
+                row.name,
+                row.employee,
+                row.owner,
+                row.creation,
+                row.purpose,
+                can_cancel=True,
+                cancel_doctype="Employee Cash Advance",
+                cancel_name=row.name,
+            )
+        )
+
+    handovers = frappe.get_all(
+        "Delivery Handover",
+        filters={"shift_reference": shift.name, "handover_method": "Cash", "docstatus": 1},
+        fields=["name", "delivery_boy", "amount", "creation", "owner", "notes", "journal_entry"],
+        limit_page_length=5000,
+    )
+    for row in handovers:
+        if row.get("journal_entry"):
+            linked_journal_entries.add(row.journal_entry)
+        receipts["driver_cash_deposits"] = _money(receipts["driver_cash_deposits"] + row.amount)
+        details.append(
+            _cashflow_row(
+                "Driver Cash Deposit",
+                "In",
+                row.amount,
+                "Delivery Handover",
+                row.name,
+                row.delivery_boy,
+                row.owner,
+                row.creation,
+                row.notes,
+                can_cancel=True,
+                cancel_doctype="Delivery Handover",
+                cancel_name=row.name,
+            )
+        )
+
+    pe_shift_terms = []
+    for fieldname in (SHIFT_LINK_FIELD, COLLECTION_SHIFT_FIELD, "custom_sales_shift", "custom_delivery_shift"):
+        if _has_field("Payment Entry", fieldname):
+            pe_shift_terms.append(f"coalesce(pe.{fieldname}, '')=%(shift)s")
+    pe_shift_clause = " or ".join(pe_shift_terms) or "0=1"
+    pe_rows = frappe.db.sql(
+        f"""
+        select pe.name, pe.payment_type, pe.party_type, pe.party, pe.paid_from, pe.paid_to,
+               pe.paid_amount, pe.received_amount, pe.creation, pe.owner, pe.remarks
+        from `tabPayment Entry` pe
+        where pe.docstatus=1
+          and ({pe_shift_clause})
+          and (pe.paid_from=%(account)s or pe.paid_to=%(account)s)
+          and pe.creation >= %(start)s and pe.creation <= %(end)s
+        order by pe.creation, pe.name
+        """,
+        {"shift": shift.name, "account": account, "start": start_time, "end": end_time},
+        as_dict=True,
+    )
+    for pe in pe_rows:
+        if pe.name in linked_payment_entries:
+            continue
+        has_sales_reference = frappe.db.exists(
+            "Payment Entry Reference",
+            {"parent": pe.name, "reference_doctype": "Sales Invoice"},
+        )
+        if has_sales_reference:
+            continue
+        incoming = pe.paid_to == account
+        amount = _money(pe.received_amount if incoming else pe.paid_amount)
+        if amount <= TOLERANCE:
+            continue
+        if incoming and pe.party_type == "Supplier":
+            bucket, key, label = receipts, "supplier_receipts", "Supplier Receipt"
+        elif not incoming and pe.party_type == "Supplier":
+            bucket, key, label = payments, "supplier_payments", "Supplier Payment"
+        elif not incoming and pe.party_type == "Customer":
+            bucket, key, label = payments, "customer_cash_refunds", "Customer Cash Refund"
+        elif not incoming and pe.party_type == "Employee":
+            bucket, key, label = payments, "employee_advances", "Employee Advance"
+        elif pe.payment_type == "Internal Transfer" and incoming:
+            bucket, key, label = receipts, "main_safe_refill", "Main Safe / Till Refill"
+        elif pe.payment_type == "Internal Transfer" and not incoming:
+            bucket, key, label = payments, "transfers_to_main_safe", "Transfer to Main Safe"
+        elif incoming:
+            bucket, key, label = receipts, "other_cash_receipts", "Other Cash Receipt"
+        else:
+            bucket, key, label = payments, "other_cash_payments", "Other Cash Payment"
+        bucket[key] = _money(bucket[key] + amount)
+        details.append(
+            _cashflow_row(
+                label,
+                "In" if incoming else "Out",
+                amount,
+                "Payment Entry",
+                pe.name,
+                pe.party,
+                pe.owner,
+                pe.creation,
+                pe.remarks,
+                can_cancel=True,
+                cancel_doctype="Payment Entry",
+                cancel_name=pe.name,
+            )
+        )
+
+    # Direct Journal Entries are allowed only through the central guard and
+    # canonical shift link. Count their net till effect unless an operational
+    # Shift Cash Movement or Employee Cash Advance already explains the entry.
+    if _has_field("Journal Entry", SHIFT_LINK_FIELD):
+        journal_rows = frappe.db.sql(
+            f"""
+            select je.name, je.creation, je.owner, je.user_remark,
+                   coalesce(sum(gle.debit - gle.credit), 0) as net_effect
+            from `tabJournal Entry` je
+            inner join `tabGL Entry` gle
+                on gle.voucher_type='Journal Entry'
+               and gle.voucher_no=je.name
+               and gle.company=je.company
+            where je.docstatus=1
+              and coalesce(je.{SHIFT_LINK_FIELD}, '')=%(shift)s
+              and gle.account=%(account)s
+              and gle.is_cancelled=0
+              and gle.creation >= %(start)s and gle.creation <= %(end)s
+            group by je.name, je.creation, je.owner, je.user_remark
+            order by je.creation, je.name
+            """,
+            {"shift": shift.name, "account": account, "start": start_time, "end": end_time},
+            as_dict=True,
+        )
+        for journal in journal_rows:
+            if journal.name in linked_journal_entries:
+                continue
+            net_effect = _money(journal.net_effect)
+            if abs(net_effect) <= TOLERANCE:
+                continue
+            incoming = net_effect > 0
+            amount = abs(net_effect)
+            bucket = receipts if incoming else payments
+            key = "other_cash_receipts" if incoming else "other_cash_payments"
+            label = "Other Cash Receipt" if incoming else "Other Cash Payment"
+            bucket[key] = _money(bucket[key] + amount)
+            details.append(
+                _cashflow_row(
+                    label,
+                    "In" if incoming else "Out",
+                    amount,
+                    "Journal Entry",
+                    journal.name,
+                    "",
+                    journal.owner,
+                    journal.creation,
+                    journal.user_remark,
+                    can_cancel=True,
+                    cancel_doctype="Journal Entry",
+                    cancel_name=journal.name,
+                )
+            )
+
+    sales = {key: _money(value) for key, value in sales.items()}
+    receipts = {key: _money(value) for key, value in receipts.items()}
+    payments = {key: _money(value) for key, value in payments.items()}
+    non_sales_receipts = _money(sum(receipts.values()))
+    total_payments = _money(sum(payments.values()))
+    expected_cash = _money(sales["cash"] + non_sales_receipts - total_payments)
+    gl = _shift_gl_control(shift, account)
+    return {
+        "account": account,
+        "sales": sales,
+        "receipts": receipts,
+        "payments": payments,
+        "non_sales_receipts": non_sales_receipts,
+        "total_payments": total_payments,
+        "expected_cash": expected_cash,
+        "gl": gl,
+        "control_difference": _money(expected_cash - gl["closing_balance"]),
+        "details": sorted(details, key=lambda row: (str(row.get("time") or ""), row.get("voucher_no") or "")),
+    }
+
+
+def _orphan_till_gl_rows(shift):
+    account = shift.get("cash_account") or CASH_ACCOUNT
+    start_time, end_time = _shift_window(shift)
+    rows = frappe.db.sql(
+        """
+        select name, posting_date, creation, voucher_type, voucher_no, debit, credit
+        from `tabGL Entry`
+        where company=%s and account=%s and is_cancelled=0
+          and creation >= %s and creation <= %s
+        order by creation, name
+        """,
+        (shift.company, account, start_time, end_time),
+        as_dict=True,
+    )
+    orphan = []
+    for row in rows:
+        linked = ""
+        if row.voucher_type == "Payment Entry" and frappe.db.exists("Payment Entry", row.voucher_no):
+            fields = [field for field in (SHIFT_LINK_FIELD, COLLECTION_SHIFT_FIELD, "custom_sales_shift", "custom_delivery_shift") if _has_field("Payment Entry", field)]
+            values = frappe.db.get_value("Payment Entry", row.voucher_no, fields, as_dict=True) or {}
+            linked = values.get(SHIFT_LINK_FIELD) or values.get(COLLECTION_SHIFT_FIELD) or values.get("custom_sales_shift") or values.get("custom_delivery_shift") or ""
+        elif row.voucher_type == "Sales Invoice" and frappe.db.exists("Sales Invoice", row.voucher_no):
+            linked = frappe.db.get_value("Sales Invoice", row.voucher_no, SHIFT_LINK_FIELD) or ""
+        elif row.voucher_type == "Journal Entry" and frappe.db.exists("Journal Entry", row.voucher_no):
+            if _has_field("Journal Entry", SHIFT_LINK_FIELD):
+                linked = frappe.db.get_value("Journal Entry", row.voucher_no, SHIFT_LINK_FIELD) or ""
+            if not linked:
+                linked = frappe.db.get_value("Shift Cash Movement", {"journal_entry": row.voucher_no, "docstatus": ["!=", 2]}, "shift_reference") or ""
+            if not linked:
+                linked = frappe.db.get_value("Employee Cash Advance", {"journal_entry": row.voucher_no, "docstatus": ["!=", 2]}, "shift_reference") or ""
+        if linked != shift.name:
+            row["detected_shift"] = linked
+            orphan.append(row)
+    return orphan
+
+
+def _shift_warnings(shift):
+    if _shift_operational_state(shift) != ACTIVE_SHIFT:
+        return []
+    hours = max(0, (now_datetime() - get_datetime(shift.start_time or shift.creation)).total_seconds() / 3600)
+    if hours <= 16:
+        return []
+    return [{
+        "code": "LONG_OPEN_SHIFT",
+        "message": _("Shift {0} has remained open for {1:.1f} hours. Review and freeze/close it immediately.").format(shift.name, hours),
+        "open_hours": flt(hours, 2),
+    }]
+
+
 def _terminal_summary(shift):
     terminals = frappe.get_all(
         "Card POS Terminal",
@@ -2520,6 +2995,14 @@ def _blockers(shift, terminals, include_electronic=True):
             }
         )
 
+    orphan_rows = _orphan_till_gl_rows(shift)
+    if orphan_rows:
+        blockers.append({
+            "code": "ORPHAN_TILL_GL",
+            "message": _("There are Cash Drawer GL Entries inside the shift window that are not linked to this shift."),
+            "rows": orphan_rows,
+        })
+
     for doctype, code, message in [
         ("Shift Cash Movement", "DRAFT_CASH_MOVEMENT", _("توجد حركات نقدية ما زالت Draft.")),
         ("Employee Cash Advance", "DRAFT_ADVANCE", _("توجد سلف موظفين ما زالت Draft.")),
@@ -2638,6 +3121,13 @@ def get_dashboard(shift_name=None):
             "review_difference": _money(shift.get("custom_review_difference")),
             "review_cash_reference": shift.get("custom_review_cash_reference") or "",
             "review_notes": shift.get("custom_review_notes") or "",
+            "review_gl_balance": _money(shift.get("custom_review_gl_balance")),
+            "review_snapshot_frozen": bool(shift.get("custom_review_cashflow_snapshot")),
+            "can_cancel_review": bool(
+                state == UNDER_REVIEW_SHIFT
+                and not shift.get("custom_rollover_new_shift")
+                and not shift.get("custom_final_posted_at")
+            ),
             "cash_difference_resolution": shift.get("custom_cash_difference_resolution") or "",
             "cash_difference_employee": shift.get("custom_cash_difference_employee") or "",
             "cash_difference_account": shift.get("custom_cash_difference_account") or "",
@@ -2648,6 +3138,8 @@ def get_dashboard(shift_name=None):
             "remaining_cash_due": rollover["remaining_cash_due"],
         },
         "cash": _cash_ledger(shift),
+        "cashflow": _full_cashflow_report(shift),
+        "warnings": _shift_warnings(shift),
         "payment_summary": _payment_summary(shift),
         "delivery_drivers": _delivery_driver_summaries(shift),
         "terminals": terminals,
@@ -2844,12 +3336,12 @@ def _create_shift_cash_movement(
     if _has_field("Shift Cash Movement", "purchase_invoice"):
         doc.purchase_invoice = purchase_invoice
 
+    if movement_type in FINAL_CASH_MOVEMENT_TYPES and _shift_operational_state(shift) == UNDER_REVIEW_SHIFT:
+        doc.flags.allow_under_review_shift_posting = True
     doc.flags.ignore_permissions = True
     doc.insert(ignore_permissions=True)
     doc.flags.ignore_permissions = True
     doc.submit()
-
-    _ensure_cash_movement_journal(doc)
 
     return {
         "doctype": doc.doctype,
@@ -2858,6 +3350,11 @@ def _create_shift_cash_movement(
             doc.doctype,
             doc.name,
             "journal_entry",
+        ),
+        "payment_entry": (
+            frappe.db.get_value(doc.doctype, doc.name, "payment_entry")
+            if _has_field("Shift Cash Movement", "payment_entry")
+            else ""
         ),
     }
 
@@ -2930,6 +3427,8 @@ def _ensure_cash_movement_journal(doc):
 
     journal.append("accounts", debit_row)
     journal.append("accounts", credit_row)
+    if journal.meta.has_field("custom_pharmacy_shift"):
+        journal.custom_pharmacy_shift = doc.shift_reference
     journal.flags.ignore_permissions = True
     journal.insert(ignore_permissions=True)
     journal.flags.ignore_permissions = True
@@ -3521,6 +4020,7 @@ def create_cash_action(
     expense_account=None,
     supplier=None,
     purchase_invoice=None,
+    target_account=None,
 ):
     """Create and submit a cash-in, expense, supplier payment, or advance."""
     frappe.only_for("System Manager")
@@ -3587,6 +4087,30 @@ def create_cash_action(
             source_account=cash_account,
             target_account=expense_account,
             expense_account=expense_account,
+        )
+
+    elif action_type == "Transfer to Main Safe":
+        result = _create_shift_cash_movement(
+            shift=shift,
+            movement_type="Transfer to Main Safe",
+            direction="Out",
+            amount=amount,
+            description=description or "Transfer to Main Safe",
+            source_account=cash_account,
+            target_account=target_account or MAIN_SAFE_ACCOUNT,
+        )
+
+    elif action_type == "Other Cash Payment":
+        if not target_account:
+            frappe.throw(_("Target Account is required."))
+        result = _create_shift_cash_movement(
+            shift=shift,
+            movement_type="Other Cash Payment",
+            direction="Out",
+            amount=amount,
+            description=description or "Other Cash Payment",
+            source_account=cash_account,
+            target_account=target_account,
         )
 
     elif action_type == "Supplier Payment":
@@ -3741,23 +4265,8 @@ def create_shift(opening_balance=0, company=None, cash_drawer=None):
     }
 
 
-@frappe.whitelist()
-def rollover_shift(
-    shift_name,
-    new_opening_balance=0,
-    transfer_invoices=None,
-    transfer_reason=None,
-    counted_cash=None,
-    review_notes=None,
-    cash_reference=None,
-    secured_cash=None,
-):
-    """Freeze old shift, open a new shift, and optionally move unassigned
-    delivery orders to the new Delivery Shift. Sales Shift never changes.
-    """
-    frappe.only_for("System Manager")
-    shift = _get_shift(shift_name, require_active=True)
 
+def _review_draft_documents(shift):
     draft_documents = []
     for doctype in ("Shift Cash Movement", "Employee Cash Advance"):
         names = frappe.get_all(
@@ -3777,6 +4286,28 @@ def rollover_shift(
         )
         draft_documents.extend(["Sales Invoice: " + name for name in draft_invoices])
 
+    if _has_field("Payment Entry", SHIFT_LINK_FIELD):
+        draft_payments = frappe.get_all(
+            "Payment Entry",
+            filters={SHIFT_LINK_FIELD: shift.name, "docstatus": 0},
+            pluck="name",
+            limit_page_length=1000,
+        )
+        draft_documents.extend(["Payment Entry: " + name for name in draft_payments])
+
+    if _has_field("Journal Entry", SHIFT_LINK_FIELD):
+        draft_journals = frappe.get_all(
+            "Journal Entry",
+            filters={SHIFT_LINK_FIELD: shift.name, "docstatus": 0},
+            pluck="name",
+            limit_page_length=1000,
+        )
+        draft_documents.extend(["Journal Entry: " + name for name in draft_journals])
+    return draft_documents
+
+
+def _validate_review_freeze_ready(shift):
+    draft_documents = _review_draft_documents(shift)
     if draft_documents:
         frappe.throw(
             _("Resolve or cancel the following draft documents before moving the shift to review: {0}").format(
@@ -3784,16 +4315,288 @@ def rollover_shift(
             )
         )
 
-    cash = _cash_ledger(shift)
-    expected_cash = _money(cash["expected_cash"])
+    orphan_rows = _orphan_till_gl_rows(shift)
+    if orphan_rows:
+        frappe.throw(
+            _("Resolve orphan Cash Drawer GL Entries before freezing the shift: {0}").format(
+                ", ".join(row.voucher_no for row in orphan_rows)
+            )
+        )
+
+
+@frappe.whitelist()
+def begin_shift_review(
+    shift_name,
+    counted_cash,
+    cash_reference=None,
+    review_notes=None,
+):
+    """Freeze one shift for review without opening another shift or posting GL."""
+    frappe.only_for("System Manager")
+    shift = _get_shift(shift_name, require_active=True)
+    _validate_review_freeze_ready(shift)
+
+    cashflow = _full_cashflow_report(shift)
+    if abs(_money(cashflow.get("control_difference"))) > TOLERANCE:
+        frappe.throw(_("Expected Cash does not match the Cash Drawer GL balance."))
+
+    expected_cash = _money(cashflow["expected_cash"])
+    counted_cash = _money(counted_cash)
+    if counted_cash < -TOLERANCE:
+        frappe.throw(_("Actual cash cannot be negative."))
+    difference = _money(counted_cash - expected_cash)
+    cutoff = now_datetime()
+
+    shift.reload()
+    shift.end_time = cutoff
+    shift.actual_cash = counted_cash
+    shift.expected_cash = expected_cash
+    shift.difference = difference
+    shift.total_cash_sales = _money(cashflow["sales"]["cash"])
+    shift.total_expenses = _money(cashflow["total_payments"])
+    shift.cash_additions = _money(cashflow["non_sales_receipts"])
+    if _has_field("Pharmacy Shift Closing", SHIFT_STATE_FIELD):
+        shift.set(SHIFT_STATE_FIELD, UNDER_REVIEW_SHIFT)
+    if _has_field("Pharmacy Shift Closing", SHIFT_CUTOFF_FIELD):
+        shift.set(SHIFT_CUTOFF_FIELD, cutoff)
+
+    values = {
+        "custom_review_started_at": cutoff,
+        "custom_review_started_by": frappe.session.user,
+        "custom_review_expected_cash": expected_cash,
+        "custom_review_actual_cash": counted_cash,
+        "custom_review_difference": difference,
+        "custom_review_notes": str(review_notes or "").strip(),
+        "custom_review_cash_reference": str(cash_reference or "").strip(),
+        "custom_review_cashflow_snapshot": json.dumps(
+            cashflow, ensure_ascii=False, default=str
+        ),
+        "custom_review_gl_balance": _money(cashflow["gl"]["closing_balance"]),
+    }
+    for fieldname, value in values.items():
+        if _has_field("Pharmacy Shift Closing", fieldname):
+            shift.set(fieldname, value)
+
+    shift.flags.ignore_permissions = True
+    shift.save(ignore_permissions=True)
+    shift.add_comment(
+        "Comment",
+        _("Cashflow review snapshot frozen by {0}. Expected: {1}; counted: {2}; difference: {3}.").format(
+            frappe.session.user,
+            expected_cash,
+            counted_cash,
+            difference,
+        ),
+    )
+    frappe.db.commit()
+    return {
+        "name": shift.name,
+        "operational_status": UNDER_REVIEW_SHIFT,
+        "expected_cash": expected_cash,
+        "gl_balance": _money(cashflow["gl"]["closing_balance"]),
+        "actual_cash": counted_cash,
+        "difference": difference,
+        "cash_reference": str(cash_reference or "").strip(),
+        "snapshot_frozen": True,
+        "new_shift": "",
+    }
+
+
+@frappe.whitelist()
+def cancel_shift_review(shift_name, reason):
+    """Discard a review-only snapshot and reopen the same shift safely."""
+    frappe.only_for("System Manager")
+    shift = _get_shift(shift_name)
+    if _shift_operational_state(shift) != UNDER_REVIEW_SHIFT:
+        frappe.throw(_("This shift is not under review."))
+
+    reason = str(reason or "").strip()
+    if not reason:
+        frappe.throw(_("Enter a reason for cancelling the shift review."))
+
+    rollover_shift_name = (
+        shift.get("custom_rollover_new_shift")
+        if _has_field("Pharmacy Shift Closing", "custom_rollover_new_shift")
+        else ""
+    )
+    if rollover_shift_name:
+        frappe.throw(
+            _("This review opened a new shift ({0}) and cannot be reopened from this action.").format(
+                rollover_shift_name
+            )
+        )
+
+    active = _current_open_shift(shift.company)
+    if active and active.name != shift.name:
+        frappe.throw(
+            _("Another active shift already exists: {0}.").format(active.name)
+        )
+
+    if shift.get("custom_final_posted_at"):
+        frappe.throw(_("Final accounting entries were already posted for this shift."))
+
+    live = _full_cashflow_report(shift)
+    # The shift window still ends at the frozen cutoff. No cash movement is
+    # allowed while under review, so reopening is safe only when GL still
+    # matches the frozen snapshot.
+    frozen_gl = _money(shift.get("custom_review_gl_balance"))
+    if abs(_money(live["gl"]["closing_balance"]) - frozen_gl) > TOLERANCE:
+        frappe.throw(_("Cash Drawer GL changed after review freeze. Investigate before reopening."))
+
+    shift.end_time = None
+    shift.actual_cash = 0
+    shift.difference = 0
+    if _has_field("Pharmacy Shift Closing", SHIFT_STATE_FIELD):
+        shift.set(SHIFT_STATE_FIELD, ACTIVE_SHIFT)
+    if _has_field("Pharmacy Shift Closing", SHIFT_CUTOFF_FIELD):
+        shift.set(SHIFT_CUTOFF_FIELD, None)
+
+    clear_values = {
+        "custom_review_started_at": None,
+        "custom_review_started_by": None,
+        "custom_review_expected_cash": 0,
+        "custom_review_actual_cash": 0,
+        "custom_review_difference": 0,
+        "custom_review_notes": "",
+        "custom_review_cash_reference": "",
+        "custom_review_cashflow_snapshot": "",
+        "custom_review_gl_balance": 0,
+    }
+    for fieldname, value in clear_values.items():
+        if _has_field("Pharmacy Shift Closing", fieldname):
+            shift.set(fieldname, value)
+
+    shift.flags.ignore_permissions = True
+    shift.save(ignore_permissions=True)
+
+    drawer_name = shift.get(CASH_DRAWER_FIELD) if _has_field("Pharmacy Shift Closing", CASH_DRAWER_FIELD) else ""
+    if drawer_name and frappe.db.exists("Cash Drawer", drawer_name):
+        frappe.db.set_value(
+            "Cash Drawer",
+            drawer_name,
+            {
+                "current_active_shift": shift.name,
+                "current_responsible_user": shift.cashier or shift.owner,
+            },
+            update_modified=False,
+        )
+
+    shift.add_comment(
+        "Comment",
+        _("Shift review cancelled and shift reopened by {0}. Reason: {1}").format(
+            frappe.session.user, reason
+        ),
+    )
+    frappe.db.commit()
+    return {
+        "name": shift.name,
+        "operational_status": ACTIVE_SHIFT,
+        "reopened": True,
+    }
+
+
+@frappe.whitelist()
+def cancel_cashflow_document(shift_name, doctype, name, reason):
+    """Cancel a trusted shift cashflow row while the shift is active."""
+    frappe.only_for("System Manager")
+    shift = _get_shift(shift_name, require_active=True)
+    reason = str(reason or "").strip()
+    if not reason:
+        frappe.throw(_("Enter a cancellation reason."))
+
+    doctype = str(doctype or "").strip()
+    name = str(name or "").strip()
+    supported = {
+        "Shift Cash Movement",
+        "Payment Entry",
+        "Employee Cash Advance",
+        "Delivery Handover",
+        "Journal Entry",
+    }
+    if doctype not in supported or not name:
+        frappe.throw(_("This cashflow row cannot be cancelled from Shift Management."))
+
+    report = _full_cashflow_report(shift)
+    trusted_row = next(
+        (
+            row
+            for row in report.get("details", [])
+            if row.get("can_cancel")
+            and row.get("cancel_doctype") == doctype
+            and row.get("cancel_name") == name
+        ),
+        None,
+    )
+    if not trusted_row:
+        frappe.throw(_("The document is not an active cancellable cashflow row for this shift."))
+
+    doc = frappe.get_doc(doctype, name)
+    if doc.docstatus != 1:
+        frappe.throw(_("Only submitted cashflow documents can be cancelled."))
+
+    if doctype == "Payment Entry" and _has_field("Payment Entry", "custom_shift_cash_movement"):
+        linked_movement = str(doc.get("custom_shift_cash_movement") or "").strip()
+        if linked_movement:
+            frappe.throw(
+                _("Cancel linked Shift Cash Movement {0} instead.").format(linked_movement)
+            )
+
+    doc.add_comment(
+        "Comment",
+        _("Cancelled from Shift Cashflow Review by {0}. Reason: {1}").format(
+            frappe.session.user, reason
+        ),
+    )
+    doc.flags.ignore_permissions = True
+    doc.cancel()
+
+    shift.reload()
+    after = _full_cashflow_report(shift)
+    if abs(_money(after.get("control_difference"))) > TOLERANCE:
+        frappe.throw(
+            _("Cancellation would leave Expected Cash different from the Cash Drawer GL balance.")
+        )
+
+    frappe.db.commit()
+    return {
+        "cancelled_doctype": doctype,
+        "cancelled_name": name,
+        "expected_cash": _money(after["expected_cash"]),
+        "gl_balance": _money(after["gl"]["closing_balance"]),
+        "control_difference": _money(after["control_difference"]),
+    }
+
+
+@frappe.whitelist()
+def rollover_shift(
+    shift_name,
+    new_opening_balance=0,
+    transfer_invoices=None,
+    transfer_reason=None,
+    counted_cash=None,
+    review_notes=None,
+    cash_reference=None,
+    secured_cash=None,
+):
+    """Freeze old shift, open a new shift, and optionally move unassigned
+    delivery orders to the new Delivery Shift. Sales Shift never changes.
+    """
+    frappe.only_for("System Manager")
+    shift = _get_shift(shift_name, require_active=True)
+
+    _validate_review_freeze_ready(shift)
+
+    cashflow = _full_cashflow_report(shift)
+    expected_cash = _money(cashflow["expected_cash"])
     cutoff = now_datetime()
     shift.reload()
     shift.end_time = cutoff
     shift.actual_cash = 0
     shift.expected_cash = expected_cash
     shift.difference = 0
-    shift.total_cash_sales = _money(cash.get("cash_sales"))
-    shift.total_expenses = _money(cash.get("cash_out"))
+    shift.total_cash_sales = _money(cashflow["sales"]["cash"])
+    shift.total_expenses = _money(cashflow["total_payments"])
+    shift.cash_additions = _money(cashflow["non_sales_receipts"])
     if _has_field("Pharmacy Shift Closing", SHIFT_STATE_FIELD):
         shift.set(SHIFT_STATE_FIELD, UNDER_REVIEW_SHIFT)
     if _has_field("Pharmacy Shift Closing", SHIFT_CUTOFF_FIELD):
@@ -3807,6 +4610,8 @@ def rollover_shift(
         "custom_review_difference": None,
         "custom_review_notes": "",
         "custom_review_cash_reference": "",
+        "custom_review_cashflow_snapshot": json.dumps(cashflow, ensure_ascii=False, default=str),
+        "custom_review_gl_balance": _money(cashflow["gl"]["closing_balance"]),
     }
     for fieldname, value in review_values.items():
         if _has_field("Pharmacy Shift Closing", fieldname):
@@ -4051,6 +4856,9 @@ def _ensure_delivery_handover_journal(handover, shift):
         or shift.end_time
         or nowdate()
     )
+    if journal.meta.has_field("custom_pharmacy_shift"):
+        journal.custom_pharmacy_shift = shift.name
+    journal.flags.allow_under_review_shift_posting = True
     journal.user_remark = (
         "Driver cash handover / "
         + handover.name
@@ -4075,6 +4883,7 @@ def _ensure_delivery_handover_journal(handover, shift):
     )
     journal.flags.ignore_permissions = True
     journal.insert(ignore_permissions=True)
+    journal.flags.allow_under_review_shift_posting = True
     journal.flags.ignore_permissions = True
     journal.submit()
 
@@ -4329,8 +5138,12 @@ def _create_cash_difference_journal(
             },
         )
 
+    if journal.meta.has_field("custom_pharmacy_shift"):
+        journal.custom_pharmacy_shift = shift.name
+    journal.flags.allow_under_review_shift_posting = True
     journal.flags.ignore_permissions = True
     journal.insert(ignore_permissions=True)
+    journal.flags.allow_under_review_shift_posting = True
     journal.flags.ignore_permissions = True
     journal.submit()
 
@@ -4353,6 +5166,8 @@ def close_shift(
 
     shift = _get_shift(shift_name)
     shift_state = _shift_operational_state(shift)
+    if shift_state != UNDER_REVIEW_SHIFT:
+        frappe.throw(_("Start Review & Freeze before final shift close."))
     terminals = _terminal_summary(shift)
     auto_finalized_settlements = _finalize_covered_delivery_settlements(shift)
 
@@ -4366,12 +5181,31 @@ def close_shift(
             "<br>".join(row["message"] for row in blockers)
         )
 
-    cash = _cash_ledger(shift)
-
-    # The freeze snapshot is informational only. Final expected cash must
-    # include any driver handovers or approved movements received while
-    # the shift was Under Review.
-    expected_cash = _money(cash["expected_cash"])
+    cashflow = _full_cashflow_report(shift)
+    snapshot = None
+    if _has_field("Pharmacy Shift Closing", "custom_review_cashflow_snapshot"):
+        raw_snapshot = shift.get("custom_review_cashflow_snapshot") or ""
+        if raw_snapshot:
+            try:
+                snapshot = json.loads(raw_snapshot)
+            except Exception:
+                frappe.throw(_("The frozen cashflow snapshot is invalid. Cancel review and freeze the shift again."))
+    if shift_state == UNDER_REVIEW_SHIFT:
+        if not snapshot:
+            frappe.throw(_("A frozen cashflow snapshot is required before final close."))
+        expected_cash = _money(snapshot.get("expected_cash"))
+        cashflow_for_close = snapshot
+        frozen_gl = _money(snapshot.get("gl", {}).get("closing_balance"))
+        live_gl = _money(cashflow.get("gl", {}).get("closing_balance"))
+        if abs(live_gl - frozen_gl) > TOLERANCE:
+            frappe.throw(
+                _("Cash Drawer GL changed after the review snapshot. Cancel review and investigate.")
+            )
+        if abs(_money(cashflow.get("control_difference"))) > TOLERANCE:
+            frappe.throw(_("Live Expected Cash no longer matches the Cash Drawer GL balance."))
+    else:
+        expected_cash = _money(cashflow["expected_cash"])
+        cashflow_for_close = cashflow
 
     if actual_cash in (None, ""):
         frappe.throw(
@@ -4379,6 +5213,15 @@ def close_shift(
         )
 
     counted_cash = _money(actual_cash)
+    frozen_reference = str(shift.get("custom_review_cash_reference") or "").strip()
+    if frozen_reference:
+        frozen_count = _money(shift.get("custom_review_actual_cash"))
+        if abs(counted_cash - frozen_count) > TOLERANCE:
+            frappe.throw(
+                _("The counted cash was frozen at {0}. Cancel review before changing it.").format(
+                    frozen_count
+                )
+            )
     difference = _money(counted_cash - expected_cash)
 
     if counted_cash < -TOLERANCE:
@@ -4402,14 +5245,15 @@ def close_shift(
         else []
     )
 
-    cash_sales_total = _money(cash.get("cash_sales"))
+    cash_sales_total = _money(cashflow_for_close.get("sales", {}).get("cash"))
 
     shift.reload()
     shift.actual_cash = counted_cash
     shift.expected_cash = expected_cash
     shift.difference = difference
     shift.total_cash_sales = cash_sales_total
-    shift.total_expenses = _money(cash.get("cash_out"))
+    shift.total_expenses = _money(cashflow_for_close.get("total_payments"))
+    shift.cash_additions = _money(cashflow_for_close.get("non_sales_receipts"))
     shift.status = "Closed"
 
     if shift_state == UNDER_REVIEW_SHIFT:

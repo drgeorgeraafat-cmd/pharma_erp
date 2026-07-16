@@ -5,6 +5,8 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import cint, flt, now, today
 
+from pharma_erp.shift_cash_integrity import validate_employee_advance_guard
+
 
 DEFAULT_CASH_ACCOUNT = "Cashier Till - C"
 DEFAULT_EMPLOYEE_ADVANCE_ACCOUNT = "Employee Advances - C"
@@ -79,6 +81,8 @@ class EmployeeCashAdvance(Document):
         for account in (self.cash_account, self.employee_advance_account):
             _validate_account(account, self.company)
 
+        validate_employee_advance_guard(self)
+
     def on_submit(self):
         if self.journal_entry:
             existing_status = frappe.db.get_value(
@@ -123,6 +127,8 @@ class EmployeeCashAdvance(Document):
                 "credit_in_account_currency": amount,
             },
         )
+        if journal.meta.has_field("custom_pharmacy_shift"):
+            journal.custom_pharmacy_shift = self.shift_reference
         journal.flags.ignore_permissions = True
         journal.insert(ignore_permissions=True)
         journal.flags.ignore_permissions = True

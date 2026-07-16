@@ -263,11 +263,16 @@ doc_events = {
     },
     "Payment Entry": {
         "validate": [
+            "pharma_erp.shift_cash_integrity.validate_payment_entry_shift",
             "pharma_erp.treasury_access.validate_payment_entry",
             "pharma_erp.treasury_closing.validate_treasury_document_date",
         ],
-        "before_submit": "pharma_erp.treasury_access.before_submit_payment_entry",
+        "before_submit": [
+            "pharma_erp.shift_cash_integrity.before_submit_payment_entry_cash_guard",
+            "pharma_erp.treasury_access.before_submit_payment_entry",
+        ],
         "before_cancel": [
+            "pharma_erp.shift_cash_integrity.before_cancel_payment_entry_link_guard",
             "pharma_erp.treasury_access.before_cancel_payment_entry",
             "pharma_erp.treasury_closing.before_cancel_treasury_document",
             "pharma_erp.pharma_erp.supplier_claim_accounting.validate_supplier_claim_payment_cancel",
@@ -286,7 +291,11 @@ doc_events = {
         "before_cancel": "pharma_erp.treasury_closing.before_cancel_treasury_document",
     },
     "Journal Entry": {
-        "validate": "pharma_erp.treasury_closing.validate_treasury_document_date",
+        "validate": [
+            "pharma_erp.shift_cash_integrity.validate_journal_entry_shift",
+            "pharma_erp.treasury_closing.validate_treasury_document_date",
+        ],
+        "before_submit": "pharma_erp.shift_cash_integrity.before_submit_journal_entry_cash_guard",
         "before_cancel": [
             "pharma_erp.treasury_closing.before_cancel_treasury_document",
             "pharma_erp.pharma_erp.supplier_claim_accounting.validate_supplier_claim_journal_cancel",
