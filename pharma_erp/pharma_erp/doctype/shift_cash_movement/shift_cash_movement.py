@@ -358,15 +358,43 @@ class ShiftCashMovement(Document):
             frappe.throw(_("Shift Reference belongs to another company."))
         if shift.get("custom_cash_drawer") and shift.custom_cash_drawer != self.cash_drawer:
             frappe.throw(_("Shift Reference is linked to another Cash Drawer."))
-        if drawer.get("current_active_shift") and drawer.current_active_shift != self.shift_reference:
+
+        allow_review = bool(
+            getattr(self.flags, "allow_under_review_shift_posting", False)
+        )
+        state = str(
+            shift.get("custom_shift_operational_status") or ""
+        ).strip()
+        allow_rollover_final_posting = bool(
+            allow_review
+            and state == "Under Review"
+            and cint(shift.get("docstatus")) == 0
+            and self.movement_type
+            in {
+                "Transfer to Main Safe",
+                "Return Opening Float",
+                "Cash Sales Deposit",
+                "Unused Till Refill Return",
+                "Other Cash Return",
+            }
+        )
+
+        # A rollover intentionally moves the Cash Drawer link to the newly
+        # opened shift while the old shift remains frozen Under Review. The
+        # old shift still needs its tightly-scoped final cash movements to
+        # post during approval. Never bypass this guard for normal movements.
+        if (
+            drawer.get("current_active_shift")
+            and drawer.current_active_shift != self.shift_reference
+            and not allow_rollover_final_posting
+        ):
             frappe.throw(
                 _("The selected Cash Drawer is currently linked to shift {0}.").format(
                     drawer.current_active_shift
                 )
             )
-        allow_review = bool(getattr(self.flags, "allow_under_review_shift_posting", False))
-        state = str(shift.get("custom_shift_operational_status") or "").strip()
-        if self._shift_is_closed(shift) and not (allow_review and state == "Under Review" and cint(shift.get("docstatus")) == 0):
+
+        if self._shift_is_closed(shift) and not allow_rollover_final_posting:
             frappe.throw(_("Cash movements cannot be posted to a closed shift."))
 
     @staticmethod

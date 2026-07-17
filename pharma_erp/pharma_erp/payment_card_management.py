@@ -2843,8 +2843,14 @@ def _finalize_covered_delivery_settlements(shift):
         finalized.append(doc.name)
     return finalized
 
-def _blockers(shift, terminals, include_electronic=True):
+def _blockers(
+    shift,
+    terminals,
+    include_electronic=True,
+    ignored_delivery_invoices=None,
+):
     blockers = []
+    ignored_delivery_invoices = set(ignored_delivery_invoices or [])
     for terminal in terminals:
         if terminal.unbatched_count:
             blockers.append(
@@ -2924,9 +2930,11 @@ def _blockers(shift, terminals, include_electronic=True):
             }
         )
 
-    active_delivery_orders = (
-        _active_delivery_orders(shift)
-    )
+    active_delivery_orders = [
+        row
+        for row in _active_delivery_orders(shift)
+        if row.name not in ignored_delivery_invoices
+    ]
     if active_delivery_orders:
         blockers.append(
             {
@@ -4324,16 +4332,16 @@ def _validate_review_freeze_ready(shift):
         )
 
 
-@frappe.whitelist()
-def begin_shift_review(
-    shift_name,
+def _freeze_shift_for_review(
+    shift,
     counted_cash,
     cash_reference=None,
     review_notes=None,
 ):
-    """Freeze one shift for review without opening another shift or posting GL."""
-    frappe.only_for("System Manager")
-    shift = _get_shift(shift_name, require_active=True)
+    """Freeze an active shift inside the current database transaction."""
+    if _shift_operational_state(shift) != ACTIVE_SHIFT:
+        frappe.throw(_("Only an active shift can be moved to review."))
+
     _validate_review_freeze_ready(shift)
 
     cashflow = _full_cashflow_report(shift)
@@ -4344,6 +4352,7 @@ def begin_shift_review(
     counted_cash = _money(counted_cash)
     if counted_cash < -TOLERANCE:
         frappe.throw(_("Actual cash cannot be negative."))
+
     difference = _money(counted_cash - expected_cash)
     cutoff = now_datetime()
 
@@ -4388,7 +4397,7 @@ def begin_shift_review(
             difference,
         ),
     )
-    frappe.db.commit()
+
     return {
         "name": shift.name,
         "operational_status": UNDER_REVIEW_SHIFT,
@@ -4400,6 +4409,26 @@ def begin_shift_review(
         "snapshot_frozen": True,
         "new_shift": "",
     }
+
+
+@frappe.whitelist()
+def begin_shift_review(
+    shift_name,
+    counted_cash,
+    cash_reference=None,
+    review_notes=None,
+):
+    """Freeze one shift for exceptional review without posting final GL."""
+    frappe.only_for("System Manager")
+    shift = _get_shift(shift_name, require_active=True)
+    result = _freeze_shift_for_review(
+        shift=shift,
+        counted_cash=counted_cash,
+        cash_reference=cash_reference,
+        review_notes=review_notes,
+    )
+    frappe.db.commit()
+    return result
 
 
 @frappe.whitelist()
@@ -5154,15 +5183,15 @@ def _create_cash_difference_journal(
     }
 
 
-@frappe.whitelist()
-def close_shift(
+def _close_shift_core(
     shift_name,
     actual_cash=None,
     difference_resolution=None,
     responsible_employee=None,
     difference_reason=None,
+    ignored_delivery_invoices=None,
+    commit=True,
 ):
-    frappe.only_for("System Manager")
 
     shift = _get_shift(shift_name)
     shift_state = _shift_operational_state(shift)
@@ -5175,6 +5204,7 @@ def close_shift(
         shift,
         terminals,
         include_electronic=True,
+        ignored_delivery_invoices=ignored_delivery_invoices,
     )
     if blockers:
         frappe.throw(
@@ -5293,7 +5323,28 @@ def close_shift(
     shift.flags.ignore_permissions = True
     shift.submit()
 
-    frappe.db.commit()
+    drawer_name = (
+        shift.get(CASH_DRAWER_FIELD)
+        if _has_field("Pharmacy Shift Closing", CASH_DRAWER_FIELD)
+        else ""
+    )
+    if drawer_name and frappe.db.exists("Cash Drawer", drawer_name):
+        current_active_shift = frappe.db.get_value(
+            "Cash Drawer", drawer_name, "current_active_shift"
+        )
+        if current_active_shift == shift.name:
+            frappe.db.set_value(
+                "Cash Drawer",
+                drawer_name,
+                {
+                    "current_active_shift": "",
+                    "current_responsible_user": "",
+                },
+                update_modified=False,
+            )
+
+    if commit:
+        frappe.db.commit()
 
     return {
         "name": shift.name,
@@ -5305,6 +5356,170 @@ def close_shift(
         "electronic_entries": electronic_entries,
         "delivery_entries": delivery_entries,
         "auto_finalized_delivery_settlements": auto_finalized_settlements,
+    }
+
+
+
+
+@frappe.whitelist()
+def close_shift(
+    shift_name,
+    actual_cash=None,
+    difference_resolution=None,
+    responsible_employee=None,
+    difference_reason=None,
+):
+    """Finalize a shift that is already frozen and under review."""
+    frappe.only_for("System Manager")
+    return _close_shift_core(
+        shift_name=shift_name,
+        actual_cash=actual_cash,
+        difference_resolution=difference_resolution,
+        responsible_employee=responsible_employee,
+        difference_reason=difference_reason,
+        commit=True,
+    )
+
+
+@frappe.whitelist()
+def direct_close_shift(
+    shift_name,
+    actual_cash,
+    cash_reference=None,
+    difference_resolution=None,
+    responsible_employee=None,
+    difference_reason=None,
+):
+    """Freeze, validate, post, and close one active shift in one request."""
+    frappe.only_for("System Manager")
+    shift = _get_shift(shift_name, require_active=True)
+    _freeze_shift_for_review(
+        shift=shift,
+        counted_cash=actual_cash,
+        cash_reference=cash_reference,
+        review_notes=difference_reason,
+    )
+    result = _close_shift_core(
+        shift_name=shift_name,
+        actual_cash=actual_cash,
+        difference_resolution=difference_resolution,
+        responsible_employee=responsible_employee,
+        difference_reason=difference_reason,
+        commit=True,
+    )
+    result["direct_close"] = True
+    return result
+
+
+@frappe.whitelist()
+def close_and_open_shift(
+    shift_name,
+    actual_cash,
+    new_opening_balance=0,
+    cash_reference=None,
+    difference_resolution=None,
+    responsible_employee=None,
+    difference_reason=None,
+    transfer_invoices=None,
+    transfer_reason=None,
+):
+    """Close the current shift and open its successor atomically."""
+    frappe.only_for("System Manager")
+    shift = _get_shift(shift_name, require_active=True)
+    new_opening_balance = _money(new_opening_balance)
+    if new_opening_balance < -TOLERANCE:
+        frappe.throw(_("New shift opening balance cannot be negative."))
+
+    if isinstance(transfer_invoices, str):
+        transfer_invoices = (
+            frappe.parse_json(transfer_invoices)
+            if transfer_invoices
+            else []
+        )
+    transfer_invoices = list(dict.fromkeys(transfer_invoices or []))
+    expanded_transfer_invoices = _expand_add_on_invoices(transfer_invoices)
+    allowed = {row.name for row in _transferable_delivery_orders(shift)}
+    invalid = [name for name in expanded_transfer_invoices if name not in allowed]
+    if invalid:
+        frappe.throw(
+            _("These delivery orders are no longer transferable: {0}").format(
+                ", ".join(invalid)
+            )
+        )
+
+    _freeze_shift_for_review(
+        shift=shift,
+        counted_cash=actual_cash,
+        cash_reference=cash_reference,
+        review_notes=difference_reason,
+    )
+
+    close_result = _close_shift_core(
+        shift_name=shift_name,
+        actual_cash=actual_cash,
+        difference_resolution=difference_resolution,
+        responsible_employee=responsible_employee,
+        difference_reason=difference_reason,
+        ignored_delivery_invoices=expanded_transfer_invoices,
+        commit=False,
+    )
+
+    drawer_name = (
+        shift.get(CASH_DRAWER_FIELD)
+        if _has_field("Pharmacy Shift Closing", CASH_DRAWER_FIELD)
+        else None
+    )
+    new_shift, opening_result = _create_shift_document(
+        opening_balance=new_opening_balance,
+        company=shift.company,
+        cash_drawer=drawer_name,
+    )
+    transfer_result = _transfer_delivery_orders(
+        shift,
+        new_shift,
+        transfer_invoices,
+        transfer_reason,
+    )
+    if transfer_result.get("skipped"):
+        frappe.throw(
+            _("One or more delivery orders changed during processing. No shift was closed or opened.")
+        )
+
+    rollover_values = {}
+    if _has_field("Pharmacy Shift Closing", "custom_rollover_new_shift"):
+        rollover_values["custom_rollover_new_shift"] = new_shift.name
+    if _has_field("Pharmacy Shift Closing", "custom_rollover_new_opening_balance"):
+        rollover_values["custom_rollover_new_opening_balance"] = new_opening_balance
+    if _has_field("Pharmacy Shift Closing", "custom_rollover_net_safe_cash"):
+        rollover_values["custom_rollover_net_safe_cash"] = _money(
+            _money(actual_cash) - new_opening_balance
+        )
+    if rollover_values:
+        frappe.db.set_value(
+            "Pharmacy Shift Closing",
+            shift.name,
+            rollover_values,
+            update_modified=False,
+        )
+
+    frappe.db.commit()
+    return {
+        "closed_shift": close_result.get("name"),
+        "new_shift": new_shift.name,
+        "cash_drawer": new_shift.get(CASH_DRAWER_FIELD) or "",
+        "closed_expected_cash": close_result.get("expected_cash"),
+        "closed_actual_cash": close_result.get("actual_cash"),
+        "closed_difference": close_result.get("difference"),
+        "closing_cash_movements": close_result.get("closing_cash_movements") or [],
+        "new_opening_balance": new_opening_balance,
+        "new_opening_cash_movement": (
+            opening_result.get("name") if opening_result else None
+        ),
+        "new_opening_journal_entry": (
+            opening_result.get("journal_entry") if opening_result else None
+        ),
+        "delivery_transfers": transfer_result,
+        "net_to_main_safe": _money(_money(actual_cash) - new_opening_balance),
     }
 
 

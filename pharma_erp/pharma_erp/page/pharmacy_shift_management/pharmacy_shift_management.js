@@ -135,8 +135,9 @@ class PharmacyShiftManagementV24 {
                     ${this.action("💳", __("تقفيل ماكينة فيزا"), "close-terminal")}
                     ${this.action("🏦", __("تسوية بنك الفيزا"), "bank-settlement")}
                     ${this.action("🛵", __("تسوية عهدة طيار"), "delivery-settlement")}
-                    ${!shift.is_under_review ? this.action("🔒", __("بدء مراجعة وتجميد Snapshot"), "begin-review") : ""}
+                    ${!shift.is_under_review ? this.action("✅", __("تقفيل الوردية"), "direct-close") : ""}
                     ${!shift.is_under_review ? this.action("⏸️", __("تجميد الوردية وفتح وردية جديدة"), "rollover-shift") : ""}
+                    ${!shift.is_under_review ? this.action("⚙️", __("إجراءات متقدمة"), "advanced-actions") : ""}
                     ${shift.is_under_review && shift.can_cancel_review ? this.action("↩️", __("إلغاء المراجعة وإعادة فتح الوردية"), "cancel-review") : ""}
                     ${shift.is_under_review ? this.action("✅", __("اعتماد وترحيل وإغلاق"), "close-shift") : ""}
                 </div>
@@ -1137,6 +1138,15 @@ class PharmacyShiftManagementV24 {
             .on("click.psm24", "[data-action='review-cashflow']", () =>
                 this.showCashflowReview(),
             )
+            .on("click.psm24", "[data-action='direct-close']", () =>
+                this.closeShift(true),
+            )
+            .on("click.psm24", "[data-action='close-and-open']", () =>
+                this.showCloseAndOpenDialog(),
+            )
+            .on("click.psm24", "[data-action='advanced-actions']", () =>
+                this.showAdvancedActionsDialog(),
+            )
             .on("click.psm24", "[data-action='begin-review']", () =>
                 this.showBeginReviewDialog(),
             )
@@ -1320,6 +1330,43 @@ class PharmacyShiftManagementV24 {
         dialog.show();
     }
 
+    showAdvancedActionsDialog() {
+        const dialog = new frappe.ui.Dialog({
+            title: __("إجراءات الوردية المتقدمة"),
+            fields: [
+                {
+                    fieldname: "advanced_notice",
+                    fieldtype: "HTML",
+                    options: `
+                        <div class="alert alert-warning mb-0">
+                            ${__("الزران الأساسيان هما: تقفيل الوردية، أو تجميد الوردية وفتح وردية جديدة لاستمرار البيع.")}
+                            <br>${__("استخدم الإجراءات التالية فقط عند الحاجة إلى مسار مراجعة منفصل أو إغلاق القديمة وفتح الجديدة في عملية واحدة.")}
+                        </div>
+                        <div class="d-flex flex-wrap gap-2 mt-3">
+                            <button class="btn btn-default psm641-freeze-only">
+                                🔒 ${__("بدء مراجعة وتجميد Snapshot فقط")}
+                            </button>
+                            <button class="btn btn-default psm641-close-and-open">
+                                🔄 ${__("تقفيل الوردية وفتح وردية جديدة")}
+                            </button>
+                        </div>
+                    `,
+                },
+            ],
+        });
+        dialog.show();
+        dialog.$wrapper
+            .off(".psm641")
+            .on("click.psm641", ".psm641-freeze-only", () => {
+                dialog.hide();
+                this.showBeginReviewDialog();
+            })
+            .on("click.psm641", ".psm641-close-and-open", () => {
+                dialog.hide();
+                this.showCloseAndOpenDialog();
+            });
+    }
+
     showBeginReviewDialog() {
         const expected = flt(this.data.cashflow?.expected_cash || 0);
         const glBalance = flt(this.data.cashflow?.gl?.closing_balance || 0);
@@ -1475,7 +1522,7 @@ class PharmacyShiftManagementV24 {
         }));
 
         const dialog = new frappe.ui.Dialog({
-            title: __("تجميد الوردية وفتح وردية جديدة"),
+            title: __("تجميد فقط وفتح وردية جديدة — إجراء متقدم"),
             size: "extra-large",
             fields: [
                 {
@@ -1566,7 +1613,7 @@ class PharmacyShiftManagementV24 {
                     depends_on: "eval:(doc.transfer_orders || []).some(row => row.selected)",
                 },
             ],
-            primary_action_label: __("تجميد وفتح وردية جديدة"),
+            primary_action_label: __("تجميد فقط وفتح وردية جديدة"),
             primary_action: async (values) => {
                 const selectedInvoices = (values.transfer_orders || [])
                     .filter((row) => cint(row.selected))
@@ -1582,7 +1629,7 @@ class PharmacyShiftManagementV24 {
                         transfer_reason: values.transfer_reason || "",
                     },
                     freeze: true,
-                    freeze_message: __("جاري تجميد الوردية وفتح الوردية الجديدة وترحيل الأوردرات..."),
+                    freeze_message: __("جاري تجميد الوردية فقط وفتح الوردية الجديدة وترحيل الأوردرات..."),
                 });
 
                 dialog.hide();
@@ -1613,6 +1660,189 @@ class PharmacyShiftManagementV24 {
         if (transferable.length) {
             dialog.get_field("transfer_orders").grid.refresh();
         }
+    }
+
+    async showCloseAndOpenDialog() {
+        const expected = flt(this.data.cashflow?.expected_cash || 0);
+        const transferResponse = await frappe.call({
+            method:
+                "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.get_transferable_delivery_orders",
+            args: {
+                shift_name: this.data.shift.name,
+            },
+            freeze: true,
+            freeze_message: __("جاري فحص الوردية وأوردرات الدليفري القابلة للترحيل..."),
+        });
+        const transferable = transferResponse.message || [];
+        const transferTableData = transferable.map((row) => ({
+            selected: 1,
+            invoice: row.invoice,
+            customer: row.customer,
+            status: row.status || "Draft",
+            amount: flt(row.amount),
+        }));
+
+        const dialog = new frappe.ui.Dialog({
+            title: __("تقفيل الوردية وفتح وردية جديدة"),
+            size: "extra-large",
+            fields: [
+                {
+                    fieldname: "notice",
+                    fieldtype: "HTML",
+                    options: `
+                        <div class="alert alert-info">
+                            ${__("سيتم في عملية واحدة: تجميد Snapshot داخليًا، تقفيل الوردية الحالية نهائيًا، توريد نقديتها، ثم فتح وردية جديدة بعهدة البداية المحددة.")}
+                            <br><strong>${__("إذا فشل أي جزء فلن تُغلق القديمة ولن تُفتح الجديدة.")}</strong>
+                            <br>${__("Sales Shift للفاتورة لا يتغير؛ Delivery Shift فقط للأوردرات المحددة ينتقل إلى الوردية الجديدة.")}
+                        </div>
+                    `,
+                },
+                {
+                    label: __("النقدية المتوقعة الآن"),
+                    fieldname: "expected_cash",
+                    fieldtype: "Currency",
+                    default: expected,
+                    read_only: 1,
+                },
+                {
+                    label: __("النقدية المعدودة والمستلمة"),
+                    fieldname: "actual_cash",
+                    fieldtype: "Currency",
+                    default: expected,
+                    reqd: 1,
+                },
+                {
+                    label: __("فرق النقدية"),
+                    fieldname: "cash_difference",
+                    fieldtype: "Currency",
+                    default: 0,
+                    read_only: 1,
+                },
+                {
+                    label: __("مرجع ظرف / عد النقدية"),
+                    fieldname: "cash_reference",
+                    fieldtype: "Data",
+                },
+                {
+                    label: __("معالجة العجز"),
+                    fieldname: "difference_resolution",
+                    fieldtype: "Select",
+                    options: "Employee Liability\nCompany Expense",
+                    depends_on: "eval:doc.cash_difference < -0.01",
+                    mandatory_depends_on: "eval:doc.cash_difference < -0.01",
+                },
+                {
+                    label: __("الموظف المسؤول عن العجز"),
+                    fieldname: "responsible_employee",
+                    fieldtype: "Link",
+                    options: "Employee",
+                    depends_on: 'eval:doc.cash_difference < -0.01 && doc.difference_resolution=="Employee Liability"',
+                    mandatory_depends_on: 'eval:doc.cash_difference < -0.01 && doc.difference_resolution=="Employee Liability"',
+                },
+                {
+                    label: __("سبب الفرق / ملاحظات التقفيل"),
+                    fieldname: "difference_reason",
+                    fieldtype: "Small Text",
+                    depends_on: "eval:Math.abs(doc.cash_difference) > 0.01",
+                    mandatory_depends_on: "eval:Math.abs(doc.cash_difference) > 0.01",
+                },
+                {
+                    label: __("عهدة بداية الوردية الجديدة"),
+                    fieldname: "new_opening_balance",
+                    fieldtype: "Currency",
+                    default: flt(this.data.shift?.opening_balance || 0),
+                    reqd: 1,
+                },
+                {
+                    label: __("الأوردرات غير المعيّنة القابلة للترحيل"),
+                    fieldname: "transfer_orders",
+                    fieldtype: "Table",
+                    cannot_add_rows: true,
+                    cannot_delete_rows: true,
+                    in_place_edit: true,
+                    data: transferTableData,
+                    fields: [
+                        { label: __("ترحيل"), fieldname: "selected", fieldtype: "Check", in_list_view: 1, columns: 1 },
+                        { label: __("الفاتورة"), fieldname: "invoice", fieldtype: "Data", read_only: 1, in_list_view: 1, columns: 2 },
+                        { label: __("العميل"), fieldname: "customer", fieldtype: "Data", read_only: 1, in_list_view: 1, columns: 3 },
+                        { label: __("الحالة"), fieldname: "status", fieldtype: "Data", read_only: 1, in_list_view: 1, columns: 2 },
+                        { label: __("القيمة"), fieldname: "amount", fieldtype: "Currency", read_only: 1, in_list_view: 1, columns: 2 },
+                    ],
+                    description: transferable.length
+                        ? __("المحدد سيتم ربط Delivery Shift الخاص به بالوردية الجديدة قبل إكمال العملية.")
+                        : __("لا توجد أوردرات غير معيّنة قابلة للترحيل."),
+                },
+                {
+                    label: __("سبب ترحيل أوردرات الدليفري"),
+                    fieldname: "transfer_reason",
+                    fieldtype: "Small Text",
+                    default: __("Direct close and open - unassigned delivery order"),
+                    depends_on: "eval:(doc.transfer_orders || []).some(row => row.selected)",
+                },
+            ],
+            primary_action_label: __("تقفيل وفتح وردية جديدة"),
+            primary_action: async (values) => {
+                const actualCash = flt(values.actual_cash);
+                const finalDifference = actualCash - expected;
+                const selectedInvoices = (values.transfer_orders || [])
+                    .filter((row) => cint(row.selected))
+                    .map((row) => row.invoice);
+
+                const response = await frappe.call({
+                    method:
+                        "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.close_and_open_shift",
+                    args: {
+                        shift_name: this.data.shift.name,
+                        actual_cash: actualCash,
+                        new_opening_balance: values.new_opening_balance,
+                        cash_reference: values.cash_reference || "",
+                        difference_resolution:
+                            finalDifference < -0.01
+                                ? values.difference_resolution
+                                : finalDifference > 0.01
+                                  ? "Overage Income"
+                                  : "No Difference",
+                        responsible_employee: values.responsible_employee || "",
+                        difference_reason: values.difference_reason || "",
+                        transfer_invoices: JSON.stringify(selectedInvoices),
+                        transfer_reason: values.transfer_reason || "",
+                    },
+                    freeze: true,
+                    freeze_message: __("جاري تقفيل الوردية وفتح الوردية الجديدة في عملية واحدة..."),
+                });
+
+                dialog.hide();
+                const transferred = response.message?.delivery_transfers?.transferred || [];
+                frappe.msgprint({
+                    title: __("تم تقفيل الوردية وفتح وردية جديدة"),
+                    indicator: "green",
+                    message: `
+                        الوردية المغلقة: ${frappe.utils.escape_html(response.message?.closed_shift || "-")}
+                        <br>النقدية الموردة: ${format_currency(flt(response.message?.closed_actual_cash), "EGP")}
+                        <br>فرق النقدية: ${format_currency(flt(response.message?.closed_difference), "EGP")}
+                        <br>الوردية الجديدة: ${frappe.utils.escape_html(response.message?.new_shift || "-")}
+                        <br>عهدة الوردية الجديدة: ${format_currency(flt(response.message?.new_opening_balance), "EGP")}
+                        <br>صافي حركة Main Safe: ${format_currency(flt(response.message?.net_to_main_safe), "EGP")}
+                        <br>تم ترحيل ${transferred.length} أوردر دليفري.
+                    `,
+                });
+                this.selectedShift = "";
+                await this.refresh();
+            },
+        });
+
+        dialog.show();
+        if (transferable.length) {
+            dialog.get_field("transfer_orders").grid.refresh();
+        }
+        const actualField = dialog.get_field("actual_cash");
+        actualField.df.onchange = () => {
+            dialog.set_value(
+                "cash_difference",
+                flt(dialog.get_value("actual_cash")) - expected,
+            );
+        };
+        actualField.refresh();
     }
 
     async createShift() {
@@ -2605,12 +2835,12 @@ class PharmacyShiftManagementV24 {
             );
     }
 
-    closeShift() {
-        if (!this.data.shift?.is_under_review) {
+    closeShift(directClose = false) {
+        if (!this.data.shift?.is_under_review && !directClose) {
             frappe.msgprint({
-                title: __("ابدأ المراجعة أولًا"),
+                title: __("الوردية ليست تحت المراجعة"),
                 indicator: "orange",
-                message: __("اضغط بدء مراجعة وتجميد Snapshot قبل الاعتماد والترحيل والإغلاق."),
+                message: __("استخدم زر تقفيل الوردية للتقفيل المباشر، أو ابدأ المراجعة من الإجراءات المتقدمة."),
             });
             return;
         }
@@ -2724,6 +2954,7 @@ class PharmacyShiftManagementV24 {
                 fieldtype: "HTML",
                 options: `
                     <div class="alert alert-info">
+                        ${directClose ? __("سيتم إنشاء Snapshot داخليًا وفحص الحراس ثم التقفيل النهائي في نفس العملية.") + "<br>" : ""}
                         عند الاعتماد النهائي فقط سيتم إنشاء القيود التالية:
                         <br>• توريد نقدية الوردية المعزولة إلى Main Safe.
                         <br>• ترحيل متحصلات الطيارين أو تسجيل عجزهم.
@@ -2734,7 +2965,7 @@ class PharmacyShiftManagementV24 {
                 `,
             },
             {
-                label: __("النقدية المتوقعة وقت المراجعة"),
+                label: directClose ? __("النقدية المتوقعة الآن") : __("النقدية المتوقعة وقت المراجعة"),
                 fieldname: "expected_cash",
                 fieldtype: "Currency",
                 default: expected,
@@ -2749,7 +2980,9 @@ class PharmacyShiftManagementV24 {
                 reqd: 1,
                 description: hasFrozenCount
                     ? __("تم تجميد هذا العد عند بدء المراجعة. ألغِ المراجعة لتغييره.")
-                    : __("أدخل العد النهائي للوردية التي تم تجميدها عند فتح وردية جديدة."),
+                    : directClose
+                      ? __("أدخل العد النهائي؛ سيتم تثبيت Snapshot وتقفيل الوردية فورًا.")
+                      : __("أدخل العد النهائي للوردية التي تم تجميدها عند فتح وردية جديدة."),
             },
             {
                 label: __("فرق النقدية"),
@@ -2757,6 +2990,12 @@ class PharmacyShiftManagementV24 {
                 fieldtype: "Currency",
                 default: difference,
                 read_only: 1,
+            },
+            {
+                label: __("مرجع ظرف / عد النقدية"),
+                fieldname: "cash_reference",
+                fieldtype: "Data",
+                depends_on: "eval:" + (directClose ? "true" : "false"),
             },
             {
                 label: __("معالجة العجز"),
@@ -2784,20 +3023,22 @@ class PharmacyShiftManagementV24 {
         ];
 
         dialog = new frappe.ui.Dialog({
-            title: __("اعتماد وترحيل وإغلاق الوردية"),
+            title: directClose ? __("تقفيل الوردية") : __("اعتماد وترحيل وإغلاق الوردية"),
             size: "large",
             fields,
-            primary_action_label: __("اعتماد وترحيل وإغلاق"),
+            primary_action_label: directClose ? __("تقفيل الوردية") : __("اعتماد وترحيل وإغلاق"),
             primary_action: async (values) => {
                 const actualCash = flt(values.actual_cash);
                 const finalDifference = actualCash - expected;
 
                 const response = await frappe.call({
-                    method:
-                        "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.close_shift",
+                    method: directClose
+                        ? "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.direct_close_shift"
+                        : "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.close_shift",
                     args: {
                         shift_name: this.data.shift.name,
                         actual_cash: actualCash,
+                        cash_reference: directClose ? (values.cash_reference || "") : "",
                         difference_resolution:
                             finalDifference < -0.01
                                 ? values.difference_resolution
@@ -2808,7 +3049,9 @@ class PharmacyShiftManagementV24 {
                         difference_reason: values.difference_reason || "",
                     },
                     freeze: true,
-                    freeze_message: __("جاري اعتماد المراجعة وإنشاء القيود النهائية..."),
+                    freeze_message: directClose
+                        ? __("جاري فحص وتقفيل الوردية وإنشاء القيود النهائية...")
+                        : __("جاري اعتماد المراجعة وإنشاء القيود النهائية..."),
                 });
 
                 dialog.hide();
@@ -2819,7 +3062,7 @@ class PharmacyShiftManagementV24 {
                     response.message?.difference_entry || {};
 
                 frappe.msgprint({
-                    title: __("تم اعتماد وإغلاق الوردية"),
+                    title: directClose ? __("تم تقفيل الوردية") : __("تم اعتماد وإغلاق الوردية"),
                     indicator: "green",
                     message: `
                         ${frappe.utils.escape_html(response.message?.name || "-")}
