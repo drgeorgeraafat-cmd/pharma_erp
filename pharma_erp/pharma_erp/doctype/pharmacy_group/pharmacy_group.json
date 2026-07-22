@@ -13,7 +13,9 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Group Name",
-   "unique": 1
+   "unique": 1,
+   "reqd": 1,
+   "in_standard_filter": 1
   }
  ],
  "grid_page_length": 50,
@@ -42,5 +44,9 @@
  "rows_threshold_for_grid_search": 20,
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "autoname": "field:group_name",
+ "title_field": "group_name",
+ "search_fields": "group_name",
+ "show_title_field_in_link": 1
 }
