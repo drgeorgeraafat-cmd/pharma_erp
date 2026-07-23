@@ -452,8 +452,9 @@ def _prepare_batch_for_row(doc, row, item_flags, settings) -> bool:
             return False
 
     fields = ["name", "item", "expiry_date"]
-    if _has_field("Batch", "custom_printed_retail_price"):
-        fields.append("custom_printed_retail_price")
+    for fieldname in ("custom_printed_retail_price", "posa_batch_price"):
+        if _has_field("Batch", fieldname):
+            fields.append(fieldname)
     existing = frappe.db.get_value("Batch", batch_no, fields, as_dict=True)
 
     if existing:
@@ -515,6 +516,7 @@ def _create_batch(doc, row, batch_no, expiry_date, auto_generated):
         batch.supplier = doc.supplier
     printed_price = flt(row.get("custom_selling_price"))
     _set_if_field(batch, "custom_printed_retail_price", printed_price)
+    _set_if_field(batch, "posa_batch_price", printed_price)
     _set_if_field(batch, "custom_price_effective_date", doc.posting_date or nowdate())
     _set_if_field(batch, "custom_supplier", doc.supplier)
     _set_if_field(batch, "custom_price_updated_from_invoice", cint(bool(row.get("custom_selling_price"))))
@@ -526,7 +528,10 @@ def _create_batch(doc, row, batch_no, expiry_date, auto_generated):
 
 def _validate_existing_batch_price(row, batch, settings):
     entered_price = flt(row.get("custom_selling_price"))
-    saved_price = flt(batch.get("custom_printed_retail_price"))
+    saved_price = flt(
+        batch.get("custom_printed_retail_price")
+        or batch.get("posa_batch_price")
+    )
     conflict = bool(
         entered_price
         and saved_price
@@ -581,15 +586,43 @@ def _update_batch_purchase_metadata(doc):
             if batch_meta.has_field(fieldname) and value not in (None, ""):
                 values[fieldname] = value
 
-        saved_price = 0.0
         printed_price = flt(row.get("custom_selling_price"))
-        if batch_meta.has_field("custom_printed_retail_price"):
-            saved_price = flt(
-                frappe.db.get_value("Batch", batch_no, "custom_printed_retail_price")
-            )
-            if printed_price and not saved_price:
-                values["custom_printed_retail_price"] = printed_price
-                saved_price = printed_price
+        price_fields = [
+            fieldname
+            for fieldname in ("custom_printed_retail_price", "posa_batch_price")
+            if batch_meta.has_field(fieldname)
+        ]
+        saved_prices = (
+            frappe.db.get_value("Batch", batch_no, price_fields, as_dict=True)
+            if price_fields
+            else frappe._dict()
+        )
+        saved_custom_price = flt(
+            saved_prices.get("custom_printed_retail_price")
+            if saved_prices
+            else 0
+        )
+        saved_compatibility_price = flt(
+            saved_prices.get("posa_batch_price")
+            if saved_prices
+            else 0
+        )
+        canonical_price = saved_custom_price or saved_compatibility_price
+
+        if printed_price and not canonical_price:
+            canonical_price = printed_price
+
+        if canonical_price:
+            if (
+                batch_meta.has_field("custom_printed_retail_price")
+                and abs(saved_custom_price - canonical_price) > 0.000001
+            ):
+                values["custom_printed_retail_price"] = canonical_price
+            if (
+                batch_meta.has_field("posa_batch_price")
+                and abs(saved_compatibility_price - canonical_price) > 0.000001
+            ):
+                values["posa_batch_price"] = canonical_price
 
         if values:
             frappe.db.set_value("Batch", batch_no, values, update_modified=False)

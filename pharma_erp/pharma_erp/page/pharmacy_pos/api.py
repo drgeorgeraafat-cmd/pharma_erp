@@ -726,8 +726,79 @@ def _contract_discount_map(contract_doc):
     return discounts
 
 
+def _item_customer_price(item_code):
+    if not item_code or not _has_field("Item", "custom_customer_price"):
+        return 0.0
+    return flt(frappe.db.get_value("Item", item_code, "custom_customer_price") or 0)
+
+
+def _batch_price_context(batch_no, item_code, fallback_price=0):
+    if not batch_no:
+        return frappe._dict(
+            {
+                "batch_no": "",
+                "printed_retail_price": 0.0,
+                "posa_batch_price": 0.0,
+                "batch_price": 0.0,
+                "customer_price": flt(fallback_price),
+                "price_source": "Item Customer Price",
+                "price_updated_from_invoice": 0,
+                "price_integrity_error": 0,
+            }
+        )
+
+    fields = ["name", "item", "expiry_date"]
+    for fieldname in (
+        "custom_printed_retail_price",
+        "posa_batch_price",
+        "custom_price_updated_from_invoice",
+    ):
+        if _has_field("Batch", fieldname):
+            fields.append(fieldname)
+
+    batch = frappe.db.get_value("Batch", batch_no, fields, as_dict=True)
+    if not batch:
+        frappe.throw(_("Batch {0} was not found.").format(batch_no))
+    if batch.item != item_code:
+        frappe.throw(
+            _("Batch {0} belongs to item {1}, not {2}.").format(
+                batch_no, batch.item, item_code
+            )
+        )
+
+    printed_price = flt(batch.get("custom_printed_retail_price") or 0)
+    compatibility_price = flt(batch.get("posa_batch_price") or 0)
+    batch_price = printed_price or compatibility_price
+    updated_from_invoice = cint(
+        batch.get("custom_price_updated_from_invoice") or 0
+    )
+    integrity_error = cint(bool(updated_from_invoice and batch_price <= 0))
+    effective_price = 0.0 if integrity_error else flt(batch_price or fallback_price)
+
+    if printed_price > 0:
+        price_source = "Printed Batch Price"
+    elif compatibility_price > 0:
+        price_source = "POSA Batch Price"
+    else:
+        price_source = "Item Customer Price"
+
+    return frappe._dict(
+        {
+            "batch_no": batch_no,
+            "expiry_date": batch.get("expiry_date"),
+            "printed_retail_price": printed_price,
+            "posa_batch_price": compatibility_price,
+            "batch_price": batch_price,
+            "customer_price": effective_price,
+            "price_source": price_source,
+            "price_updated_from_invoice": updated_from_invoice,
+            "price_integrity_error": integrity_error,
+        }
+    )
+
+
 def _get_available_batches(item_code, warehouse):
-    """Return non-expired batches with positive stock in the warehouse (FEFO)."""
+    """Return non-expired batches with positive stock and effective retail price."""
     if not item_code or not warehouse:
         return []
 
@@ -735,6 +806,7 @@ def _get_available_batches(item_code, warehouse):
 
     rows = get_batch_qty(item_code=item_code, warehouse=warehouse) or []
     today = getdate(nowdate())
+    fallback_price = _item_customer_price(item_code)
     batches = []
 
     for row in rows:
@@ -745,9 +817,12 @@ def _get_available_batches(item_code, warehouse):
         if not batch_no or qty <= 0:
             continue
 
-        expiry_date = row.get("expiry_date") or frappe.db.get_value(
-            "Batch", batch_no, "expiry_date"
+        price_context = _batch_price_context(
+            batch_no,
+            item_code,
+            fallback_price,
         )
+        expiry_date = row.get("expiry_date") or price_context.get("expiry_date")
 
         if expiry_date and getdate(expiry_date) < today:
             continue
@@ -759,6 +834,13 @@ def _get_available_batches(item_code, warehouse):
                     "batch_no": batch_no,
                     "expiry_date": expiry_date,
                     "qty": qty,
+                    "printed_retail_price": price_context.printed_retail_price,
+                    "posa_batch_price": price_context.posa_batch_price,
+                    "batch_price": price_context.batch_price,
+                    "customer_price": price_context.customer_price,
+                    "price_source": price_context.price_source,
+                    "price_updated_from_invoice": price_context.price_updated_from_invoice,
+                    "price_integrity_error": price_context.price_integrity_error,
                 }
             )
         )
@@ -795,8 +877,13 @@ def _allocate_batches(item_code, warehouse, required_qty, preferred_batch=None):
         preferred = next(
             (batch for batch in batches if batch.name == preferred_batch), None
         )
-        if preferred:
-            ordered.append(preferred)
+        if not preferred:
+            frappe.throw(
+                _("Selected Batch {0} is not available for item {1}.").format(
+                    preferred_batch, item_code
+                )
+            )
+        ordered.append(preferred)
 
     ordered.extend(batch for batch in batches if batch.name != preferred_batch)
 
@@ -807,12 +894,34 @@ def _allocate_batches(item_code, warehouse, required_qty, preferred_batch=None):
         if remaining <= 1e-9:
             break
 
+        if cint(batch.get("price_integrity_error")):
+            frappe.throw(
+                _(
+                    "Batch {0} is marked as priced from a Purchase Invoice, "
+                    "but its retail price is missing."
+                ).format(batch.name)
+            )
+
         allocated_qty = min(flt(batch.qty), remaining)
         if allocated_qty <= 0:
             continue
 
+        customer_price = flt(batch.get("customer_price") or 0)
+        if customer_price <= 0:
+            frappe.throw(
+                _("Customer Price is missing for Batch {0}.").format(batch.name)
+            )
+
         allocations.append(
-            frappe._dict({"batch_no": batch.name, "qty": flt(allocated_qty, 6)})
+            frappe._dict(
+                {
+                    "batch_no": batch.name,
+                    "qty": flt(allocated_qty, 6),
+                    "customer_price": customer_price,
+                    "batch_price": flt(batch.get("batch_price") or 0),
+                    "price_source": batch.get("price_source"),
+                }
+            )
         )
         remaining = flt(remaining - allocated_qty, 6)
 
@@ -820,6 +929,7 @@ def _allocate_batches(item_code, warehouse, required_qty, preferred_batch=None):
         frappe.throw(_("Unable to allocate batch stock for item {0}.").format(item_code))
 
     return allocations
+
 
 
 def _item_context(item_code, warehouse=None):
@@ -2179,6 +2289,11 @@ def get_held_invoice(invoice):
                 "pack_size": pack_size,
                 "box_only": cint(context.get("custom_box_only")),
                 "item_origin": context.get("custom_item_origin") or "",
+                "general_customer_price": flt(
+                    context.get("custom_customer_price")
+                    or row.price_list_rate
+                    or row.rate
+                ),
                 "customer_price": flt(row.price_list_rate or row.rate),
                 "price_list_rate": flt(row.price_list_rate or row.rate),
                 "discount_percentage": flt(row.discount_percentage),
@@ -2529,18 +2644,29 @@ def _append_invoice_items(doc, data, context):
             continue
 
         item = _item_context(item_code, context.warehouse)
-        pack_size = flt(item.get("custom_pack_size") or item_data.get("pack_size") or 1) or 1
+        pack_size = flt(
+            item.get("custom_pack_size")
+            or item_data.get("pack_size")
+            or 1
+        ) or 1
         box_qty = max(0, flt(item_data.get("box_qty")))
         unit_qty = max(0, flt(item_data.get("unit_qty")))
 
         if cint(item.get("custom_box_only")):
             unit_qty = 0
 
-        qty = flt(item_data.get("qty")) or flt(box_qty + (unit_qty / pack_size), 6)
+        qty = flt(item_data.get("qty")) or flt(
+            box_qty + (unit_qty / pack_size),
+            6,
+        )
         if qty <= 0:
-            frappe.throw(_("Quantity must be greater than zero for item {0}.").format(item_code))
+            frappe.throw(
+                _("Quantity must be greater than zero for item {0}.").format(
+                    item_code
+                )
+            )
 
-        customer_price = flt(
+        item_customer_price = flt(
             item.get("custom_customer_price")
             or item_data.get("price_list_rate")
             or item_data.get("rate")
@@ -2554,13 +2680,19 @@ def _append_invoice_items(doc, data, context):
             discount_percentage = flt(submitted_discount or 0)
 
         if discount_percentage < 0 or discount_percentage > 100:
-            frappe.throw(_("Discount must be between 0 and 100 for item {0}.").format(item_code))
-
-        rate = flt(customer_price * (1 - discount_percentage / 100), 6)
+            frappe.throw(
+                _("Discount must be between 0 and 100 for item {0}.").format(
+                    item_code
+                )
+            )
 
         if cint(item.get("has_batch_no")):
             if not context.warehouse:
-                frappe.throw(_("Warehouse is required for batch item {0}.").format(item_code))
+                frappe.throw(
+                    _("Warehouse is required for batch item {0}.").format(
+                        item_code
+                    )
+                )
             allocations = _allocate_batches(
                 item_code,
                 context.warehouse,
@@ -2568,10 +2700,29 @@ def _append_invoice_items(doc, data, context):
                 item_data.get("batch_no"),
             )
         else:
-            allocations = [frappe._dict({"batch_no": "", "qty": qty})]
+            allocations = [
+                frappe._dict(
+                    {
+                        "batch_no": "",
+                        "qty": qty,
+                        "customer_price": item_customer_price,
+                        "batch_price": 0,
+                        "price_source": "Item Customer Price",
+                    }
+                )
+            ]
 
         for allocation in allocations:
             allocation_qty = flt(allocation.qty, 6)
+            customer_price = flt(
+                allocation.get("customer_price")
+                or item_customer_price
+            )
+            rate = flt(
+                customer_price * (1 - discount_percentage / 100),
+                6,
+            )
+
             row = doc.append("items", {})
             row.item_code = item_code
             row.qty = allocation_qty
@@ -2581,7 +2732,10 @@ def _append_invoice_items(doc, data, context):
 
             if context.warehouse:
                 row.warehouse = context.warehouse
-            if context.cost_center and _has_field("Sales Invoice Item", "cost_center"):
+            if context.cost_center and _has_field(
+                "Sales Invoice Item",
+                "cost_center",
+            ):
                 row.cost_center = context.cost_center
             if allocation.batch_no:
                 row.batch_no = allocation.batch_no
@@ -2591,7 +2745,10 @@ def _append_invoice_items(doc, data, context):
                 allocated_units = unit_qty
             else:
                 allocated_boxes = int(allocation_qty)
-                allocated_units = flt((allocation_qty - allocated_boxes) * pack_size, 6)
+                allocated_units = flt(
+                    (allocation_qty - allocated_boxes) * pack_size,
+                    6,
+                )
 
             if _has_field("Sales Invoice Item", "custom_box_qty"):
                 row.custom_box_qty = allocated_boxes
@@ -2602,6 +2759,7 @@ def _append_invoice_items(doc, data, context):
 
     if not doc.items:
         frappe.throw(_("No valid items were added."))
+
 
 
 def _apply_loyalty(doc, loyalty_data, company):

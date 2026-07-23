@@ -48,7 +48,11 @@ window.InvoiceManager = {
                 pack_size: flt(item.custom_pack_size || item.pack_size || options.pack_size || 1) || 1,
                 box_only: cint(item.custom_box_only || item.box_only),
                 item_origin: item.custom_item_origin || item.item_origin || "",
+                general_customer_price: basePrice,
                 customer_price: basePrice,
+                batch_price: 0,
+                price_source: "Item Customer Price",
+                price_integrity_error: 0,
                 price_list_rate: basePrice,
                 discount_percentage: flt(options.discount_percentage || 0),
                 rate: flt(options.rate || basePrice),
@@ -72,21 +76,42 @@ window.InvoiceManager = {
         }
     },
 
-    applyContractPrice(row) {
+    applyContractPrice(row, preserveDiscount = false) {
         const contract = PharmacyPOS.state.contract;
-        row.price_list_rate = flt(row.customer_price || row.price_list_rate || row.rate || 0);
+        row.price_list_rate = flt(
+            row.customer_price
+            || row.price_list_rate
+            || row.rate
+            || 0
+        );
+
         if (PharmacyPOS.state.orderType !== "Corporate" || !contract) {
-            row.discount_percentage = 0;
-            row.rate = row.price_list_rate;
+            if (!preserveDiscount) row.discount_percentage = 0;
+            row.rate = flt(
+                row.price_list_rate
+                * (1 - flt(row.discount_percentage || 0) / 100),
+                6
+            );
             return;
         }
+
         const origin = String(row.item_origin || "").trim().toLowerCase();
-        row.discount_percentage = flt((contract.discounts || {})[origin] || 0);
-        row.rate = flt(row.price_list_rate * (1 - row.discount_percentage / 100), 6);
+        row.discount_percentage = flt(
+            (contract.discounts || {})[origin]
+            || 0
+        );
+        row.rate = flt(
+            row.price_list_rate
+            * (1 - row.discount_percentage / 100),
+            6
+        );
     },
 
     async recalculateContractPrices() {
-        PharmacyPOS.state.items.forEach(row => { this.applyContractPrice(row); this.recalculateRow(row); });
+        PharmacyPOS.state.items.forEach(row => {
+            this.applySelectedBatchPrice(row, false);
+            this.recalculateRow(row);
+        });
         DeliveryManager.recalculateFee();
         this.render();
     },
@@ -109,21 +134,174 @@ window.InvoiceManager = {
         return flt(PharmacyPOS.state.items.reduce((total, row) => total + flt(row.total || 0), 0), 6);
     },
 
-    getBatchQty(row, batchNo) {
-        return flt((row.batches || []).find(item => (item.name || item.batch_no) === batchNo)?.qty || 0, 6);
+    getBatch(row, batchNo) {
+        return (row.batches || []).find(
+            item => (item.name || item.batch_no) === batchNo
+        ) || null;
     },
-    getTotalBatchQty(row) { return flt((row.batches || []).reduce((total, batch) => total + flt(batch.qty || 0), 0), 6); },
+
+    getBatchQty(row, batchNo) {
+        return flt(this.getBatch(row, batchNo)?.qty || 0, 6);
+    },
+
+    getTotalBatchQty(row) {
+        return flt(
+            (row.batches || []).reduce(
+                (total, batch) => total + flt(batch.qty || 0),
+                0
+            ),
+            6
+        );
+    },
+
+    getBatchAllocations(row) {
+        const batches = (row.batches || []).filter(
+            batch => flt(batch.qty || 0) > 0
+        );
+        const preferred = this.getBatch(row, row.batch_no);
+        const ordered = preferred
+            ? [preferred, ...batches.filter(batch => batch !== preferred)]
+            : batches;
+
+        let remaining = flt(row.qty || 0, 6);
+        const allocations = [];
+
+        ordered.forEach(batch => {
+            if (remaining <= 1e-9) return;
+            const allocatedQty = Math.min(
+                flt(batch.qty || 0),
+                remaining
+            );
+            if (allocatedQty <= 0) return;
+            allocations.push({
+                batch,
+                qty: flt(allocatedQty, 6)
+            });
+            remaining = flt(remaining - allocatedQty, 6);
+        });
+
+        return {
+            allocations,
+            remaining: flt(remaining, 6)
+        };
+    },
+
+    applySelectedBatchPrice(row, preserveDiscount = true) {
+        const generalPrice = flt(
+            row.general_customer_price
+            || row.customer_price
+            || row.price_list_rate
+            || row.rate
+            || 0
+        );
+        row.general_customer_price = generalPrice;
+
+        if (!row.has_batch_no || !row.batch_no) {
+            row.batch_price = 0;
+            row.price_source = "Item Customer Price";
+            row.price_integrity_error = 0;
+            row.customer_price = generalPrice;
+            this.applyContractPrice(row, preserveDiscount);
+            return;
+        }
+
+        const pricing = this.getBatchAllocations(row);
+        const allocatedQty = flt(
+            pricing.allocations.reduce(
+                (total, allocation) => total + flt(allocation.qty || 0),
+                0
+            ),
+            6
+        );
+        const hasIntegrityError = pricing.allocations.some(
+            allocation => cint(
+                allocation.batch.price_integrity_error || 0
+            )
+        );
+        const hasMissingPrice = pricing.allocations.some(
+            allocation => flt(
+                allocation.batch.customer_price || 0
+            ) <= 0
+        );
+
+        row.price_integrity_error = cint(
+            hasIntegrityError || hasMissingPrice
+        );
+
+        if (
+            row.price_integrity_error
+            || allocatedQty <= 0
+        ) {
+            row.batch_price = 0;
+            row.price_source = "Batch Price Error";
+            row.customer_price = 0;
+            this.applyContractPrice(row, preserveDiscount);
+            return;
+        }
+
+        const grossAmount = pricing.allocations.reduce(
+            (total, allocation) => total
+                + flt(allocation.qty || 0)
+                * flt(allocation.batch.customer_price || 0),
+            0
+        );
+        row.customer_price = flt(
+            grossAmount / allocatedQty,
+            6
+        );
+
+        if (pricing.allocations.length === 1) {
+            const selectedBatch = pricing.allocations[0].batch;
+            row.batch_price = flt(selectedBatch.batch_price || 0);
+            row.price_source = selectedBatch.price_source
+                || "Item Customer Price";
+        } else {
+            row.batch_price = 0;
+            row.price_source = "Mixed Batch Price";
+        }
+
+        this.applyContractPrice(row, preserveDiscount);
+    },
 
     selectBestBatch(row) {
-        if (!row.has_batch_no) { row.batch_no = ""; row.batch_qty = 0; return; }
-        if (!cint(PharmacyPOS.state.settings.auto_batch_selection)) return;
-        const batches = (row.batches || []).filter(batch => flt(batch.qty || 0) > 0);
-        if (!batches.length) { row.batch_no = ""; row.batch_qty = 0; return; }
+        if (!row.has_batch_no) {
+            row.batch_no = "";
+            row.batch_qty = 0;
+            this.applySelectedBatchPrice(row, true);
+            return;
+        }
+
+        const batches = (row.batches || []).filter(
+            batch => flt(batch.qty || 0) > 0
+        );
+        if (!batches.length) {
+            row.batch_no = "";
+            row.batch_qty = 0;
+            this.applySelectedBatchPrice(row, true);
+            return;
+        }
+
         const currentQty = this.getBatchQty(row, row.batch_no);
-        if (row.batch_no && currentQty + 1e-9 >= flt(row.qty)) { row.batch_qty = currentQty; return; }
-        const selected = batches.find(batch => flt(batch.qty || 0) + 1e-9 >= flt(row.qty)) || batches[0];
+        if (
+            row.batch_no
+            && currentQty + 1e-9 >= flt(row.qty)
+        ) {
+            row.batch_qty = currentQty;
+            this.applySelectedBatchPrice(row, true);
+            return;
+        }
+
+        if (!cint(PharmacyPOS.state.settings.auto_batch_selection)) {
+            this.applySelectedBatchPrice(row, true);
+            return;
+        }
+
+        const selected = batches.find(
+            batch => flt(batch.qty || 0) + 1e-9 >= flt(row.qty)
+        ) || batches[0];
         row.batch_no = selected.name || selected.batch_no;
         row.batch_qty = flt(selected.qty || 0, 6);
+        this.applySelectedBatchPrice(row, true);
     },
 
     expiryWarning(row) {
@@ -166,7 +344,11 @@ window.InvoiceManager = {
             const batchOptions = row.has_batch_no
                 ? `<option value="">Select batch</option>${(row.batches || []).map(batch => {
                     const name = batch.name || batch.batch_no;
-                    return `<option value="${frappe.utils.escape_html(name)}" ${name === row.batch_no ? "selected" : ""}>${frappe.utils.escape_html(name)}${batch.expiry_date ? ` - ${frappe.utils.escape_html(batch.expiry_date)}` : ""} - Stock: ${flt(batch.qty || 0, 2)}</option>`;
+                    const price = flt(batch.customer_price || 0);
+                    const integrityLabel = cint(batch.price_integrity_error)
+                        ? " - PRICE ERROR"
+                        : ` - Price: ${format_currency(price)}`;
+                    return `<option value="${frappe.utils.escape_html(name)}" ${name === row.batch_no ? "selected" : ""}>${frappe.utils.escape_html(name)}${batch.expiry_date ? ` - ${frappe.utils.escape_html(batch.expiry_date)}` : ""} - Stock: ${flt(batch.qty || 0, 2)}${integrityLabel}</option>`;
                 }).join("")}`
                 : '<option value="">N/A</option>';
             const lowStock = flt(row.actual_qty) <= Math.max(1, flt(row.pack_size)) ? '<span class="row-warning" title="Low stock">Low</span>' : "";
@@ -197,7 +379,14 @@ window.InvoiceManager = {
             tr.querySelector(".row-boxes")?.addEventListener("change", event => { row.box_qty = flt(event.target.value); updateQty(); });
             tr.querySelector(".row-units")?.addEventListener("change", event => { row.unit_qty = flt(event.target.value); updateQty(); });
             tr.querySelector(".row-discount")?.addEventListener("change", event => { this.setRowDiscount(row, event.target.value); DeliveryManager.recalculateFee(); this.render(); });
-            tr.querySelector(".row-batch")?.addEventListener("change", event => { row.batch_no = event.target.value || ""; row.batch_qty = this.getBatchQty(row, row.batch_no); });
+            tr.querySelector(".row-batch")?.addEventListener("change", event => {
+                row.batch_no = event.target.value || "";
+                row.batch_qty = this.getBatchQty(row, row.batch_no);
+                this.applySelectedBatchPrice(row, true);
+                this.recalculateRow(row);
+                DeliveryManager.recalculateFee();
+                this.render();
+            });
             tr.querySelector(".remove-row")?.addEventListener("click", () => { PharmacyPOS.state.items.splice(index, 1); DeliveryManager.recalculateFee(); this.render(); });
             const link = tr.querySelector(".item-info-link");
             link?.addEventListener("click", () => ItemInfoManager.open(row.item_code));
@@ -245,6 +434,12 @@ window.InvoiceManager = {
                 const available = this.getTotalBatchQty(row);
                 if (available + 1e-9 < flt(row.qty)) frappe.throw(__("Insufficient batch stock for {0}. Required: {1}, available: {2}.").format(row.item_name, flt(row.qty, 2), flt(available, 2)));
                 if (!row.batch_no) frappe.throw(__("No available batch for {0}.").format(row.item_name));
+                if (cint(row.price_integrity_error)) {
+                    frappe.throw(__("The selected Batch for {0} is marked as priced from a Purchase Invoice, but its Customer Price is missing.").format(row.item_name));
+                }
+                if (flt(row.price_list_rate || 0) <= 0) {
+                    frappe.throw(__("Customer Price is missing for the selected Batch of {0}.").format(row.item_name));
+                }
             }
         });
         if (submit) PaymentManager.validateForSubmit();
