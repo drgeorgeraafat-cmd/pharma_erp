@@ -1,0 +1,614 @@
+{
+  "version": "v0.7.65-step5",
+  "root": "All Item Groups",
+  "policy": {
+    "language": "English",
+    "extra_existing_groups_allowed": true,
+    "destructive_cleanup": false,
+    "move_existing_conflicts": false,
+    "data_migration": false,
+    "production_catalog_import": false
+  },
+  "groups": [
+    {
+      "name": "Medicines",
+      "parent": "All Item Groups",
+      "is_group": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Cosmetics",
+      "parent": "All Item Groups",
+      "is_group": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Personal Care",
+      "parent": "All Item Groups",
+      "is_group": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Mother & Baby",
+      "parent": "All Item Groups",
+      "is_group": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Vitamins & Supplements",
+      "parent": "All Item Groups",
+      "is_group": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "Medical Devices",
+      "parent": "All Item Groups",
+      "is_group": 1,
+      "sort_order": 60
+    },
+    {
+      "name": "Medical Supplies",
+      "parent": "All Item Groups",
+      "is_group": 1,
+      "sort_order": 70
+    },
+    {
+      "name": "Tablets",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Capsules",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Syrups",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Oral Solutions",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Drops",
+      "parent": "Medicines",
+      "is_group": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "Oral Drops",
+      "parent": "Drops",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Eye Drops",
+      "parent": "Drops",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Ear Drops",
+      "parent": "Drops",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Creams",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 60
+    },
+    {
+      "name": "Ointments",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 70
+    },
+    {
+      "name": "Injections",
+      "parent": "Medicines",
+      "is_group": 1,
+      "sort_order": 80
+    },
+    {
+      "name": "Ampoules",
+      "parent": "Injections",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Vials",
+      "parent": "Injections",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Suppositories",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 90
+    },
+    {
+      "name": "Sachets",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 100
+    },
+    {
+      "name": "Nasal Sprays",
+      "parent": "Medicines",
+      "is_group": 0,
+      "sort_order": 110
+    },
+    {
+      "name": "Skin Care",
+      "parent": "Cosmetics",
+      "is_group": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Face Wash",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Face Creams",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Toners",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Moisturizers",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Sunscreens",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Makeup Removers",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 60
+    },
+    {
+      "name": "Face Serums",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 70
+    },
+    {
+      "name": "Face Scrubs",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 80
+    },
+    {
+      "name": "Face Masks",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 90
+    },
+    {
+      "name": "Lip Care",
+      "parent": "Skin Care",
+      "is_group": 0,
+      "sort_order": 100
+    },
+    {
+      "name": "Hair Care",
+      "parent": "Cosmetics",
+      "is_group": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Shampoos",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Conditioners",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Hair Masks",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Hair Serums",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Hair Oils",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Leave-In Products",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 60
+    },
+    {
+      "name": "Hair Creams",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 70
+    },
+    {
+      "name": "Hair Mists",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 80
+    },
+    {
+      "name": "Hair Gels",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 90
+    },
+    {
+      "name": "Hair Sprays & Detanglers",
+      "parent": "Hair Care",
+      "is_group": 0,
+      "sort_order": 100
+    },
+    {
+      "name": "Body Care",
+      "parent": "Cosmetics",
+      "is_group": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Body Wash",
+      "parent": "Body Care",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Body Lotions",
+      "parent": "Body Care",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Body Creams",
+      "parent": "Body Care",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Deodorants",
+      "parent": "Body Care",
+      "is_group": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Roll-On Deodorants",
+      "parent": "Deodorants",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Spray Deodorants",
+      "parent": "Deodorants",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Makeup",
+      "parent": "Cosmetics",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Nail Care",
+      "parent": "Cosmetics",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Oral Care",
+      "parent": "Personal Care",
+      "is_group": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Toothpaste",
+      "parent": "Oral Care",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Toothbrushes",
+      "parent": "Oral Care",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Mouthwash",
+      "parent": "Oral Care",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Bath & Hygiene",
+      "parent": "Personal Care",
+      "is_group": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Soap",
+      "parent": "Bath & Hygiene",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Hand Wash",
+      "parent": "Bath & Hygiene",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Sanitizers",
+      "parent": "Bath & Hygiene",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Shaving Products",
+      "parent": "Personal Care",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Feminine Care",
+      "parent": "Personal Care",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Cotton Products",
+      "parent": "Personal Care",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Baby Care",
+      "parent": "Mother & Baby",
+      "is_group": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Baby Shampoo",
+      "parent": "Baby Care",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Baby Lotion",
+      "parent": "Baby Care",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Baby Cream",
+      "parent": "Baby Care",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Baby Oil",
+      "parent": "Baby Care",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Baby Powder",
+      "parent": "Baby Care",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Baby Wipes",
+      "parent": "Baby Care",
+      "is_group": 0,
+      "sort_order": 60
+    },
+    {
+      "name": "Baby Diapers",
+      "parent": "Mother & Baby",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Baby Feeding",
+      "parent": "Mother & Baby",
+      "is_group": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Feeding Bottles",
+      "parent": "Baby Feeding",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Pacifiers",
+      "parent": "Baby Feeding",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Baby Accessories",
+      "parent": "Mother & Baby",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Multivitamins",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Vitamin C",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Vitamin D",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Calcium",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Iron",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Omega 3",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 60
+    },
+    {
+      "name": "Protein Supplements",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 70
+    },
+    {
+      "name": "Herbal Supplements",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "sort_order": 80
+    },
+    {
+      "name": "Blood Pressure Monitors",
+      "parent": "Medical Devices",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Glucometers",
+      "parent": "Medical Devices",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Thermometers",
+      "parent": "Medical Devices",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Nebulizers",
+      "parent": "Medical Devices",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Pulse Oximeters",
+      "parent": "Medical Devices",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Weighing Scales",
+      "parent": "Medical Devices",
+      "is_group": 0,
+      "sort_order": 60
+    },
+    {
+      "name": "Bandages",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 10
+    },
+    {
+      "name": "Gauze",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 20
+    },
+    {
+      "name": "Adhesive Tape",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 30
+    },
+    {
+      "name": "Syringes",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 40
+    },
+    {
+      "name": "Gloves",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 50
+    },
+    {
+      "name": "Medical Masks",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 60
+    },
+    {
+      "name": "Alcohol Swabs",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 70
+    },
+    {
+      "name": "Medical Cotton",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 80
+    },
+    {
+      "name": "First Aid",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "sort_order": 90
+    }
+  ]
+}
