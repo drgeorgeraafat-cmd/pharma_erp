@@ -211,24 +211,93 @@ frappe.ui.form.on("Purchase Invoice", {
             can_review
         ) {
             frm.add_custom_button(
-                __("Update Current Retail Prices"),
-                () => {
+                __("Review & Apply Customer Prices"),
+                async () => {
+                    const previewResponse = await frappe.call({
+                        method: "pharma_erp.purchase_management.get_retail_price_change_preview",
+                        args: { invoice_name: frm.doc.name },
+                        freeze: true,
+                        freeze_message: __("Checking Customer Price changes..."),
+                    });
+                    const preview = previewResponse.message || {};
+                    const rows = Array.isArray(preview.changes) ? preview.changes : [];
+
+                    if (!rows.length) {
+                        frappe.show_alert({
+                            message: __("No pending non-batch Customer Price changes were found."),
+                            indicator: "blue",
+                        });
+                        await frm.reload_doc();
+                        return;
+                    }
+
+                    const tableRows = rows.map((row) => `
+                        <tr>
+                            <td>${frappe.utils.escape_html(row.item_code || "")}</td>
+                            <td>${frappe.utils.escape_html(row.item_name || "")}</td>
+                            <td class="text-right">${format_currency(row.old_price, frm.doc.currency)}</td>
+                            <td class="text-right"><strong>${format_currency(row.new_price, frm.doc.currency)}</strong></td>
+                        </tr>
+                    `).join("");
+
                     frappe.confirm(
-                        __(
-                            "Update Item current retail prices and the configured selling price list from this invoice? Batch-specific prices will remain unchanged."
-                        ),
+                        `
+                            <div style="line-height:1.7">
+                                <p>${__("Approve the following non-batch Customer Price changes? The Item card and {0} will be updated.", [
+                                    frappe.utils.escape_html(preview.selling_price_list || "Standard Selling"),
+                                ])}</p>
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-condensed">
+                                        <thead>
+                                            <tr>
+                                                <th>${__("Item Code")}</th>
+                                                <th>${__("Item")}</th>
+                                                <th class="text-right">${__("Current Price")}</th>
+                                                <th class="text-right">${__("New Price")}</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>${tableRows}</tbody>
+                                    </table>
+                                </div>
+                                <p class="text-muted">${__("Batch-controlled items remain priced by Batch and are excluded.")}</p>
+                            </div>
+                        `,
                         () => {
                             frappe.call({
                                 method: "pharma_erp.purchase_management.apply_retail_price_updates",
                                 args: { invoice_name: frm.doc.name },
                                 freeze: true,
-                                freeze_message: __("Updating retail prices..."),
+                                freeze_message: __("Updating Customer Prices..."),
                             }).then((r) => {
                                 frappe.show_alert({
                                     message: __("Updated {0} item price(s).", [
                                         r.message || 0,
                                     ]),
                                     indicator: "green",
+                                });
+                                frm.reload_doc();
+                            });
+                        }
+                    );
+                },
+                __("Purchase Management")
+            );
+
+            frm.add_custom_button(
+                __("Keep Current Customer Prices"),
+                () => {
+                    frappe.confirm(
+                        __("Keep the current Item Customer Prices and close this review without applying the invoice prices?"),
+                        () => {
+                            frappe.call({
+                                method: "pharma_erp.purchase_management.skip_retail_price_updates",
+                                args: { invoice_name: frm.doc.name },
+                                freeze: true,
+                                freeze_message: __("Closing Customer Price review..."),
+                            }).then(() => {
+                                frappe.show_alert({
+                                    message: __("Current Customer Prices were kept unchanged."),
+                                    indicator: "blue",
                                 });
                                 frm.reload_doc();
                             });

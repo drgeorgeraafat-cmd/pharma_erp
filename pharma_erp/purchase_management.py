@@ -49,6 +49,14 @@ DEFAULT_SETTINGS = frappe._dict(
 )
 
 
+RETAIL_PRICE_APPROVAL_ROLES = {
+    "Purchase Manager",
+    "Accounts Manager",
+    "System Manager",
+}
+RETAIL_PRICE_DECISIONS = {"approve", "keep_current"}
+
+
 def _has_field(doctype: str, fieldname: str) -> bool:
     return bool(frappe.get_meta(doctype).has_field(fieldname))
 
@@ -188,14 +196,27 @@ def on_submit_purchase_invoice(doc, method=None):
     _update_batch_purchase_metadata(doc)
     settings = get_purchase_settings()
     policy = settings.retail_price_update_policy or "Ask Before Update"
-    change_count = cint(doc.get("custom_price_change_count"))
+    preview = _collect_non_batch_price_changes(doc, settings)
+    change_count = len(preview.get("changes") or [])
+    decision = (
+        str(doc.flags.get("pharmacy_retail_price_decision") or "")
+        .strip()
+        .lower()
+    )
 
     if not change_count:
         _set_invoice_review_status(doc.name, "Not Required")
     elif policy == "Update Automatically":
         _apply_retail_price_updates(doc, settings)
     elif policy == "Do Not Update":
-        _set_invoice_review_status(doc.name, "Skipped")
+        _skip_retail_price_updates(doc, _("Retail price update policy is Do Not Update."))
+    elif decision == "approve":
+        _apply_retail_price_updates(doc, settings)
+    elif decision == "keep_current":
+        _skip_retail_price_updates(
+            doc,
+            _("The submitter chose to keep the current Item retail price."),
+        )
     else:
         _set_invoice_review_status(doc.name, "Pending Review")
 
@@ -391,6 +412,21 @@ def _calculate_pharmacy_purchase_rate(row, doc=None) -> bool:
 def _detect_retail_price_change(row, settings) -> bool:
     printed_price = flt(row.get("custom_selling_price"))
     if not printed_price or not row.item_code:
+        _set_row_if_field(row, "custom_price_change_detected", 0)
+        return False
+
+    # Batch-controlled items are priced from the selected Batch. Their purchase
+    # price must never overwrite the general Item retail price.
+    has_batch_no = cint(
+        frappe.db.get_value("Item", row.item_code, "has_batch_no") or 0
+    )
+    if has_batch_no:
+        current_price = flt(
+            frappe.db.get_value("Item", row.item_code, "custom_customer_price")
+            if _has_field("Item", "custom_customer_price")
+            else 0
+        )
+        _set_row_if_field(row, "custom_previous_retail_price", current_price)
         _set_row_if_field(row, "custom_price_change_detected", 0)
         return False
 
@@ -628,71 +664,287 @@ def _update_batch_purchase_metadata(doc):
             frappe.db.set_value("Batch", batch_no, values, update_modified=False)
 
 
+def _can_approve_retail_price_updates(user: str | None = None) -> bool:
+    roles = set(frappe.get_roles(user)) if user else set(frappe.get_roles())
+    return bool(RETAIL_PRICE_APPROVAL_ROLES.intersection(roles))
+
+
+def _collect_non_batch_price_changes(doc, settings=None):
+    settings = settings or get_purchase_settings()
+    tolerance = flt(settings.retail_price_difference_tolerance)
+    item_cache = {}
+    changes = []
+    batch_rows_ignored = []
+
+    for row in doc.get("items") or []:
+        item_code = row.get("item_code")
+        new_price = flt(row.get("custom_selling_price"))
+        if not item_code or not new_price or cint(row.get("custom_price_change_applied")):
+            continue
+
+        item = item_cache.get(item_code)
+        if item is None:
+            item = frappe.db.get_value(
+                "Item",
+                item_code,
+                ["item_name", "has_batch_no", "custom_customer_price", "stock_uom"],
+                as_dict=True,
+            ) or frappe._dict()
+            item_cache[item_code] = item
+
+        if cint(item.get("has_batch_no")):
+            batch_rows_ignored.append(
+                {
+                    "row_name": row.name,
+                    "idx": row.idx,
+                    "item_code": item_code,
+                    "item_name": row.get("item_name") or item.get("item_name") or item_code,
+                    "batch_no": row.get("batch_no") or row.get("custom_batch_number") or "",
+                    "batch_price": new_price,
+                }
+            )
+            continue
+
+        old_price = flt(item.get("custom_customer_price"))
+        if abs(new_price - old_price) <= tolerance:
+            continue
+
+        changes.append(
+            {
+                "row_name": row.name,
+                "idx": cint(row.idx),
+                "item_code": item_code,
+                "item_name": row.get("item_name") or item.get("item_name") or item_code,
+                "stock_uom": item.get("stock_uom") or "",
+                "old_price": old_price,
+                "new_price": new_price,
+                "difference": new_price - old_price,
+            }
+        )
+
+    grouped = {}
+    for change in changes:
+        grouped.setdefault(change["item_code"], []).append(change)
+
+    conflicts = []
+    for item_code, item_changes in grouped.items():
+        distinct_prices = []
+        for change in item_changes:
+            if not any(
+                abs(change["new_price"] - existing) <= tolerance
+                for existing in distinct_prices
+            ):
+                distinct_prices.append(change["new_price"])
+        if len(distinct_prices) > 1:
+            conflicts.append(
+                {
+                    "item_code": item_code,
+                    "item_name": item_changes[0]["item_name"],
+                    "prices": sorted(distinct_prices),
+                    "rows": [change["idx"] for change in item_changes],
+                }
+            )
+
+    return {
+        "changes": changes,
+        "conflicts": conflicts,
+        "batch_rows_ignored": batch_rows_ignored,
+    }
+
+
+@frappe.whitelist()
+def get_retail_price_change_preview(invoice_name: str):
+    doc = frappe.get_doc("Purchase Invoice", invoice_name)
+    doc.check_permission("read")
+    settings = get_purchase_settings()
+    collected = _collect_non_batch_price_changes(doc, settings)
+    policy = settings.retail_price_update_policy or "Ask Before Update"
+
+    return {
+        "invoice_name": doc.name,
+        "docstatus": cint(doc.docstatus),
+        "policy": policy,
+        "selling_price_list": settings.selling_price_list or "Standard Selling",
+        "changes": collected["changes"],
+        "conflicts": collected["conflicts"],
+        "batch_rows_ignored": collected["batch_rows_ignored"],
+        "change_count": len(collected["changes"]),
+        "item_count": len(
+            {change["item_code"] for change in collected["changes"]}
+        ),
+        "requires_decision": bool(
+            collected["changes"] and policy == "Ask Before Update"
+        ),
+        "can_approve": _can_approve_retail_price_updates(),
+        "stock_ledger_impact": False,
+        "gl_impact": False,
+    }
+
+
+def set_retail_price_submission_decision(doc, decision: str | None):
+    normalized = str(decision or "").strip().lower()
+    if normalized in ("", "not_required"):
+        normalized = ""
+    elif normalized not in RETAIL_PRICE_DECISIONS:
+        frappe.throw(_("Invalid retail price submission decision."))
+
+    if normalized == "approve" and not _can_approve_retail_price_updates():
+        frappe.throw(
+            _("You are not permitted to approve retail price updates."),
+            frappe.PermissionError,
+        )
+
+    doc.flags.pharmacy_retail_price_decision = normalized
+    return normalized
+
+
 @frappe.whitelist()
 def apply_retail_price_updates(invoice_name: str):
     doc = frappe.get_doc("Purchase Invoice", invoice_name)
     if doc.docstatus != 1:
         frappe.throw(_("Submit the Purchase Invoice before updating retail prices."))
+    doc.check_permission("read")
 
-    allowed_roles = {"Purchase Manager", "Accounts Manager", "System Manager"}
-    if not allowed_roles.intersection(set(frappe.get_roles())):
-        frappe.throw(_("You are not permitted to approve retail price updates."), frappe.PermissionError)
+    if not _can_approve_retail_price_updates():
+        frappe.throw(
+            _("You are not permitted to approve retail price updates."),
+            frappe.PermissionError,
+        )
 
     return _apply_retail_price_updates(doc, get_purchase_settings())
+
+
+@frappe.whitelist()
+def skip_retail_price_updates(invoice_name: str):
+    doc = frappe.get_doc("Purchase Invoice", invoice_name)
+    if doc.docstatus != 1:
+        frappe.throw(_("Submit the Purchase Invoice before reviewing retail prices."))
+    doc.check_permission("read")
+    if not _can_approve_retail_price_updates():
+        frappe.throw(
+            _("You are not permitted to close retail price reviews."),
+            frappe.PermissionError,
+        )
+    _skip_retail_price_updates(
+        doc,
+        _("The reviewer chose to keep the current Item retail price."),
+    )
+    return 1
 
 
 def _apply_retail_price_updates(doc, settings):
     if not _has_field("Item", "custom_customer_price"):
         frappe.throw(_("Item field custom_customer_price is missing."))
 
+    collected = _collect_non_batch_price_changes(doc, settings)
+    conflicts = collected.get("conflicts") or []
+    if conflicts:
+        details = "<br>".join(
+            _("{0}: {1}").format(
+                frappe.bold(conflict["item_name"]),
+                ", ".join(str(flt(price)) for price in conflict["prices"]),
+            )
+            for conflict in conflicts
+        )
+        frappe.throw(
+            _(
+                "More than one new retail price was entered for the same non-batch "
+                "item. Keep one final price per item before approval:<br>{0}"
+            ).format(details)
+        )
+
+    grouped = {}
+    for change in collected.get("changes") or []:
+        grouped.setdefault(change["item_code"], []).append(change)
+
     updated = 0
     price_list = settings.selling_price_list or "Standard Selling"
 
-    for row in doc.get("items") or []:
-        if not cint(row.get("custom_price_change_detected")) or cint(
-            row.get("custom_price_change_applied")
-        ):
-            continue
-
-        new_price = flt(row.get("custom_selling_price"))
-        if not row.item_code or not new_price:
-            continue
-
+    for item_code, item_changes in grouped.items():
+        representative = item_changes[-1]
+        new_price = flt(representative["new_price"])
         old_price = flt(
-            frappe.db.get_value("Item", row.item_code, "custom_customer_price")
+            frappe.db.get_value("Item", item_code, "custom_customer_price")
         )
+
         if abs(new_price - old_price) <= flt(
             settings.retail_price_difference_tolerance
         ):
-            _mark_price_change_applied(row.name)
+            for change in item_changes:
+                _mark_price_change_applied(change["row_name"])
             continue
 
         frappe.db.set_value(
-            "Item", row.item_code, "custom_customer_price", new_price, update_modified=True
+            "Item",
+            item_code,
+            "custom_customer_price",
+            new_price,
+            update_modified=True,
         )
-        _upsert_item_price(row.item_code, price_list, new_price)
-        _create_price_change_log(doc, row, old_price, new_price)
-        _mark_price_change_applied(row.name)
+        _upsert_item_price(item_code, price_list, new_price)
+
+        row = next(
+            (
+                invoice_row
+                for invoice_row in (doc.get("items") or [])
+                if invoice_row.name == representative["row_name"]
+            ),
+            None,
+        )
+        if row:
+            _create_price_change_log(doc, row, old_price, new_price)
+
+        for change in item_changes:
+            _mark_price_change_applied(change["row_name"])
         updated += 1
 
-    _set_invoice_review_status(doc.name, "Applied", reviewer=frappe.session.user)
+    status = "Applied" if updated or grouped else "Not Required"
+    _set_invoice_review_status(
+        doc.name,
+        status,
+        reviewer=frappe.session.user if grouped else None,
+    )
     return updated
 
 
+def _skip_retail_price_updates(doc, reason: str):
+    _set_invoice_review_status(
+        doc.name,
+        "Skipped",
+        reviewer=frappe.session.user,
+    )
+    try:
+        doc.add_comment(
+            "Info",
+            _("Retail price update skipped. {0}").format(reason),
+        )
+    except Exception:
+        pass
+
+
 def _upsert_item_price(item_code, price_list, new_price):
+    stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or None
+    filters = {
+        "item_code": item_code,
+        "price_list": price_list,
+        "batch_no": ["is", "not set"],
+    }
+    if stock_uom and _has_field("Item Price", "uom"):
+        filters["uom"] = stock_uom
+
     existing = frappe.db.get_value(
         "Item Price",
-        {
-            "item_code": item_code,
-            "price_list": price_list,
-            "batch_no": ["is", "not set"],
-        },
+        filters,
         "name",
         order_by="valid_from desc, creation desc",
     )
     if existing:
         frappe.db.set_value(
-            "Item Price", existing, "price_list_rate", new_price, update_modified=True
+            "Item Price",
+            existing,
+            "price_list_rate",
+            new_price,
+            update_modified=True,
         )
         return
 
@@ -700,6 +952,8 @@ def _upsert_item_price(item_code, price_list, new_price):
     price.item_code = item_code
     price.price_list = price_list
     price.price_list_rate = new_price
+    if stock_uom and price.meta.has_field("uom"):
+        price.uom = stock_uom
     price.flags.ignore_permissions = True
     price.insert(ignore_permissions=True)
 
@@ -710,7 +964,8 @@ def _create_price_change_log(doc, row, old_price, new_price):
 
     log = frappe.new_doc("Item Retail Price Change")
     log.item = row.item_code
-    log.batch_no = row.get("batch_no") or row.get("custom_batch_number")
+    # Non-batch Item price changes intentionally leave Batch empty.
+    log.batch_no = None
     log.supplier = doc.supplier
     log.purchase_invoice = doc.name
     log.old_price = old_price
@@ -720,7 +975,10 @@ def _create_price_change_log(doc, row, old_price, new_price):
     log.change_source = "Purchase Invoice"
     log.changed_by = frappe.session.user
     log.changed_at = now()
-    log.notes = _("Current Item price updated from Purchase Invoice.")
+    log.notes = _(
+        "Non-batch Item current customer price and selling price list updated "
+        "from Purchase Invoice after confirmation."
+    )
     log.flags.ignore_permissions = True
     log.insert(ignore_permissions=True)
 

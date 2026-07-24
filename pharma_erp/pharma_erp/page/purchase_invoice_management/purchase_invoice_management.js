@@ -4299,6 +4299,130 @@ all`,
         return await this.promptProcurementWarningSubmitV59(invoiceName, preview, links);
     }
 
+    retailPriceChangeTableHtml(preview) {
+        const rows = Array.isArray(preview.changes) ? preview.changes : [];
+        const body = rows.map((row) => `
+            <tr>
+                <td>${this.escape(row.item_code || "")}</td>
+                <td>${this.escape(row.item_name || "")}</td>
+                <td class="text-right">${this.money(row.old_price)}</td>
+                <td class="text-right"><strong>${this.money(row.new_price)}</strong></td>
+                <td class="text-right ${flt(row.difference) >= 0 ? "text-success" : "text-danger"}">${this.money(row.difference)}</td>
+            </tr>
+        `).join("");
+
+        return `
+            <div style="line-height:1.7; max-width:860px;">
+                <div class="alert alert-warning" style="margin-bottom:12px;">
+                    <strong>${__("Customer Price Change")}</strong><br>
+                    ${__("These are non-batch items. Approving will update the Item card and {0} after Submit.", [
+                        this.escape(preview.selling_price_list || "Standard Selling"),
+                    ])}
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-condensed" style="margin-bottom:10px;">
+                        <thead>
+                            <tr>
+                                <th>${__("Item Code")}</th>
+                                <th>${__("Item")}</th>
+                                <th class="text-right">${__("Current Price")}</th>
+                                <th class="text-right">${__("New Price")}</th>
+                                <th class="text-right">${__("Difference")}</th>
+                            </tr>
+                        </thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>
+                <div class="text-muted">
+                    ${__("Batch-controlled items are excluded. Their price remains attached to the selected Batch.")}
+                </div>
+                <div class="text-danger" style="margin-top:8px;">
+                    ${__("Submitting creates stock and accounting entries and prevents normal editing.")}
+                </div>
+            </div>`;
+    }
+
+    async requestRetailPriceSubmissionDecision(invoiceName) {
+        const response = await frappe.call({
+            method: "pharma_erp.purchase_management.get_retail_price_change_preview",
+            args: { invoice_name: invoiceName },
+            freeze: true,
+            freeze_message: __("Checking Customer Price changes..."),
+        });
+        const preview = response.message || {};
+
+        if (Array.isArray(preview.conflicts) && preview.conflicts.length) {
+            const conflicts = preview.conflicts.map((conflict) => `
+                <li>
+                    <strong>${this.escape(conflict.item_name || conflict.item_code || "")}</strong>:
+                    ${(conflict.prices || []).map((price) => this.money(price)).join("، ")}
+                </li>
+            `).join("");
+            frappe.msgprint({
+                title: __("Conflicting Customer Prices"),
+                indicator: "red",
+                message: `
+                    <div style="line-height:1.7">
+                        <p>${__("More than one new Customer Price was entered for the same non-batch item. Keep one final price for each item before Submit.")}</p>
+                        <ul>${conflicts}</ul>
+                    </div>`,
+            });
+            return null;
+        }
+
+        if (!preview.requires_decision || !preview.change_count) {
+            return "not_required";
+        }
+
+        return await new Promise((resolve) => {
+            let settled = false;
+            const finish = (decision) => {
+                if (settled) return;
+                settled = true;
+                dialog.hide();
+                resolve(decision);
+            };
+
+            const canApprove = cint(preview.can_approve);
+            const dialog = new frappe.ui.Dialog({
+                title: __("Approve New Customer Price"),
+                size: "large",
+                fields: [
+                    {
+                        fieldname: "price_change_summary",
+                        fieldtype: "HTML",
+                        options: this.retailPriceChangeTableHtml(preview),
+                    },
+                ],
+                primary_action_label: canApprove
+                    ? __("Approve New Price & Submit")
+                    : __("Keep Current Price & Submit"),
+                primary_action: () => {
+                    finish(canApprove ? "approve" : "keep_current");
+                },
+            });
+
+            const $footer = dialog.$wrapper.find(".modal-footer");
+            if (canApprove) {
+                const $keep = $(
+                    `<button type="button" class="btn btn-default">
+                        ${__("Keep Current Price & Submit")}
+                    </button>`
+                );
+                $keep.on("click", () => finish("keep_current"));
+                $footer.prepend($keep);
+            }
+
+            dialog.$wrapper.on("hidden.bs.modal", () => {
+                if (!settled) {
+                    settled = true;
+                    resolve(null);
+                }
+            });
+            dialog.show();
+        });
+    }
+
     async saveAndSubmit() {
         if (this.isSaving || !this.validatePage()) return;
         const totals = this.totals();
@@ -4318,15 +4442,20 @@ all`,
             if (!saved || !saved.name) return;
             const decisionOk = await this.ensureProcurementSubmitDecisionV59(saved.name);
             if (!decisionOk) return;
-            await this.performSubmit();
+            const retailPriceDecision = await this.requestRetailPriceSubmissionDecision(saved.name);
+            if (retailPriceDecision === null) return;
+            await this.performSubmit(retailPriceDecision);
         });
     }
 
-    async performSubmit() {
+    async performSubmit(retailPriceDecision = "not_required") {
         if (!this.draftName) return null;
         const response = await frappe.call({
             method: "pharma_erp.pharma_erp.page.purchase_invoice_management.purchase_invoice_management.submit_invoice",
-            args: { name: this.draftName },
+            args: {
+                name: this.draftName,
+                retail_price_decision: retailPriceDecision,
+            },
             freeze: true,
             freeze_message: __("Submitting Purchase Invoice..."),
         });
@@ -4351,8 +4480,15 @@ all`,
                 submittedProcurement.map((row) => row.name).join(" → "),
             ])
             : "";
+        const retailReview = message.retail_price_review || {};
+        let retailText = "";
+        if (retailReview.status === "Applied") {
+            retailText = __(" Customer Price approved and Item / selling price updated.");
+        } else if (retailReview.status === "Skipped") {
+            retailText = __(" Current Item Customer Price was kept unchanged.");
+        }
         frappe.show_alert({
-            message: __("Purchase Invoice {0} submitted successfully.", [invoice.name || this.draftName]) + submittedChainText,
+            message: __("Purchase Invoice {0} submitted successfully.", [invoice.name || this.draftName]) + submittedChainText + retailText,
             indicator: "green",
         }, 9);
         return invoice;
@@ -4362,9 +4498,21 @@ all`,
         if (!this.draftName || !this.validateAndReport()) return;
         const decisionOk = await this.ensureProcurementSubmitDecisionV59(this.draftName);
         if (!decisionOk) return;
-        frappe.confirm(__("Submit this saved Purchase Invoice? Stock and accounting entries will be created."), async () => {
-            await this.performSubmit();
-        });
+
+        const retailPriceDecision = await this.requestRetailPriceSubmissionDecision(this.draftName);
+        if (retailPriceDecision === null) return;
+
+        if (retailPriceDecision !== "not_required") {
+            await this.performSubmit(retailPriceDecision);
+            return;
+        }
+
+        frappe.confirm(
+            __("Submit this saved Purchase Invoice? Stock and accounting entries will be created."),
+            async () => {
+                await this.performSubmit("not_required");
+            }
+        );
     }
 
     async cancelInvoice() {

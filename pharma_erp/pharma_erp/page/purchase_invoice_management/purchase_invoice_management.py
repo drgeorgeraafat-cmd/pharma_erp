@@ -17,7 +17,11 @@ import frappe
 from frappe import _
 from frappe.utils import cint, date_diff, flt, getdate, now_datetime, nowdate, escape_html
 
-from pharma_erp.purchase_management import get_purchase_settings
+from pharma_erp.purchase_management import (
+    get_purchase_settings,
+    get_retail_price_change_preview,
+    set_retail_price_submission_decision,
+)
 
 
 READ_ROLES = {
@@ -2126,6 +2130,10 @@ def _invoice_response(doc) -> dict:
         "claim_match_status": doc.get("custom_claim_match_status") or "",
         "expected_claim_period_from": doc.get("custom_expected_claim_period_from"),
         "expected_claim_period_to": doc.get("custom_expected_claim_period_to"),
+        "retail_price_review_status": doc.get("custom_retail_price_review_status") or "",
+        "retail_price_change_count": cint(doc.get("custom_price_change_count")),
+        "price_reviewed_by": doc.get("custom_price_reviewed_by") or "",
+        "price_reviewed_at": doc.get("custom_price_reviewed_at"),
         "route": f"/app/purchase-invoice/{doc.name}",
     }
 
@@ -4020,12 +4028,41 @@ def _submit_linked_procurement_chain(invoice_doc) -> list[dict]:
 
 
 @frappe.whitelist()
-def submit_invoice(name: str):
+def submit_invoice(name: str, retail_price_decision: str | None = None):
     _require_create_access()
     doc = frappe.get_doc("Purchase Invoice", name)
     doc.check_permission("submit")
     if doc.docstatus != 0:
         frappe.throw(_("Only a Draft Purchase Invoice can be submitted."))
+
+    price_preview = get_retail_price_change_preview(doc.name)
+    if price_preview.get("conflicts"):
+        details = "<br>".join(
+            _("{0}: {1}").format(
+                frappe.bold(conflict.get("item_name") or conflict.get("item_code")),
+                ", ".join(str(flt(price)) for price in (conflict.get("prices") or [])),
+            )
+            for conflict in price_preview.get("conflicts") or []
+        )
+        frappe.throw(
+            _(
+                "More than one new Customer Price was entered for the same "
+                "non-batch item. Keep one final price before Submit:<br>{0}"
+            ).format(details)
+        )
+
+    if price_preview.get("requires_decision") and not retail_price_decision:
+        frappe.throw(
+            _(
+                "Review the Customer Price changes and choose either Approve New "
+                "Price or Keep Current Price before submitting."
+            )
+        )
+
+    normalized_price_decision = set_retail_price_submission_decision(
+        doc,
+        retail_price_decision,
+    )
 
     # Also normalize drafts created before this fix. Saving once with rounded
     # total disabled removes ERPNext's extra whole-unit rounding while keeping
@@ -4081,6 +4118,13 @@ def submit_invoice(name: str):
         "invoice": _invoice_response(doc),
         "recent_invoices": _recent_invoices(doc.company),
         "submitted_procurement": submitted_procurement,
+        "retail_price_review": {
+            "decision": normalized_price_decision or "not_required",
+            "status": doc.get("custom_retail_price_review_status") or "",
+            "change_count": cint(doc.get("custom_price_change_count")),
+            "reviewed_by": doc.get("custom_price_reviewed_by") or "",
+            "reviewed_at": doc.get("custom_price_reviewed_at"),
+        },
     }
 
 
