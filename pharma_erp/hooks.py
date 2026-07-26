@@ -249,12 +249,16 @@ app_license = "mit"
 # ignore_translatable_strings_from = []
 
 doctype_js = {
+    "Item": "public/js/item_online_catalog.js",
     "Purchase Invoice": "public/js/purchase_invoice.js",
     "Batch": "public/js/batch_retail_label.js",
     "Internal Retail Price Lot": "public/js/internal_retail_price_lot.js",
 }
 
 doc_events = {
+    "Item": {
+        "validate": "pharma_erp.online_catalog_readiness.validate_item_online_catalog_selection",
+    },
     "Customer": {
         "before_insert": "pharma_erp.customer_events.set_customer_code"
     },
