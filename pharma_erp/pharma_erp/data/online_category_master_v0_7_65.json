@@ -1,0 +1,412 @@
+{
+  "version": "v0.7.65-step7",
+  "doctype": "Online Category",
+  "legacy_renames": [
+    {
+      "from": "Cold & Flu",
+      "to": "Cold, Cough & Flu"
+    }
+  ],
+  "categories": [
+    {
+      "name": "Medicines",
+      "name_ar": "الأدوية",
+      "parent": "",
+      "is_group": 1,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Pain & Fever",
+      "name_ar": "المسكنات وخافضات الحرارة",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Cold, Cough & Flu",
+      "name_ar": "البرد والكحة والإنفلونزا",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Allergy & Sinus",
+      "name_ar": "الحساسية والجيوب الأنفية",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Digestive Health",
+      "name_ar": "صحة الجهاز الهضمي",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Respiratory Care",
+      "name_ar": "العناية بالجهاز التنفسي",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "Diabetes Care",
+      "name_ar": "رعاية مرضى السكري",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 60
+    },
+    {
+      "name": "Heart & Circulation",
+      "name_ar": "القلب والدورة الدموية",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 70
+    },
+    {
+      "name": "Women's Health",
+      "name_ar": "صحة المرأة",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 80
+    },
+    {
+      "name": "Men's Health",
+      "name_ar": "صحة الرجل",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 90
+    },
+    {
+      "name": "Other Medicines",
+      "name_ar": "أدوية أخرى",
+      "parent": "Medicines",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 100
+    },
+    {
+      "name": "Vitamins & Supplements",
+      "name_ar": "الفيتامينات والمكملات",
+      "parent": "",
+      "is_group": 1,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Multivitamins",
+      "name_ar": "الفيتامينات المتعددة",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Immunity Support",
+      "name_ar": "دعم المناعة",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Bone & Joint Health",
+      "name_ar": "صحة العظام والمفاصل",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Iron & Blood Health",
+      "name_ar": "الحديد وصحة الدم",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Pregnancy Supplements",
+      "name_ar": "مكملات الحمل",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "Children's Vitamins",
+      "name_ar": "فيتامينات الأطفال",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 60
+    },
+    {
+      "name": "Sports Nutrition",
+      "name_ar": "التغذية الرياضية",
+      "parent": "Vitamins & Supplements",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 70
+    },
+    {
+      "name": "Beauty & Personal Care",
+      "name_ar": "الجمال والعناية الشخصية",
+      "parent": "",
+      "is_group": 1,
+      "enabled": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Skin Care",
+      "name_ar": "العناية بالبشرة",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Hair Care",
+      "name_ar": "العناية بالشعر",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Oral Care",
+      "name_ar": "العناية بالفم والأسنان",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Body Care",
+      "name_ar": "العناية بالجسم",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Intimate Care",
+      "name_ar": "العناية بالمناطق الحساسة",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "Sun Care",
+      "name_ar": "العناية من الشمس",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 60
+    },
+    {
+      "name": "Deodorants & Fragrances",
+      "name_ar": "مزيلات العرق والعطور",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 70
+    },
+    {
+      "name": "Cosmetics",
+      "name_ar": "مستحضرات التجميل",
+      "parent": "Beauty & Personal Care",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 80
+    },
+    {
+      "name": "Mother & Baby",
+      "name_ar": "الأم والطفل",
+      "parent": "",
+      "is_group": 1,
+      "enabled": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Baby Skin Care",
+      "name_ar": "العناية ببشرة الطفل",
+      "parent": "Mother & Baby",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Baby Feeding",
+      "name_ar": "تغذية الطفل",
+      "parent": "Mother & Baby",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Diapers & Wipes",
+      "name_ar": "الحفاضات والمناديل",
+      "parent": "Mother & Baby",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Baby Health",
+      "name_ar": "صحة الطفل",
+      "parent": "Mother & Baby",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Pregnancy & Maternity",
+      "name_ar": "الحمل والأمومة",
+      "parent": "Mother & Baby",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "Medical Supplies",
+      "name_ar": "المستلزمات الطبية",
+      "parent": "",
+      "is_group": 1,
+      "enabled": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "First Aid",
+      "name_ar": "الإسعافات الأولية",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Wound Care",
+      "name_ar": "العناية بالجروح",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Monitoring Devices",
+      "name_ar": "أجهزة القياس والمتابعة",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Supports & Braces",
+      "name_ar": "الدعامات والأحزمة",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Masks & Protection",
+      "name_ar": "الكمامات والحماية",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 50
+    },
+    {
+      "name": "Home Healthcare",
+      "name_ar": "الرعاية الصحية المنزلية",
+      "parent": "Medical Supplies",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 60
+    },
+    {
+      "name": "Nutrition & Wellness",
+      "name_ar": "التغذية والصحة",
+      "parent": "",
+      "is_group": 1,
+      "enabled": 1,
+      "sort_order": 60
+    },
+    {
+      "name": "Weight Management",
+      "name_ar": "إدارة الوزن",
+      "parent": "Nutrition & Wellness",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Healthy Food & Drinks",
+      "name_ar": "أغذية ومشروبات صحية",
+      "parent": "Nutrition & Wellness",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Protein & Fitness",
+      "name_ar": "البروتين واللياقة",
+      "parent": "Nutrition & Wellness",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 30
+    },
+    {
+      "name": "Sleep & Stress Support",
+      "name_ar": "دعم النوم والتوتر",
+      "parent": "Nutrition & Wellness",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 40
+    },
+    {
+      "name": "Offers & Bundles",
+      "name_ar": "العروض والباقات",
+      "parent": "",
+      "is_group": 1,
+      "enabled": 1,
+      "sort_order": 70
+    },
+    {
+      "name": "Special Offers",
+      "name_ar": "عروض خاصة",
+      "parent": "Offers & Bundles",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 10
+    },
+    {
+      "name": "Value Bundles",
+      "name_ar": "باقات التوفير",
+      "parent": "Offers & Bundles",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 20
+    },
+    {
+      "name": "Gifts & Freebies",
+      "name_ar": "الهدايا والمنتجات المجانية",
+      "parent": "Offers & Bundles",
+      "is_group": 0,
+      "enabled": 1,
+      "sort_order": 30
+    }
+  ]
+}
