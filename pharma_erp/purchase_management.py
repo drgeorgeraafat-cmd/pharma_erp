@@ -54,7 +54,7 @@ RETAIL_PRICE_APPROVAL_ROLES = {
     "Accounts Manager",
     "System Manager",
 }
-RETAIL_PRICE_DECISIONS = {"approve", "keep_current"}
+RETAIL_PRICE_DECISIONS = {"approve", "separate_printed_prices", "keep_current"}
 
 
 def _has_field(doctype: str, fieldname: str) -> bool:
@@ -207,11 +207,13 @@ def on_submit_purchase_invoice(doc, method=None):
     if not change_count:
         _set_invoice_review_status(doc.name, "Not Required")
     elif policy == "Update Automatically":
-        _apply_retail_price_updates(doc, settings)
+        _apply_retail_price_updates(doc, settings, stock_scope="All Stock")
     elif policy == "Do Not Update":
         _skip_retail_price_updates(doc, _("Retail price update policy is Do Not Update."))
     elif decision == "approve":
-        _apply_retail_price_updates(doc, settings)
+        _apply_retail_price_updates(doc, settings, stock_scope="All Stock")
+    elif decision == "separate_printed_prices":
+        _apply_retail_price_updates(doc, settings, stock_scope="Separate Printed Prices")
     elif decision == "keep_current":
         _skip_retail_price_updates(
             doc,
@@ -788,13 +790,20 @@ def set_retail_price_submission_decision(doc, decision: str | None):
     elif normalized not in RETAIL_PRICE_DECISIONS:
         frappe.throw(_("Invalid retail price submission decision."))
 
-    if normalized == "approve" and not _can_approve_retail_price_updates():
+    if normalized in {"approve", "separate_printed_prices"} and not _can_approve_retail_price_updates():
         frappe.throw(
             _("You are not permitted to approve retail price updates."),
             frappe.PermissionError,
         )
 
     doc.flags.pharmacy_retail_price_decision = normalized
+    if doc.meta.has_field("custom_retail_price_stock_scope"):
+        scope_map = {
+            "approve": "All Stock",
+            "separate_printed_prices": "Separate Printed Prices",
+            "keep_current": "Keep Current",
+        }
+        doc.custom_retail_price_stock_scope = scope_map.get(normalized, "")
     return normalized
 
 
@@ -832,7 +841,7 @@ def skip_retail_price_updates(invoice_name: str):
     return 1
 
 
-def _apply_retail_price_updates(doc, settings):
+def _apply_retail_price_updates(doc, settings, stock_scope="All Stock"):
     if not _has_field("Item", "custom_customer_price"):
         frappe.throw(_("Item field custom_customer_price is missing."))
 
@@ -904,6 +913,20 @@ def _apply_retail_price_updates(doc, settings):
         status,
         reviewer=frappe.session.user if grouped else None,
     )
+    if stock_scope == "All Stock" and frappe.db.exists("DocType", "Internal Retail Price Lot"):
+        from pharma_erp.retail_price_lots import reprice_open_lots
+
+        for item_code, item_changes in grouped.items():
+            if item_changes:
+                reprice_open_lots(item_code, flt(item_changes[-1]["new_price"]))
+    if doc.meta.has_field("custom_retail_price_stock_scope"):
+        frappe.db.set_value(
+            "Purchase Invoice",
+            doc.name,
+            "custom_retail_price_stock_scope",
+            stock_scope,
+            update_modified=False,
+        )
     return updated
 
 

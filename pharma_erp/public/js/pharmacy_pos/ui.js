@@ -329,7 +329,7 @@ window.PharmacyPOS = {
                             <table id="invoice-table">
                                 <thead>
                                     <tr>
-                                        <th>#</th><th>Item</th><th>Stock</th><th>Batch</th><th>Boxes</th><th>Units</th><th>Price</th><th>Disc %</th><th>Total</th><th></th>
+                                        <th>#</th><th>Item</th><th>Stock</th><th>Stock Source</th><th>Boxes</th><th>Units</th><th>Price</th><th>Disc %</th><th>Total</th><th></th>
                                     </tr>
                                 </thead>
                                 <tbody id="invoice-body"></tbody>

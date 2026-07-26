@@ -1,0 +1,307 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:RPL-{YYYY}-{#####}",
+ "creation": "2026-07-24 22:30:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "item_section",
+  "item_code",
+  "item_name",
+  "warehouse",
+  "status",
+  "disabled",
+  "price_section",
+  "retail_price",
+  "pack_size",
+  "source_date",
+  "expiry_date",
+  "quantity_section",
+  "opening_qty",
+  "received_qty",
+  "returned_qty",
+  "adjustment_qty",
+  "sold_qty",
+  "available_qty",
+  "source_section",
+  "lot_kind",
+  "source_doctype",
+  "source_name",
+  "source_row",
+  "purchase_invoice",
+  "purchase_receipt",
+  "supplier",
+  "backfill_key",
+  "label_section",
+  "barcode_value",
+  "qr_value",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_section",
+   "fieldtype": "Section Break",
+   "label": "Item & Warehouse"
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "item_code.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Warehouse",
+   "options": "Warehouse",
+   "reqd": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Open\nDepleted\nDisabled",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "price_section",
+   "fieldtype": "Section Break",
+   "label": "Retail Price"
+  },
+  {
+   "fieldname": "retail_price",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Customer Price",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "pack_size",
+   "fieldtype": "Float",
+   "label": "Pack Size",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_date",
+   "fieldtype": "Date",
+   "in_standard_filter": 1,
+   "label": "Source Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "expiry_date",
+   "fieldtype": "Date",
+   "label": "Expiry Date"
+  },
+  {
+   "fieldname": "quantity_section",
+   "fieldtype": "Section Break",
+   "label": "Quantity Ledger"
+  },
+  {
+   "default": "0",
+   "fieldname": "opening_qty",
+   "fieldtype": "Float",
+   "label": "Opening Printed-Price Qty",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "received_qty",
+   "fieldtype": "Float",
+   "label": "Received Qty",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "returned_qty",
+   "fieldtype": "Float",
+   "label": "Sales Return Qty",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "adjustment_qty",
+   "fieldtype": "Float",
+   "label": "Adjustment Qty",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "sold_qty",
+   "fieldtype": "Float",
+   "label": "Sold Qty",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "available_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Available Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "fieldname": "lot_kind",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Lot Kind",
+   "options": "Opening Printed Price\nPurchase Invoice\nPurchase Receipt\nSales Return\nAdjustment",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Source DocType",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "source_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Source Document",
+   "options": "source_doctype"
+  },
+  {
+   "fieldname": "source_row",
+   "fieldtype": "Data",
+   "label": "Source Row"
+  },
+  {
+   "fieldname": "purchase_invoice",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Purchase Invoice",
+   "options": "Purchase Invoice"
+  },
+  {
+   "fieldname": "purchase_receipt",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Purchase Receipt",
+   "options": "Purchase Receipt"
+  },
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "label": "Supplier",
+   "options": "Supplier"
+  },
+  {
+   "fieldname": "backfill_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Backfill Key",
+   "unique": 1
+  },
+  {
+   "fieldname": "label_section",
+   "fieldtype": "Section Break",
+   "label": "Barcode & QR"
+  },
+  {
+   "fieldname": "barcode_value",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Barcode Value",
+   "unique": 1
+  },
+  {
+   "fieldname": "qr_value",
+   "fieldtype": "Data",
+   "label": "QR Value",
+   "unique": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-25 00:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Internal Retail Price Lot",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales User"
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock User"
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager"
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Purchase Manager"
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "item_code,item_name,warehouse,barcode_value,qr_value,purchase_invoice,purchase_receipt",
+ "sort_field": "source_date",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "item_name"
+}

@@ -1268,3 +1268,113 @@ body.pharmacy-pos-fullscreen #pharmacy-pos.is-add-on-mode {
     cursor: not-allowed;
     opacity: 0.85;
 }
+
+/* =====================================================
+   v0.7.65 Step 6C — stock source allocation
+   ===================================================== */
+.stock-source-cell {
+    min-width: 310px;
+}
+
+.stock-source-cell select {
+    width: 100%;
+}
+
+.source-allocation-details {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--text-muted, #6c757d);
+}
+
+.source-allocation-details summary {
+    cursor: pointer;
+    white-space: normal;
+}
+
+.source-error {
+    display: block;
+    margin-top: 4px;
+    color: var(--red-600, #c0392b);
+    font-weight: 600;
+}
+
+.row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.new-row,
+.remove-row {
+    border: 0;
+    border-radius: 999px;
+    width: 30px;
+    height: 30px;
+    line-height: 28px;
+    padding: 0;
+    font-size: 18px;
+}
+
+.new-row {
+    background: #e8f5ec;
+    color: #177245;
+}
+
+.remove-row {
+    background: #fdeceb;
+    color: #c0392b;
+}
+
+.search-source-line {
+    color: #177245;
+    font-weight: 600;
+}
+
+#invoice-table th:nth-child(4),
+#invoice-table td:nth-child(4) {
+    min-width: 310px;
+}
+
+/* Step 6C v2.3: Cash Customer refund-credit guard */
+.cash-customer-credit-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 10px 0;
+    padding: 10px 12px;
+    border: 1px solid #f0ad4e;
+    border-radius: 8px;
+    background: #fff8e8;
+    color: #7a4d00;
+}
+
+.cash-customer-credit-warning strong {
+    font-weight: 700;
+}
+
+.cash-credit-note-wrap {
+    margin: 10px 0 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--control-bg);
+}
+
+.cash-credit-note-wrap label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.cash-credit-note-wrap textarea {
+    min-height: 88px;
+    resize: vertical;
+}
+
+.cash-credit-note-wrap small {
+    display: block;
+    margin-top: 6px;
+    color: var(--text-muted);
+}

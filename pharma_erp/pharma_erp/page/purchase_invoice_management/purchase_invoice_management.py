@@ -4124,6 +4124,7 @@ def submit_invoice(name: str, retail_price_decision: str | None = None):
             "change_count": cint(doc.get("custom_price_change_count")),
             "reviewed_by": doc.get("custom_price_reviewed_by") or "",
             "reviewed_at": doc.get("custom_price_reviewed_at"),
+            "stock_scope": doc.get("custom_retail_price_stock_scope") or "",
         },
     }
 

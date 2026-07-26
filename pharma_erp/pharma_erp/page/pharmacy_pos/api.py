@@ -7,6 +7,13 @@ from frappe.model.naming import make_autoname
 from frappe.utils import cint, flt, getdate, nowdate
 
 from pharma_erp.pharma_erp.delivery_attempt import mark_add_on_invoice_created
+from pharma_erp.retail_price_lots import (
+    LOT_DOCTYPE,
+    LOT_FIELD,
+    allocate_retail_lots,
+    find_source_matches,
+    get_available_retail_lots,
+)
 
 
 # =====================================================
@@ -74,6 +81,159 @@ def _search_pattern(txt):
     like_pattern = "%" + "%".join(tokens) + "%" if tokens else "%"
     compact = re.sub(r"[\s*%_-]+", "", raw).lower()
     return raw, like_pattern, compact
+
+
+
+
+_CODE128_PATTERNS = [
+    "212222", "222122", "222221", "121223", "121322", "131222",
+    "122213", "122312", "132212", "221213", "221312", "231212",
+    "112232", "122132", "122231", "113222", "123122", "123221",
+    "223211", "221132", "221231", "213212", "223112", "312131",
+    "311222", "321122", "321221", "312212", "322112", "322211",
+    "212123", "212321", "232121", "111323", "131123", "131321",
+    "112313", "132113", "132311", "211313", "231113", "231311",
+    "112133", "112331", "132131", "113123", "113321", "133121",
+    "313121", "211331", "231131", "213113", "213311", "213131",
+    "311123", "311321", "331121", "312113", "312311", "332111",
+    "314111", "221411", "431111", "111224", "111422", "121124",
+    "121421", "141122", "141221", "112214", "112412", "122114",
+    "122411", "142112", "142211", "241211", "221114", "413111",
+    "241112", "134111", "111242", "121142", "121241", "114212",
+    "124112", "124211", "411212", "421112", "421211", "212141",
+    "214121", "412121", "111143", "111341", "131141", "114113",
+    "114311", "411113", "411311", "113141", "114131", "311141",
+    "411131", "211412", "211214", "211232", "2331112",
+]
+
+
+def _code128_svg(value: str, height: int = 60, module: int = 2) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if any(ord(char) < 32 or ord(char) > 126 for char in value):
+        value = value.encode("ascii", "ignore").decode("ascii")
+    if not value:
+        return ""
+
+    codes = [104] + [ord(char) - 32 for char in value]
+    checksum = 104
+    for index, code_value in enumerate(codes[1:], start=1):
+        checksum += index * code_value
+    codes.extend([checksum % 103, 106])
+
+    quiet = 10 * module
+    x = quiet
+    bars = []
+    for code_value in codes:
+        pattern = _CODE128_PATTERNS[code_value]
+        black = True
+        for width_char in pattern:
+            width = int(width_char) * module
+            if black:
+                bars.append(
+                    f'<rect x="{x}" y="0" width="{width}" height="{height}" fill="#000"/>'
+                )
+            x += width
+            black = not black
+    total_width = x + quiet
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" '
+        f'height="{height}" viewBox="0 0 {total_width} {height}" role="img">'
+        + "".join(bars)
+        + "</svg>"
+    )
+
+
+def _qr_data_uri(value: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        import base64
+        import io
+        import qrcode
+
+        image = qrcode.make(value)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+    except Exception:
+        return ""
+
+
+@frappe.whitelist()
+def get_stock_source_label_data(source_type, source_name):
+    source_type = str(source_type or "").strip().lower()
+    source_name = str(source_name or "").strip()
+    if not source_name:
+        frappe.throw(_("Stock source is required."))
+
+    if source_type == "batch":
+        fields = ["name", "item", "expiry_date"]
+        for fieldname in (
+            "custom_printed_retail_price",
+            "posa_batch_price",
+            "custom_pharmacy_barcode",
+            "custom_pharmacy_qr_value",
+        ):
+            if _has_field("Batch", fieldname):
+                fields.append(fieldname)
+        source = frappe.db.get_value("Batch", source_name, fields, as_dict=True)
+        if not source:
+            frappe.throw(_("Batch {0} was not found.").format(source_name))
+        item_code = source.item
+        price = flt(
+            source.get("custom_printed_retail_price")
+            or source.get("posa_batch_price")
+            or _item_customer_price(item_code)
+        )
+        barcode_value = source.get("custom_pharmacy_barcode") or source.name
+        qr_value = source.get("custom_pharmacy_qr_value") or f"BATCH:{source.name}"
+        source_label = _("Batch")
+        expiry_date = source.expiry_date
+    elif source_type in {"retail_lot", "lot"}:
+        if not frappe.db.exists("DocType", LOT_DOCTYPE):
+            frappe.throw(_("Internal Retail Price Lot is not installed."))
+        source = frappe.db.get_value(
+            LOT_DOCTYPE,
+            source_name,
+            [
+                "name",
+                "item_code",
+                "retail_price",
+                "expiry_date",
+                "barcode_value",
+                "qr_value",
+                "available_qty",
+            ],
+            as_dict=True,
+        )
+        if not source:
+            frappe.throw(_("Retail Price Lot {0} was not found.").format(source_name))
+        item_code = source.item_code
+        price = flt(source.retail_price)
+        barcode_value = source.barcode_value or source.name
+        qr_value = source.qr_value or f"RPL:{source.name}"
+        source_label = _("Price Lot")
+        expiry_date = source.expiry_date
+    else:
+        frappe.throw(_("Invalid stock source type."))
+
+    item_name = frappe.db.get_value("Item", item_code, "item_name") or item_code
+    return {
+        "source_type": source_type,
+        "source_name": source_name,
+        "source_label": source_label,
+        "item_code": item_code,
+        "item_name": item_name,
+        "retail_price": price,
+        "expiry_date": expiry_date,
+        "barcode_value": barcode_value,
+        "qr_value": qr_value,
+        "barcode_svg": _code128_svg(barcode_value),
+        "qr_data_uri": _qr_data_uri(qr_value),
+    }
 
 
 def _user_is_manager():
@@ -856,7 +1016,13 @@ def _get_available_batches(item_code, warehouse):
     return batches
 
 
-def _allocate_batches(item_code, warehouse, required_qty, preferred_batch=None):
+def _allocate_batches(
+    item_code,
+    warehouse,
+    required_qty,
+    preferred_batch=None,
+    strict_preferred=False,
+):
     required_qty = flt(required_qty, 6)
     if required_qty <= 0:
         return []
@@ -885,7 +1051,24 @@ def _allocate_batches(item_code, warehouse, required_qty, preferred_batch=None):
             )
         ordered.append(preferred)
 
-    ordered.extend(batch for batch in batches if batch.name != preferred_batch)
+    if not strict_preferred:
+        ordered.extend(batch for batch in batches if batch.name != preferred_batch)
+
+    selected_available = flt(sum(flt(batch.qty) for batch in ordered), 6)
+    if selected_available + 1e-9 < required_qty:
+        if strict_preferred and preferred_batch:
+            frappe.throw(
+                _(
+                    "Selected Batch {0} has insufficient stock. Required: {1}, available: {2}. "
+                    "Choose Auto allocation or add another line."
+                ).format(preferred_batch, required_qty, selected_available)
+            )
+        frappe.throw(
+            _(
+                "Insufficient batch stock for item {0} in warehouse {1}. "
+                "Required: {2}, available: {3}."
+            ).format(item_code, warehouse, required_qty, selected_available)
+        )
 
     remaining = required_qty
     allocations = []
@@ -931,9 +1114,210 @@ def _allocate_batches(item_code, warehouse, required_qty, preferred_batch=None):
     return allocations
 
 
+def _allocate_pack_sources(
+    sources,
+    box_qty,
+    unit_qty,
+    pack_size,
+    *,
+    preferred_name=None,
+    strict_preferred=False,
+    name_field="name",
+    qty_field="qty",
+    source_label="stock source",
+):
+    """Allocate whole boxes without combining partial sources.
+
+    Units may span multiple sources, but one whole box must come from a source
+    that physically contains at least one complete box.
+    """
+    pack_size = flt(pack_size or 1) or 1
+    box_qty = flt(box_qty, 6)
+    unit_qty = flt(unit_qty, 6)
+    rounded_units = round(unit_qty)
+    if abs(unit_qty - rounded_units) > 0.000001:
+        frappe.throw(_("Units must be entered as a whole number."))
+    unit_qty = int(rounded_units)
+    rounded_boxes = round(box_qty)
+    if abs(box_qty - rounded_boxes) > 0.000001:
+        frappe.throw(_("Boxes must be entered as a whole number."))
+    box_qty = int(rounded_boxes)
+
+    source_rows = [frappe._dict(row) for row in (sources or []) if flt(row.get(qty_field)) > 0]
+    preferred = None
+    if preferred_name:
+        preferred = next(
+            (row for row in source_rows if row.get(name_field) == preferred_name),
+            None,
+        )
+        if not preferred:
+            frappe.throw(
+                _("Selected {0} {1} is not available.").format(
+                    source_label, preferred_name
+                )
+            )
+
+    ordered = [preferred] if preferred else []
+    if not strict_preferred:
+        ordered.extend(
+            row
+            for row in source_rows
+            if not preferred or row.get(name_field) != preferred.get(name_field)
+        )
+
+    available = {
+        row.get(name_field): flt(row.get(qty_field), 6)
+        for row in ordered
+    }
+    allocations = {row.get(name_field): 0.0 for row in ordered}
+
+    remaining_boxes = box_qty
+    for row in ordered:
+        if remaining_boxes <= 0:
+            break
+        name = row.get(name_field)
+        full_boxes = int(max(0, available[name]))
+        if full_boxes <= 0:
+            continue
+        allocated_boxes = min(full_boxes, remaining_boxes)
+        allocations[name] = flt(allocations[name] + allocated_boxes, 6)
+        available[name] = flt(available[name] - allocated_boxes, 6)
+        remaining_boxes -= allocated_boxes
+
+    if remaining_boxes > 0:
+        selected = preferred_name or _("Auto allocation")
+        frappe.throw(
+            _(
+                "{0} cannot supply {1} complete box(es). "
+                "The remaining stock exists only as loose units. Set Boxes to 0 and enter Units."
+            ).format(selected, remaining_boxes)
+        )
+
+    remaining_units_qty = flt(unit_qty / pack_size, 6)
+    for row in ordered:
+        if remaining_units_qty <= 0.000001:
+            break
+        name = row.get(name_field)
+        allocated = min(available[name], remaining_units_qty)
+        if allocated <= 0:
+            continue
+        allocations[name] = flt(allocations[name] + allocated, 6)
+        available[name] = flt(available[name] - allocated, 6)
+        remaining_units_qty = flt(remaining_units_qty - allocated, 6)
+
+    if remaining_units_qty > 0.000001:
+        total_units_available = flt(
+            sum(max(0, qty) for qty in available.values()) * pack_size,
+            6,
+        )
+        frappe.throw(
+            _(
+                "Insufficient loose-unit stock. Required Units: {0}, available Units: {1}."
+            ).format(unit_qty, total_units_available)
+        )
+
+    result = []
+    by_name = {row.get(name_field): row for row in ordered}
+    for name, qty in allocations.items():
+        if qty <= 0.000001:
+            continue
+        result.append(frappe._dict({"source": by_name[name], "qty": flt(qty, 6)}))
+    return result
+
+
+def _allocate_batches_by_pack(
+    item_code,
+    warehouse,
+    box_qty,
+    unit_qty,
+    pack_size,
+    preferred_batch=None,
+    strict_preferred=False,
+):
+    batches = _get_available_batches(item_code, warehouse)
+    raw_allocations = _allocate_pack_sources(
+        batches,
+        box_qty,
+        unit_qty,
+        pack_size,
+        preferred_name=preferred_batch,
+        strict_preferred=strict_preferred,
+        name_field="name",
+        qty_field="qty",
+        source_label=_("Batch"),
+    )
+    allocations = []
+    for raw in raw_allocations:
+        batch = raw.source
+        if cint(batch.get("price_integrity_error")):
+            frappe.throw(
+                _(
+                    "Batch {0} is marked as priced from a Purchase Invoice, "
+                    "but its retail price is missing."
+                ).format(batch.name)
+            )
+        customer_price = flt(batch.get("customer_price"))
+        if customer_price <= 0:
+            frappe.throw(_("Customer Price is missing for Batch {0}.").format(batch.name))
+        allocations.append(
+            frappe._dict(
+                {
+                    "batch_no": batch.name,
+                    "qty": raw.qty,
+                    "customer_price": customer_price,
+                    "batch_price": flt(batch.get("batch_price")),
+                    "price_source": batch.get("price_source"),
+                }
+            )
+        )
+    return allocations
+
+
+def _allocate_retail_lots_by_pack(
+    item_code,
+    warehouse,
+    box_qty,
+    unit_qty,
+    pack_size,
+    preferred_lot=None,
+    strict_preferred=False,
+):
+    lots = get_available_retail_lots(item_code, warehouse)
+    raw_allocations = _allocate_pack_sources(
+        lots,
+        box_qty,
+        unit_qty,
+        pack_size,
+        preferred_name=preferred_lot,
+        strict_preferred=strict_preferred,
+        name_field="name",
+        qty_field="available_qty",
+        source_label=_("Retail Price Lot"),
+    )
+    allocations = []
+    for raw in raw_allocations:
+        lot = raw.source
+        customer_price = flt(lot.get("retail_price"))
+        if customer_price <= 0:
+            frappe.throw(
+                _("Customer Price is missing for Retail Price Lot {0}.").format(lot.name)
+            )
+        allocations.append(
+            frappe._dict(
+                {
+                    "retail_price_lot": lot.name,
+                    "qty": raw.qty,
+                    "customer_price": customer_price,
+                    "batch_price": 0,
+                    "price_source": "Internal Retail Price Lot",
+                }
+            )
+        )
+    return allocations
+
 
 def _item_context(item_code, warehouse=None):
-    fields = ["name", "item_code", "item_name", "stock_uom", "has_batch_no", "image"]
+    fields = ["name", "item_code", "item_name", "stock_uom", "has_batch_no", "is_stock_item", "image"]
 
     for fieldname in [
         "custom_customer_price",
@@ -953,6 +1337,8 @@ def _item_context(item_code, warehouse=None):
         frappe.throw(_("Item {0} was not found.").format(item_code))
 
     item.batches = []
+    item.retail_lots = []
+    item.tracked_retail_lot_qty = 0
 
     if cint(item.has_batch_no) and warehouse:
         item.batches = _get_available_batches(item_code, warehouse)
@@ -965,6 +1351,11 @@ def _item_context(item_code, warehouse=None):
                 "actual_qty",
             )
             or 0
+        )
+        item.retail_lots = get_available_retail_lots(item_code, warehouse)
+        item.tracked_retail_lot_qty = flt(
+            sum(flt(lot.available_qty) for lot in item.retail_lots),
+            6,
         )
     else:
         item.actual_qty = flt(
@@ -1394,6 +1785,67 @@ def get_settings():
         "receipt_paper_width": settings.get("receipt_paper_width") or "80 mm",
     }
 
+def _source_search_result(match, warehouse):
+    item = _item_context(match.item_code, warehouse)
+    result = frappe._dict(
+        {
+            "name": item.name,
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "item_name_ar": item.get("custom_item_name_ar") or "",
+            "search_keywords": item.get("custom_search_keywords") or "",
+            "image": item.image,
+            "stock_uom": item.stock_uom,
+            "has_batch_no": cint(item.has_batch_no),
+            "customer_price": flt(item.get("custom_customer_price")),
+            "item_origin": item.get("custom_item_origin") or "",
+            "pack_size": flt(item.get("custom_pack_size") or 1) or 1,
+            "box_only": cint(item.get("custom_box_only")),
+            "actual_qty": flt(item.actual_qty),
+            "ingredient_summary": item.get("ingredient_summary") or "",
+            "matched_source_type": match.source_type,
+            "matched_source_name": match.source_name,
+            "matched_source_mode": "manual",
+            "exact_source_match": cint(match.exact),
+        }
+    )
+
+    if match.source_type == "batch":
+        source = next(
+            (
+                batch
+                for batch in (item.batches or [])
+                if batch.name == match.source_name
+            ),
+            None,
+        )
+        if not source or flt(source.qty) <= 0:
+            return None
+        result.matched_batch_no = source.name
+        result.source_qty = flt(source.qty)
+        result.source_expiry_date = source.expiry_date
+        result.customer_price = flt(source.customer_price)
+        result.source_label = _("Batch {0}").format(source.name)
+    else:
+        source = next(
+            (
+                lot
+                for lot in (item.retail_lots or [])
+                if lot.name == match.source_name
+            ),
+            None,
+        )
+        if not source or flt(source.available_qty) <= 0:
+            return None
+        result.matched_retail_price_lot = source.name
+        result.source_qty = flt(source.available_qty)
+        result.source_expiry_date = source.expiry_date
+        result.customer_price = flt(source.retail_price)
+        result.source_label = _("Price Lot {0}").format(source.name)
+
+    return result
+
+
 @frappe.whitelist()
 def search_items(txt="", warehouse=None):
     raw, like_txt, compact_txt = _search_pattern(txt)
@@ -1403,6 +1855,15 @@ def search_items(txt="", warehouse=None):
     settings = _get_settings()
     warehouse = warehouse or settings.get("default_warehouse") or ""
     limit = _safe_limit(settings.get("search_limit"), 20, 100)
+
+    source_rows = []
+    for match in find_source_matches(raw, warehouse, limit):
+        try:
+            source_row = _source_search_result(match, warehouse)
+        except Exception:
+            source_row = None
+        if source_row:
+            source_rows.append(source_row)
 
     customer_price_sql = "i.custom_customer_price" if _has_field("Item", "custom_customer_price") else "0"
     origin_sql = "i.custom_item_origin" if _has_field("Item", "custom_item_origin") else "''"
@@ -1457,7 +1918,7 @@ def search_items(txt="", warehouse=None):
         child_join = master_join = ingredient_search_sql = ""
         ingredient_summary_sql = "''"
 
-    return frappe.db.sql(
+    item_rows = frappe.db.sql(
         f"""
         SELECT
             i.name,
@@ -1519,6 +1980,23 @@ def search_items(txt="", warehouse=None):
         },
         as_dict=True,
     )
+
+    combined = []
+    seen = set()
+    for row in source_rows + item_rows:
+        key = (
+            row.get("item_code") or row.get("name"),
+            row.get("matched_source_type") or "item",
+            row.get("matched_source_name") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append(row)
+        if len(combined) >= limit:
+            break
+    return combined
+
 
 @frappe.whitelist()
 def get_item(item_code, warehouse=None):
@@ -2262,7 +2740,7 @@ def get_held_invoice(invoice):
         frappe.throw(_("You cannot recall this invoice."))
 
     customer = frappe.db.get_value("Customer", doc.customer, ["name", "customer_name", "mobile_no"], as_dict=True)
-    items = []
+    items_by_key = {}
     delivery_fee_item = _get_settings().get("delivery_fee_item") or ""
     for row in doc.items:
         if delivery_fee_item and row.item_code == delivery_fee_item:
@@ -2274,8 +2752,11 @@ def get_held_invoice(invoice):
             box_qty = int(flt(row.qty))
             unit_qty = flt((flt(row.qty) - box_qty) * pack_size, 6)
         context = _item_context(row.item_code, row.warehouse or doc.set_warehouse)
-        items.append(
-            {
+        source_mode = str(row.get("custom_stock_source_mode") or "Auto").strip().lower()
+        row_key = row.get("custom_pos_row_key") or row.name
+        if row_key not in items_by_key:
+            items_by_key[row_key] = {
+                "row_key": row_key,
                 "item_code": row.item_code,
                 "item_name": row.item_name,
                 "item_name_ar": context.get("custom_item_name_ar") or "",
@@ -2285,25 +2766,44 @@ def get_held_invoice(invoice):
                 "actual_qty": context.actual_qty,
                 "has_batch_no": context.has_batch_no,
                 "batches": context.batches,
-                "batch_no": row.batch_no or "",
+                "retail_lots": context.get("retail_lots") or [],
+                "stock_source_mode": source_mode,
+                "batch_no": row.batch_no if source_mode == "manual" else "",
+                "retail_price_lot": row.get(LOT_FIELD) if source_mode == "manual" else "",
                 "pack_size": pack_size,
                 "box_only": cint(context.get("custom_box_only")),
                 "item_origin": context.get("custom_item_origin") or "",
-                "general_customer_price": flt(
-                    context.get("custom_customer_price")
-                    or row.price_list_rate
-                    or row.rate
-                ),
-                "customer_price": flt(row.price_list_rate or row.rate),
-                "price_list_rate": flt(row.price_list_rate or row.rate),
+                "general_customer_price": flt(context.get("custom_customer_price") or row.price_list_rate or row.rate),
+                "customer_price": 0,
+                "price_list_rate": 0,
                 "discount_percentage": flt(row.discount_percentage),
-                "rate": flt(row.rate),
-                "box_qty": box_qty,
-                "unit_qty": unit_qty,
-                "qty": flt(row.qty),
-                "total": flt(row.amount),
+                "rate": 0,
+                "box_qty": 0,
+                "unit_qty": 0,
+                "qty": 0,
+                "total": 0,
+                "_gross": 0,
+                "_net": 0,
             }
-        )
+        item_row = items_by_key[row_key]
+        item_row["box_qty"] = flt(item_row["box_qty"] + box_qty, 6)
+        item_row["unit_qty"] = flt(item_row["unit_qty"] + unit_qty, 6)
+        item_row["qty"] = flt(item_row["qty"] + flt(row.qty), 6)
+        item_row["total"] = flt(item_row["total"] + flt(row.amount), 6)
+        item_row["_gross"] = flt(item_row["_gross"] + flt(row.qty) * flt(row.price_list_rate or row.rate), 6)
+        item_row["_net"] = flt(item_row["_net"] + flt(row.qty) * flt(row.rate), 6)
+
+    items = []
+    for item_row in items_by_key.values():
+        qty = flt(item_row.pop("qty") or 0, 6)
+        gross = flt(item_row.pop("_gross") or 0, 6)
+        net = flt(item_row.pop("_net") or 0, 6)
+        item_row["qty"] = qty
+        item_row["customer_price"] = flt(gross / qty, 6) if qty else 0
+        item_row["price_list_rate"] = item_row["customer_price"]
+        item_row["rate"] = flt(net / qty, 6) if qty else 0
+        items.append(item_row)
+
 
     return {
         "name": doc.name,
@@ -2655,10 +3155,11 @@ def _append_invoice_items(doc, data, context):
         if cint(item.get("custom_box_only")):
             unit_qty = 0
 
-        qty = flt(item_data.get("qty")) or flt(
-            box_qty + (unit_qty / pack_size),
-            6,
-        )
+        qty = flt(box_qty + (unit_qty / pack_size), 6)
+        if qty <= 0 and flt(item_data.get("qty")) > 0:
+            qty = flt(item_data.get("qty"), 6)
+            box_qty = int(qty)
+            unit_qty = flt((qty - box_qty) * pack_size, 6)
         if qty <= 0:
             frappe.throw(
                 _("Quantity must be greater than zero for item {0}.").format(
@@ -2686,6 +3187,11 @@ def _append_invoice_items(doc, data, context):
                 )
             )
 
+        stock_source_mode = str(
+            item_data.get("stock_source_mode") or "auto"
+        ).strip().lower()
+        strict_source = stock_source_mode == "manual"
+
         if cint(item.get("has_batch_no")):
             if not context.warehouse:
                 frappe.throw(
@@ -2693,17 +3199,47 @@ def _append_invoice_items(doc, data, context):
                         item_code
                     )
                 )
-            allocations = _allocate_batches(
+            allocations = _allocate_batches_by_pack(
                 item_code,
                 context.warehouse,
-                qty,
-                item_data.get("batch_no"),
+                box_qty,
+                unit_qty,
+                pack_size,
+                item_data.get("batch_no") if strict_source else None,
+                strict_source,
             )
+        elif cint(item.get("is_stock_item", 1)) and context.warehouse and frappe.db.exists("DocType", LOT_DOCTYPE):
+            available_lots = get_available_retail_lots(item_code, context.warehouse)
+            preferred_lot = item_data.get("retail_price_lot") if strict_source else None
+            if available_lots or preferred_lot:
+                allocations = _allocate_retail_lots_by_pack(
+                    item_code,
+                    context.warehouse,
+                    box_qty,
+                    unit_qty,
+                    pack_size,
+                    preferred_lot,
+                    strict_source,
+                )
+            else:
+                allocations = [
+                    frappe._dict(
+                        {
+                            "batch_no": "",
+                            "retail_price_lot": "",
+                            "qty": qty,
+                            "customer_price": item_customer_price,
+                            "batch_price": 0,
+                            "price_source": "Item Customer Price",
+                        }
+                    )
+                ]
         else:
             allocations = [
                 frappe._dict(
                     {
                         "batch_no": "",
+                        "retail_price_lot": "",
                         "qty": qty,
                         "customer_price": item_customer_price,
                         "batch_price": 0,
@@ -2737,8 +3273,16 @@ def _append_invoice_items(doc, data, context):
                 "cost_center",
             ):
                 row.cost_center = context.cost_center
-            if allocation.batch_no:
+            if allocation.get("batch_no"):
                 row.batch_no = allocation.batch_no
+            if allocation.get("retail_price_lot") and _has_field(
+                "Sales Invoice Item", LOT_FIELD
+            ):
+                row.set(LOT_FIELD, allocation.retail_price_lot)
+            if _has_field("Sales Invoice Item", "custom_stock_source_mode"):
+                row.custom_stock_source_mode = stock_source_mode.title()
+            if _has_field("Sales Invoice Item", "custom_pos_row_key"):
+                row.custom_pos_row_key = item_data.get("row_key") or ""
 
             if len(allocations) == 1:
                 allocated_boxes = box_qty
@@ -3798,7 +4342,24 @@ def create_sales_return(data):
         frappe.throw(_("Invalid return mode."))
 
     refund_payments = data.get("payments") or []
-    keep_as_credit = cint(data.get("keep_as_credit", 1))
+    keep_as_credit = cint(data.get("keep_as_credit", 0))
+    customer_credit_note = " ".join(str(data.get("customer_credit_note") or "").split()).strip()
+    if len(customer_credit_note) > 500:
+        frappe.throw(_("Customer credit note cannot exceed 500 characters."))
+
+    if keep_as_credit and _is_default_pos_customer(return_doc.customer):
+        if not customer_credit_note:
+            frappe.throw(
+                _(
+                    "A detailed note is required before keeping a Cash Customer refund as customer credit. "
+                    "Use a registered customer whenever the shopper must be identified."
+                )
+            )
+        audit_note = _(
+            "Cash Customer refund retained as customer credit. Note: {0}. Approved by: {1}."
+        ).format(customer_credit_note, frappe.session.user)
+        existing_remarks = str(return_doc.get("remarks") or "").strip()
+        return_doc.remarks = f"{existing_remarks}\n{audit_note}".strip()
 
     # A delivery order returned before collecting from the customer is a
     # reversal of an unpaid invoice, not a new customer credit.  Preserve the
@@ -3859,6 +4420,7 @@ def create_sales_return(data):
         "customer": return_doc.customer,
         "keep_as_credit": keep_as_credit,
         "credit_amount": abs(flt(return_doc.outstanding_amount)) if keep_as_credit else 0,
+        "customer_credit_note": customer_credit_note if keep_as_credit else "",
         "delivery_return_linked": bool(workflow_result.get("linked")) if source_doc else False,
         "delivery_return_complete": bool(workflow_result.get("complete")) if source_doc else False,
         "delivery_return_pending_amount": flt(workflow_result.get("pending_amount")) if source_doc else 0,

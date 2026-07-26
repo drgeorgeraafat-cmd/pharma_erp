@@ -17,14 +17,33 @@ window.InvoiceManager = {
     },
 
     async addItem(itemCode, options = {}) {
-        const existing = PharmacyPOS.state.items.find(row => row.item_code === itemCode && (!options.batch_no || row.batch_no === options.batch_no));
+        const requestedSource = options.batch_no || options.retail_price_lot || "";
+        const requestedMode = requestedSource || options.stock_source_mode === "manual"
+            ? "manual"
+            : "auto";
+        const existing = !options.force_new_line
+            ? PharmacyPOS.state.items.find(row => {
+                const rowSource = row.batch_no || row.retail_price_lot || "";
+                return row.item_code === itemCode
+                    && (row.stock_source_mode || "auto") === requestedMode
+                    && rowSource === requestedSource;
+            })
+            : null;
+
         if (existing) {
-            existing.box_qty = flt(existing.box_qty) + flt(options.box_qty || 1);
-            existing.unit_qty = flt(existing.unit_qty) + flt(options.unit_qty || 0);
+            const incrementBoxes = Object.prototype.hasOwnProperty.call(options, "box_qty")
+                ? flt(options.box_qty)
+                : (this.canSupplyFullBox(existing) ? 1 : 0);
+            const incrementUnits = Object.prototype.hasOwnProperty.call(options, "unit_qty")
+                ? flt(options.unit_qty)
+                : 0;
+            existing.box_qty = flt(existing.box_qty) + incrementBoxes;
+            existing.unit_qty = flt(existing.unit_qty) + incrementUnits;
             this.recalculateRow(existing);
             this.selectBestBatch(existing);
             DeliveryManager.recalculateFee();
             this.render();
+            if (!incrementBoxes && !incrementUnits) this.focusUnits(existing);
             return existing;
         }
 
@@ -35,6 +54,7 @@ window.InvoiceManager = {
             if (!item) return null;
             const basePrice = flt(item.custom_customer_price || item.customer_price || options.rate || 0);
             const row = {
+                row_key: Math.random().toString(36).slice(2, 12),
                 item_code: item.item_code || item.name,
                 item_name: item.item_name || item.item_code || item.name,
                 item_name_ar: item.custom_item_name_ar || item.item_name_ar || "",
@@ -44,7 +64,10 @@ window.InvoiceManager = {
                 actual_qty: flt(item.actual_qty || 0),
                 has_batch_no: cint(item.has_batch_no),
                 batches: item.batches || [],
+                retail_lots: item.retail_lots || [],
+                stock_source_mode: requestedMode,
                 batch_no: options.batch_no || "",
+                retail_price_lot: options.retail_price_lot || "",
                 pack_size: flt(item.custom_pack_size || item.pack_size || options.pack_size || 1) || 1,
                 box_only: cint(item.custom_box_only || item.box_only),
                 item_origin: item.custom_item_origin || item.item_origin || "",
@@ -53,14 +76,26 @@ window.InvoiceManager = {
                 batch_price: 0,
                 price_source: "Item Customer Price",
                 price_integrity_error: 0,
+                source_allocations: [],
+                source_error: "",
+                mixed_source_price: 0,
                 price_list_rate: basePrice,
                 discount_percentage: flt(options.discount_percentage || 0),
                 rate: flt(options.rate || basePrice),
-                box_qty: flt(options.box_qty || 1),
+                box_qty: 0,
                 unit_qty: flt(options.unit_qty || 0),
                 qty: 0,
-                total: 0
+                total: 0,
+                focus_units: 0
             };
+
+            if (Object.prototype.hasOwnProperty.call(options, "box_qty")) {
+                row.box_qty = flt(options.box_qty);
+            } else {
+                row.box_qty = this.canSupplyFullBox(row) ? 1 : 0;
+                row.focus_units = row.box_qty ? 0 : 1;
+            }
+
             if (!options.rate) this.applyContractPrice(row);
             this.recalculateRow(row);
             this.selectBestBatch(row);
@@ -68,6 +103,7 @@ window.InvoiceManager = {
             DeliveryManager.recalculateFee();
             this.render();
             PharmacyPOS.setStatus(__("Ready"), "success");
+            if (row.focus_units) this.focusUnits(row);
             return row;
         } catch (error) {
             console.error(error);
@@ -123,8 +159,8 @@ window.InvoiceManager = {
     },
 
     recalculateRow(row) {
-        row.box_qty = Math.max(0, flt(row.box_qty));
-        row.unit_qty = row.box_only ? 0 : Math.max(0, flt(row.unit_qty));
+        row.box_qty = Math.max(0, Math.round(flt(row.box_qty)));
+        row.unit_qty = row.box_only ? 0 : Math.max(0, Math.round(flt(row.unit_qty)));
         row.pack_size = flt(row.pack_size || 1) || 1;
         row.qty = flt(row.box_qty + row.unit_qty / row.pack_size, 6);
         row.total = flt(row.qty * flt(row.rate), 6);
@@ -134,55 +170,93 @@ window.InvoiceManager = {
         return flt(PharmacyPOS.state.items.reduce((total, row) => total + flt(row.total || 0), 0), 6);
     },
 
-    getBatch(row, batchNo) {
-        return (row.batches || []).find(
-            item => (item.name || item.batch_no) === batchNo
-        ) || null;
+    getSources(row) {
+        if (row.has_batch_no) {
+            return (row.batches || []).filter(source => flt(source.qty || 0) > 0).map(source => ({
+                ...source,
+                source_type: "batch",
+                source_name: source.name || source.batch_no,
+                available_qty: flt(source.qty || 0),
+                customer_price: flt(source.customer_price || 0)
+            }));
+        }
+        return (row.retail_lots || []).filter(source => flt(source.available_qty || 0) > 0).map(source => ({
+            ...source,
+            source_type: "retail_lot",
+            source_name: source.name,
+            available_qty: flt(source.available_qty || 0),
+            customer_price: flt(source.retail_price || source.customer_price || 0)
+        }));
     },
 
-    getBatchQty(row, batchNo) {
-        return flt(this.getBatch(row, batchNo)?.qty || 0, 6);
+    selectedSourceName(row) {
+        return row.has_batch_no ? (row.batch_no || "") : (row.retail_price_lot || "");
     },
 
-    getTotalBatchQty(row) {
-        return flt(
-            (row.batches || []).reduce(
-                (total, batch) => total + flt(batch.qty || 0),
-                0
-            ),
-            6
-        );
+    getSelectedSource(row) {
+        const name = this.selectedSourceName(row);
+        return this.getSources(row).find(source => source.source_name === name) || null;
     },
 
-    getBatchAllocations(row) {
-        const batches = (row.batches || []).filter(
-            batch => flt(batch.qty || 0) > 0
-        );
-        const preferred = this.getBatch(row, row.batch_no);
-        const ordered = preferred
-            ? [preferred, ...batches.filter(batch => batch !== preferred)]
-            : batches;
+    getTotalSourceQty(row) {
+        return flt(this.getSources(row).reduce((total, source) => total + flt(source.available_qty), 0), 6);
+    },
 
-        let remaining = flt(row.qty || 0, 6);
-        const allocations = [];
+    canSupplyFullBox(row) {
+        const sources = this.getSources(row);
+        if (!sources.length) return flt(row.actual_qty || 0) >= 1;
+        if ((row.stock_source_mode || "auto") === "manual") {
+            return flt(this.getSelectedSource(row)?.available_qty || 0) >= 1;
+        }
+        return sources.some(source => flt(source.available_qty) >= 1);
+    },
 
-        ordered.forEach(batch => {
-            if (remaining <= 1e-9) return;
-            const allocatedQty = Math.min(
-                flt(batch.qty || 0),
-                remaining
-            );
-            if (allocatedQty <= 0) return;
-            allocations.push({
-                batch,
-                qty: flt(allocatedQty, 6)
-            });
-            remaining = flt(remaining - allocatedQty, 6);
+    getSourceAllocations(row) {
+        const allSources = this.getSources(row);
+        const selected = this.getSelectedSource(row);
+        const manual = (row.stock_source_mode || "auto") === "manual";
+        const sources = manual
+            ? (selected ? [selected] : [])
+            : allSources;
+        const available = new Map(sources.map(source => [source.source_name, flt(source.available_qty)]));
+        const allocated = new Map(sources.map(source => [source.source_name, 0]));
+        let remainingBoxes = Math.max(0, Math.round(flt(row.box_qty)));
+
+        sources.forEach(source => {
+            if (remainingBoxes <= 0) return;
+            const name = source.source_name;
+            const fullBoxes = Math.floor(Math.max(0, available.get(name) || 0));
+            if (!fullBoxes) return;
+            const qty = Math.min(fullBoxes, remainingBoxes);
+            allocated.set(name, flt((allocated.get(name) || 0) + qty, 6));
+            available.set(name, flt((available.get(name) || 0) - qty, 6));
+            remainingBoxes -= qty;
         });
+
+        let remainingUnitQty = flt(flt(row.unit_qty || 0) / (flt(row.pack_size || 1) || 1), 6);
+        sources.forEach(source => {
+            if (remainingUnitQty <= 1e-9) return;
+            const name = source.source_name;
+            const qty = Math.min(flt(available.get(name) || 0), remainingUnitQty);
+            if (qty <= 0) return;
+            allocated.set(name, flt((allocated.get(name) || 0) + qty, 6));
+            available.set(name, flt((available.get(name) || 0) - qty, 6));
+            remainingUnitQty = flt(remainingUnitQty - qty, 6);
+        });
+
+        const allocations = sources
+            .filter(source => flt(allocated.get(source.source_name) || 0) > 1e-9)
+            .map(source => ({
+                source,
+                qty: flt(allocated.get(source.source_name), 6)
+            }));
 
         return {
             allocations,
-            remaining: flt(remaining, 6)
+            remainingBoxes,
+            remainingUnitQty,
+            manual,
+            sourceMissing: manual && !selected
         };
     },
 
@@ -195,46 +269,61 @@ window.InvoiceManager = {
             || 0
         );
         row.general_customer_price = generalPrice;
+        row.source_error = "";
+        row.price_integrity_error = 0;
 
-        if (!row.has_batch_no || !row.batch_no) {
-            row.batch_price = 0;
-            row.price_source = "Item Customer Price";
-            row.price_integrity_error = 0;
+        const sources = this.getSources(row);
+        if (!sources.length) {
+            row.source_allocations = [];
+            row.mixed_source_price = 0;
             row.customer_price = generalPrice;
+            row.price_source = "Item Customer Price";
             this.applyContractPrice(row, preserveDiscount);
             return;
         }
 
-        const pricing = this.getBatchAllocations(row);
-        const allocatedQty = flt(
-            pricing.allocations.reduce(
-                (total, allocation) => total + flt(allocation.qty || 0),
-                0
-            ),
-            6
-        );
-        const hasIntegrityError = pricing.allocations.some(
-            allocation => cint(
-                allocation.batch.price_integrity_error || 0
-            )
-        );
-        const hasMissingPrice = pricing.allocations.some(
-            allocation => flt(
-                allocation.batch.customer_price || 0
-            ) <= 0
-        );
+        const pricing = this.getSourceAllocations(row);
+        row.source_allocations = pricing.allocations;
+        if (pricing.sourceMissing) {
+            row.source_error = __("Select a valid stock source.");
+        } else if (pricing.remainingBoxes > 0) {
+            const selectedSource = this.getSelectedSource(row);
+            if (pricing.manual && selectedSource) {
+                const availableBoxes = Math.floor(Math.max(0, flt(selectedSource.available_qty || 0)));
+                row.source_error = __("Selected stock source has {0} complete box(es), but {1} were requested. Reduce Boxes, choose Auto allocation, or add another line.")
+                    .format(availableBoxes, Math.max(0, Math.round(flt(row.box_qty || 0))));
+            } else {
+                row.source_error = __("Requested complete boxes cannot be supplied from the available stock sources. Reduce Boxes or add another line.");
+            }
+        } else if (pricing.remainingUnitQty > 1e-9) {
+            row.source_error = __("Insufficient loose-unit stock.");
+        }
 
-        row.price_integrity_error = cint(
-            hasIntegrityError || hasMissingPrice
+        const hasIntegrityError = pricing.allocations.some(allocation =>
+            cint(allocation.source.price_integrity_error || 0)
+            || flt(allocation.source.customer_price || 0) <= 0
         );
+        row.price_integrity_error = cint(hasIntegrityError);
 
-        if (
-            row.price_integrity_error
-            || allocatedQty <= 0
-        ) {
-            row.batch_price = 0;
-            row.price_source = "Batch Price Error";
+        const allocatedQty = flt(pricing.allocations.reduce(
+            (total, allocation) => total + flt(allocation.qty || 0), 0
+        ), 6);
+
+        if (row.price_integrity_error) {
             row.customer_price = 0;
+            row.price_source = "Stock Source Price Error";
+            row.mixed_source_price = 0;
+            this.applyContractPrice(row, preserveDiscount);
+            return;
+        }
+
+        if (allocatedQty <= 1e-9) {
+            const previewSource = this.getSelectedSource(row) || sources[0];
+            row.customer_price = flt(previewSource?.customer_price || generalPrice);
+            row.price_source = previewSource?.source_type === "batch"
+                ? (previewSource.price_source || "Batch Price")
+                : "Internal Retail Price Lot";
+            row.mixed_source_price = 0;
             this.applyContractPrice(row, preserveDiscount);
             return;
         }
@@ -242,72 +331,78 @@ window.InvoiceManager = {
         const grossAmount = pricing.allocations.reduce(
             (total, allocation) => total
                 + flt(allocation.qty || 0)
-                * flt(allocation.batch.customer_price || 0),
+                * flt(allocation.source.customer_price || 0),
             0
         );
-        row.customer_price = flt(
-            grossAmount / allocatedQty,
-            6
-        );
-
-        if (pricing.allocations.length === 1) {
-            const selectedBatch = pricing.allocations[0].batch;
-            row.batch_price = flt(selectedBatch.batch_price || 0);
-            row.price_source = selectedBatch.price_source
-                || "Item Customer Price";
-        } else {
-            row.batch_price = 0;
-            row.price_source = "Mixed Batch Price";
-        }
-
+        row.customer_price = flt(grossAmount / allocatedQty, 6);
+        const distinctPrices = [...new Set(pricing.allocations.map(
+            allocation => flt(allocation.source.customer_price || 0, 6)
+        ))];
+        row.mixed_source_price = cint(distinctPrices.length > 1);
+        row.price_source = row.mixed_source_price
+            ? "Mixed Stock Source Prices"
+            : (pricing.allocations[0].source.source_type === "batch"
+                ? (pricing.allocations[0].source.price_source || "Batch Price")
+                : "Internal Retail Price Lot");
         this.applyContractPrice(row, preserveDiscount);
     },
 
     selectBestBatch(row) {
-        if (!row.has_batch_no) {
+        const sources = this.getSources(row);
+        if (!sources.length) {
+            row.stock_source_mode = "auto";
             row.batch_no = "";
-            row.batch_qty = 0;
+            row.retail_price_lot = "";
             this.applySelectedBatchPrice(row, true);
+            this.recalculateRow(row);
             return;
         }
-
-        const batches = (row.batches || []).filter(
-            batch => flt(batch.qty || 0) > 0
-        );
-        if (!batches.length) {
+        if ((row.stock_source_mode || "auto") !== "manual") {
+            row.stock_source_mode = "auto";
             row.batch_no = "";
-            row.batch_qty = 0;
-            this.applySelectedBatchPrice(row, true);
-            return;
+            row.retail_price_lot = "";
         }
-
-        const currentQty = this.getBatchQty(row, row.batch_no);
-        if (
-            row.batch_no
-            && currentQty + 1e-9 >= flt(row.qty)
-        ) {
-            row.batch_qty = currentQty;
-            this.applySelectedBatchPrice(row, true);
-            return;
-        }
-
-        if (!cint(PharmacyPOS.state.settings.auto_batch_selection)) {
-            this.applySelectedBatchPrice(row, true);
-            return;
-        }
-
-        const selected = batches.find(
-            batch => flt(batch.qty || 0) + 1e-9 >= flt(row.qty)
-        ) || batches[0];
-        row.batch_no = selected.name || selected.batch_no;
-        row.batch_qty = flt(selected.qty || 0, 6);
         this.applySelectedBatchPrice(row, true);
+        // Stock-source pricing may differ from the Item's current general price.
+        // Recalculate immediately so totals never show the source-price difference
+        // as a false customer discount.
+        this.recalculateRow(row);
+    },
+
+    formatStock(row) {
+        const qty = Math.max(0, flt(row.actual_qty || 0));
+        const packSize = flt(row.pack_size || 1) || 1;
+        const boxes = Math.floor(qty + 1e-9);
+        const units = Math.max(0, Math.round((qty - boxes) * packSize));
+        return `${boxes} ${boxes === 1 ? __("Box") : __("Boxes")} + ${units} ${units === 1 ? __("Unit") : __("Units")}`;
+    },
+
+    allocationSummary(row) {
+        const allocations = row.source_allocations || [];
+        if (row.source_error) return `<small class="source-error">${frappe.utils.escape_html(row.source_error)}</small>`;
+        if (!allocations.length) {
+            const hasTrackedSources = this.getSources(row).length > 0;
+            if (!hasTrackedSources && !row.has_batch_no) {
+                return `<small>${__("Item Customer Price applies to all stock")}</small>`;
+            }
+            return `<small>${(row.stock_source_mode || "auto") === "auto" ? __("Auto allocation • FEFO / oldest lot") : __("Manual source")}</small>`;
+        }
+        const details = allocations.map(allocation => {
+            const source = allocation.source;
+            const name = source.source_name;
+            const units = flt(allocation.qty) * flt(row.pack_size || 1);
+            return `${name}: ${flt(allocation.qty, 3)} Box (${flt(units, 2)} Units) @ ${format_currency(source.customer_price || 0)}`;
+        });
+        const heading = allocations.length > 1
+            ? `${__("Auto")}: ${allocations.length} ${__("sources")}`
+            : details[0];
+        return `<details class="source-allocation-details" ${allocations.length > 1 ? "" : "open"}><summary>${frappe.utils.escape_html(heading)}</summary>${allocations.length > 1 ? `<small>${details.map(detail => frappe.utils.escape_html(detail)).join("<br>")}</small>` : ""}</details>`;
     },
 
     expiryWarning(row) {
-        const batch = (row.batches || []).find(item => (item.name || item.batch_no) === row.batch_no);
-        if (!batch?.expiry_date) return "";
-        const expiry = new Date(`${batch.expiry_date}T00:00:00`);
+        const source = this.getSelectedSource(row);
+        if (!source?.expiry_date) return "";
+        const expiry = new Date(`${source.expiry_date}T00:00:00`);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const days = Math.ceil((expiry.getTime() - today.getTime()) / 86400000);
@@ -335,35 +430,42 @@ window.InvoiceManager = {
         const items = PharmacyPOS.state.items;
         if (!items.length) {
             const deliveryRow = this.deliveryRowHtml(1);
-            this.body.innerHTML = deliveryRow || '<tr class="empty-row"><td colspan="10">Search for an item or scan a barcode.</td></tr>';
+            this.body.innerHTML = deliveryRow || '<tr class="empty-row"><td colspan="10">Search for an item, Batch, Price Lot, Barcode, or QR.</td></tr>';
             this.updateTotals();
             return;
         }
 
         const productRows = items.map((row, index) => {
-            const batchOptions = row.has_batch_no
-                ? `<option value="">Select batch</option>${(row.batches || []).map(batch => {
-                    const name = batch.name || batch.batch_no;
-                    const price = flt(batch.customer_price || 0);
-                    const integrityLabel = cint(batch.price_integrity_error)
-                        ? " - PRICE ERROR"
-                        : ` - Price: ${format_currency(price)}`;
-                    return `<option value="${frappe.utils.escape_html(name)}" ${name === row.batch_no ? "selected" : ""}>${frappe.utils.escape_html(name)}${batch.expiry_date ? ` - ${frappe.utils.escape_html(batch.expiry_date)}` : ""} - Stock: ${flt(batch.qty || 0, 2)}${integrityLabel}</option>`;
+            const sources = this.getSources(row);
+            const selectedName = this.selectedSourceName(row);
+            const sourceOptions = sources.length
+                ? `<option value="">${frappe.utils.escape_html(__("Auto allocation"))}</option>${sources.map(source => {
+                    const name = source.source_name;
+                    const typeLabel = source.source_type === "batch" ? __("Batch") : __("Lot");
+                    const price = flt(source.customer_price || 0);
+                    const integrityLabel = cint(source.price_integrity_error)
+                        ? ` - ${__("PRICE ERROR")}`
+                        : ` - ${format_currency(price)}`;
+                    const expiry = source.expiry_date ? ` - ${source.expiry_date}` : "";
+                    return `<option value="${frappe.utils.escape_html(name)}" ${name === selectedName ? "selected" : ""}>${frappe.utils.escape_html(typeLabel)} ${frappe.utils.escape_html(name)}${expiry} - ${__("Stock")}: ${flt(source.available_qty || 0, 3)}${integrityLabel}</option>`;
                 }).join("")}`
                 : '<option value="">N/A</option>';
-            const lowStock = flt(row.actual_qty) <= Math.max(1, flt(row.pack_size)) ? '<span class="row-warning" title="Low stock">Low</span>' : "";
+            const lowStock = flt(row.actual_qty) < 1 ? '<span class="row-warning" title="Less than one full box">Loose only</span>' : "";
             const subtitle = row.item_name_ar || row.ingredient_summary || row.item_code;
-            return `<tr data-row="${index}">
+            const priceHtml = row.mixed_source_price
+                ? `<strong>${__("Mixed")}</strong><small>${format_currency(row.price_list_rate || 0)} ${__("effective")}</small>`
+                : format_currency(row.price_list_rate || 0);
+            return `<tr data-row="${index}" data-row-key="${frappe.utils.escape_html(row.row_key || "")}">
                 <td>${index + 1}</td>
                 <td><button type="button" class="link-button item-info-link item-hover-target"><strong>${frappe.utils.escape_html(row.item_name)}</strong></button><small class="item-code">${frappe.utils.escape_html(subtitle)}</small>${lowStock}</td>
-                <td>${flt(row.actual_qty, 2)}</td>
-                <td><div class="batch-cell"><select class="row-batch" ${row.has_batch_no ? "" : "disabled"}>${batchOptions}</select>${this.expiryWarning(row)}</div></td>
+                <td><span title="${flt(row.actual_qty, 3)} Box">${frappe.utils.escape_html(this.formatStock(row))}</span></td>
+                <td><div class="batch-cell stock-source-cell"><select class="row-source" ${sources.length ? "" : "disabled"}>${sourceOptions}</select>${this.expiryWarning(row)}${this.allocationSummary(row)}</div></td>
                 <td><input class="row-boxes" type="number" min="0" step="1" value="${row.box_qty}"></td>
                 <td><input class="row-units" type="number" min="0" step="1" value="${row.unit_qty}" ${row.box_only ? "disabled" : ""}></td>
-                <td>${format_currency(row.price_list_rate || 0)}</td>
+                <td>${priceHtml}</td>
                 <td><input class="row-discount" type="number" min="0" max="100" step="0.01" value="${flt(row.discount_percentage || 0, 2)}"></td>
                 <td><strong>${format_currency(row.total || 0)}</strong></td>
-                <td><button type="button" class="remove-row" title="Remove">×</button></td>
+                <td><div class="row-actions"><button type="button" class="new-row" title="Add same item on a new line">＋</button><button type="button" class="remove-row" title="Remove">×</button></div></td>
             </tr>`;
         }).join("");
         this.body.innerHTML = productRows + this.deliveryRowHtml(items.length + 1);
@@ -371,22 +473,56 @@ window.InvoiceManager = {
         this.updateTotals();
     },
 
+    focusUnits(row) {
+        window.setTimeout(() => {
+            const key = CSS.escape(row.row_key || "");
+            this.body?.querySelector(`tr[data-row-key="${key}"] .row-units`)?.focus();
+        }, 50);
+    },
+
     bindRowEvents() {
         this.body.querySelectorAll("tr[data-row]").forEach(tr => {
             const index = cint(tr.dataset.row);
             const row = PharmacyPOS.state.items[index];
-            const updateQty = () => { this.recalculateRow(row); this.selectBestBatch(row); DeliveryManager.recalculateFee(); this.render(); };
+            const updateQty = () => {
+                this.recalculateRow(row);
+                this.selectBestBatch(row);
+                DeliveryManager.recalculateFee();
+                this.render();
+            };
             tr.querySelector(".row-boxes")?.addEventListener("change", event => { row.box_qty = flt(event.target.value); updateQty(); });
             tr.querySelector(".row-units")?.addEventListener("change", event => { row.unit_qty = flt(event.target.value); updateQty(); });
             tr.querySelector(".row-discount")?.addEventListener("change", event => { this.setRowDiscount(row, event.target.value); DeliveryManager.recalculateFee(); this.render(); });
-            tr.querySelector(".row-batch")?.addEventListener("change", event => {
-                row.batch_no = event.target.value || "";
-                row.batch_qty = this.getBatchQty(row, row.batch_no);
+            tr.querySelector(".row-source")?.addEventListener("change", event => {
+                const sourceName = event.target.value || "";
+                row.stock_source_mode = sourceName ? "manual" : "auto";
+                if (row.has_batch_no) {
+                    row.batch_no = sourceName;
+                    row.retail_price_lot = "";
+                } else {
+                    row.retail_price_lot = sourceName;
+                    row.batch_no = "";
+                }
+                const selectedSource = this.getSelectedSource(row);
+                if (sourceName && flt(selectedSource?.available_qty || 0) < 1 && flt(row.box_qty) > 0) {
+                    row.box_qty = 0;
+                    row.focus_units = 1;
+                }
                 this.applySelectedBatchPrice(row, true);
                 this.recalculateRow(row);
                 DeliveryManager.recalculateFee();
                 this.render();
+                if (row.focus_units) {
+                    row.focus_units = 0;
+                    this.focusUnits(row);
+                }
             });
+            tr.querySelector(".new-row")?.addEventListener("click", () => this.addItem(row.item_code, {
+                force_new_line: true,
+                box_qty: 0,
+                unit_qty: 0,
+                discount_percentage: row.discount_percentage
+            }));
             tr.querySelector(".remove-row")?.addEventListener("click", () => { PharmacyPOS.state.items.splice(index, 1); DeliveryManager.recalculateFee(); this.render(); });
             const link = tr.querySelector(".item-info-link");
             link?.addEventListener("click", () => ItemInfoManager.open(row.item_code));
@@ -429,17 +565,26 @@ window.InvoiceManager = {
         PharmacyPOS.state.items.forEach(row => {
             if (row.qty <= 0) frappe.throw(__("Item quantity must be greater than zero."));
             if (row.discount_percentage < 0 || row.discount_percentage > 100) frappe.throw(__("Discount must be between 0 and 100."));
-            if (row.has_batch_no) {
-                this.selectBestBatch(row);
-                const available = this.getTotalBatchQty(row);
-                if (available + 1e-9 < flt(row.qty)) frappe.throw(__("Insufficient batch stock for {0}. Required: {1}, available: {2}.").format(row.item_name, flt(row.qty, 2), flt(available, 2)));
-                if (!row.batch_no) frappe.throw(__("No available batch for {0}.").format(row.item_name));
+            this.selectBestBatch(row);
+            const sources = this.getSources(row);
+            if (sources.length) {
+                const pricing = this.getSourceAllocations(row);
+                if (row.source_error || pricing.remainingBoxes > 0 || pricing.remainingUnitQty > 1e-9) {
+                    frappe.throw(`${row.item_name}: ${row.source_error || __("Stock source allocation is incomplete.")}`);
+                }
+                const allocated = flt(pricing.allocations.reduce((total, allocation) => total + flt(allocation.qty || 0), 0), 6);
+                if (allocated + 1e-9 < flt(row.qty)) {
+                    frappe.throw(__("Insufficient tracked stock for {0}. Required: {1}, allocated: {2}.").format(row.item_name, flt(row.qty, 3), flt(allocated, 3)));
+                }
+                if ((row.stock_source_mode || "auto") === "manual" && !this.selectedSourceName(row)) {
+                    frappe.throw(__("Select a Batch or Retail Price Lot for {0}.").format(row.item_name));
+                }
                 if (cint(row.price_integrity_error)) {
-                    frappe.throw(__("The selected Batch for {0} is marked as priced from a Purchase Invoice, but its Customer Price is missing.").format(row.item_name));
+                    frappe.throw(__("A selected stock source for {0} has a missing Customer Price.").format(row.item_name));
                 }
-                if (flt(row.price_list_rate || 0) <= 0) {
-                    frappe.throw(__("Customer Price is missing for the selected Batch of {0}.").format(row.item_name));
-                }
+            }
+            if (flt(row.price_list_rate || 0) <= 0) {
+                frappe.throw(__("Customer Price is missing for {0}.").format(row.item_name));
             }
         });
         if (submit) PaymentManager.validateForSubmit();
@@ -468,9 +613,18 @@ window.InvoiceManager = {
             advance_allocations: PharmacyPOS.state.advanceAllocations || [],
             keep_excess_as_credit: PharmacyPOS.state.keepExcessAsCredit ? 1 : 0,
             items: PharmacyPOS.state.items.map(row => ({
-                item_code: row.item_code, batch_no: row.batch_no || "", box_qty: row.box_qty, unit_qty: row.unit_qty,
-                pack_size: row.pack_size, qty: row.qty, price_list_rate: row.price_list_rate,
-                discount_percentage: row.discount_percentage, rate: row.rate
+                item_code: row.item_code,
+                row_key: row.row_key || "",
+                stock_source_mode: row.stock_source_mode || "auto",
+                batch_no: row.stock_source_mode === "manual" ? (row.batch_no || "") : "",
+                retail_price_lot: row.stock_source_mode === "manual" ? (row.retail_price_lot || "") : "",
+                box_qty: row.box_qty,
+                unit_qty: row.unit_qty,
+                pack_size: row.pack_size,
+                qty: row.qty,
+                price_list_rate: row.price_list_rate,
+                discount_percentage: row.discount_percentage,
+                rate: row.rate
             }))
         };
     },

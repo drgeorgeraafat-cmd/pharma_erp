@@ -49,15 +49,19 @@ window.SearchManager = {
             const title = item.item_name || item.item_code;
             const subtitle = item.item_name_ar || item.ingredient_summary || item.item_code || item.name;
             const image = item.image ? `<img src="${frappe.utils.escape_html(item.image)}" alt="">` : '<span class="search-image-placeholder">💊</span>';
+            const sourceLine = item.matched_source_name
+                ? `<small class="search-source-line">${frappe.utils.escape_html(item.source_label || item.matched_source_name)} • ${__("Stock")}: ${flt(item.source_qty || 0, 3)}${item.source_expiry_date ? ` • ${frappe.utils.escape_html(item.source_expiry_date)}` : ""}</small>`
+                : "";
             return `<button type="button" class="search-item item-hover-target ${index === this.activeIndex ? "is-active" : ""}" data-index="${index}">
                 <div class="search-item-image">${image}</div>
                 <div class="search-item-text">
                     <strong>${frappe.utils.escape_html(title)}</strong>
                     <small>${frappe.utils.escape_html(subtitle)}</small>
                     ${item.ingredient_summary && item.item_name_ar ? `<small class="ingredient-line">${frappe.utils.escape_html(item.ingredient_summary)}</small>` : ""}
+                    ${sourceLine}
                 </div>
                 <div class="search-item-meta">
-                    <span>Stock: ${flt(item.actual_qty || 0, 2)}</span>
+                    <span>${__("Stock")}: ${flt(item.actual_qty || 0, 2)}</span>
                     <span>${format_currency(item.customer_price || 0)}</span>
                 </div>
             </button>`;
@@ -80,7 +84,11 @@ window.SearchManager = {
     async selectActive() {
         if (this.activeIndex < 0 || !this.rows[this.activeIndex]) return;
         const item = this.rows[this.activeIndex];
-        await InvoiceManager.addItem(item.item_code || item.name);
+        await InvoiceManager.addItem(item.item_code || item.name, {
+            stock_source_mode: item.matched_source_name ? "manual" : "auto",
+            batch_no: item.matched_batch_no || "",
+            retail_price_lot: item.matched_retail_price_lot || ""
+        });
         this.clear();
     },
 

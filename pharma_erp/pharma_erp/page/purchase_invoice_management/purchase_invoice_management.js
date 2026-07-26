@@ -4333,6 +4333,10 @@ all`,
                         <tbody>${body}</tbody>
                     </table>
                 </div>
+                <div class="alert alert-info" style="margin:8px 0;">
+                    <strong>${__("Default:")}</strong> ${__("Apply New Price to All Stock updates old and new non-batch stock to the new Item price.")}<br>
+                    ${__("Choose Keep Separate Printed Prices only when the company price is printed on the packs and old stock must retain its old printed price.")}
+                </div>
                 <div class="text-muted">
                     ${__("Batch-controlled items are excluded. Their price remains attached to the selected Batch.")}
                 </div>
@@ -4395,7 +4399,7 @@ all`,
                     },
                 ],
                 primary_action_label: canApprove
-                    ? __("Approve New Price & Submit")
+                    ? __("Apply New Price to All Stock & Submit")
                     : __("Keep Current Price & Submit"),
                 primary_action: () => {
                     finish(canApprove ? "approve" : "keep_current");
@@ -4410,7 +4414,15 @@ all`,
                     </button>`
                 );
                 $keep.on("click", () => finish("keep_current"));
+
+                const $separate = $(
+                    `<button type="button" class="btn btn-default">
+                        ${__("Keep Separate Printed Prices & Submit")}
+                    </button>`
+                );
+                $separate.on("click", () => finish("separate_printed_prices"));
                 $footer.prepend($keep);
+                $footer.prepend($separate);
             }
 
             dialog.$wrapper.on("hidden.bs.modal", () => {
@@ -4420,6 +4432,23 @@ all`,
                 }
             });
             dialog.show();
+
+            // Three long decisions must remain readable without overlapping.
+            $footer.css({
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                gap: "8px",
+                width: "100%",
+                alignItems: "stretch",
+            });
+            $footer.find(".btn").css({
+                float: "none",
+                margin: "0",
+                width: "100%",
+                minHeight: "42px",
+                whiteSpace: "normal",
+                lineHeight: "1.25",
+            });
         });
     }
 
@@ -4483,7 +4512,9 @@ all`,
         const retailReview = message.retail_price_review || {};
         let retailText = "";
         if (retailReview.status === "Applied") {
-            retailText = __(" Customer Price approved and Item / selling price updated.");
+            retailText = retailReview.stock_scope === "Separate Printed Prices"
+                ? __(" Customer Price approved; separately printed stock prices were retained.")
+                : __(" Customer Price approved and applied to all old and new stock.");
         } else if (retailReview.status === "Skipped") {
             retailText = __(" Current Item Customer Price was kept unchanged.");
         }

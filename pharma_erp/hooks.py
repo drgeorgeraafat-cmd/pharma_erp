@@ -250,6 +250,8 @@ app_license = "mit"
 
 doctype_js = {
     "Purchase Invoice": "public/js/purchase_invoice.js",
+    "Batch": "public/js/batch_retail_label.js",
+    "Internal Retail Price Lot": "public/js/internal_retail_price_lot.js",
 }
 
 doc_events = {
@@ -259,7 +261,22 @@ doc_events = {
     "Purchase Invoice": {
         "validate": "pharma_erp.purchase_management.validate_purchase_invoice",
         "before_submit": "pharma_erp.purchase_management.before_submit_purchase_invoice",
-        "on_submit": "pharma_erp.purchase_management.on_submit_purchase_invoice",
+        "on_submit": [
+            "pharma_erp.purchase_management.on_submit_purchase_invoice",
+            "pharma_erp.retail_price_lots.on_submit_purchase_invoice_lots",
+        ],
+        "before_cancel": "pharma_erp.retail_price_lots.before_cancel_purchase_invoice_lots",
+        "on_cancel": "pharma_erp.retail_price_lots.on_cancel_purchase_invoice_lots",
+    },
+    "Purchase Receipt": {
+        "on_submit": "pharma_erp.retail_price_lots.on_submit_purchase_receipt_lots",
+        "before_cancel": "pharma_erp.retail_price_lots.before_cancel_purchase_receipt_lots",
+        "on_cancel": "pharma_erp.retail_price_lots.on_cancel_purchase_receipt_lots",
+    },
+    "Sales Invoice": {
+        "before_submit": "pharma_erp.retail_price_lots.before_submit_sales_invoice_lots",
+        "on_submit": "pharma_erp.retail_price_lots.on_submit_sales_invoice_lots",
+        "on_cancel": "pharma_erp.retail_price_lots.on_cancel_sales_invoice_lots",
     },
     "Payment Entry": {
         "validate": [

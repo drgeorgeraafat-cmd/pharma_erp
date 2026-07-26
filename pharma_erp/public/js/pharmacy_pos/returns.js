@@ -199,16 +199,65 @@ window.ReturnsManager = {
     },
 
     settlementHtml() {
-        return `<div class="payment-section return-settlement-section"><label class="checkbox-label"><input class="keep-return-credit" type="checkbox" checked> Keep refund as Customer Credit</label><div class="return-refund-area is-hidden"><div class="payment-section-title"><h5>Refund Methods</h5><button type="button" class="add-refund-row btn btn-sm btn-default">+ Add Method</button></div><table class="table table-bordered compact-table"><thead><tr><th>Mode</th><th>Amount</th><th></th></tr></thead><tbody class="refund-rows"></tbody></table></div><div class="return-total-line">Estimated Return: <strong class="estimated-return-total">0.00</strong></div></div>`;
+        return `<div class="payment-section return-settlement-section">
+            <label class="checkbox-label"><input class="keep-return-credit" type="checkbox"> Keep refund as Customer Credit</label>
+            <div class="cash-customer-credit-warning is-hidden" role="alert">
+                <strong>${__("Cash Customer warning")}</strong>
+                <span>${__("Cash Customer is a generic walk-in account and does not identify the real shopper. Any retained credit will be posted to this shared customer account.")}</span>
+            </div>
+            <div class="cash-credit-note-wrap is-hidden">
+                <label>${__("Required note for Cash Customer credit")}</label>
+                <textarea class="cash-credit-note form-control" maxlength="500" placeholder="${__("Enter customer reference, mobile, supervisor approval, and reason for retaining the refund as credit.")}"></textarea>
+                <small>${__("This note is saved on the Credit Note for audit and follow-up.")}</small>
+            </div>
+            <div class="return-refund-area"><div class="payment-section-title"><h5>Refund Methods</h5><button type="button" class="add-refund-row btn btn-sm btn-default">+ Add Method</button></div><table class="table table-bordered compact-table"><thead><tr><th>Mode</th><th>Amount</th><th></th></tr></thead><tbody class="refund-rows"></tbody></table></div>
+            <div class="return-total-line">Estimated Return: <strong class="estimated-return-total">0.00</strong></div>
+        </div>`;
+    },
+
+    returnCustomer(dialog) {
+        if (dialog.__returnMode === "against_invoice") {
+            return dialog.__returnInvoice?.customer || PharmacyPOS.state.customer?.name || "";
+        }
+        return PharmacyPOS.state.customer?.name || PharmacyPOS.state.settings.default_customer || "";
+    },
+
+    isDefaultCashCustomer(dialog) {
+        const customer = this.returnCustomer(dialog);
+        const defaultCustomer = PharmacyPOS.state.settings.default_customer || "";
+        return Boolean(customer && defaultCustomer && customer === defaultCustomer);
     },
 
     bindSettlement(holder, dialog) {
         if (!holder) return;
         const keep = holder.querySelector(".keep-return-credit");
         const area = holder.querySelector(".return-refund-area");
-        keep?.addEventListener("change", () => area.classList.toggle("is-hidden", keep.checked));
+        const warning = holder.querySelector(".cash-customer-credit-warning");
+        const noteWrap = holder.querySelector(".cash-credit-note-wrap");
+        const noteInput = holder.querySelector(".cash-credit-note");
+
+        const sync = ({ showDialog = false } = {}) => {
+            const keepAsCredit = Boolean(keep?.checked);
+            const defaultCash = keepAsCredit && this.isDefaultCashCustomer(dialog);
+            area?.classList.toggle("is-hidden", keepAsCredit);
+            warning?.classList.toggle("is-hidden", !defaultCash);
+            noteWrap?.classList.toggle("is-hidden", !defaultCash);
+            if (noteInput) noteInput.required = defaultCash;
+
+            if (defaultCash && showDialog) {
+                frappe.msgprint({
+                    title: __("Cash Customer Credit Warning"),
+                    indicator: "orange",
+                    message: __("Cash Customer is a shared walk-in account. The credit cannot identify the actual shopper. Enter a detailed note before creating the return, or select a registered customer instead.")
+                });
+                window.setTimeout(() => noteInput?.focus(), 100);
+            }
+        };
+
+        keep?.addEventListener("change", () => sync({ showDialog: keep.checked }));
         holder.querySelector(".add-refund-row")?.addEventListener("click", () => this.addRefundRow(holder));
         this.addRefundRow(holder);
+        sync();
     },
 
     addRefundRow(holder) {
@@ -263,6 +312,11 @@ window.ReturnsManager = {
         const view = root.querySelector(`[data-return-view="${dialog.__returnMode}"]`);
         const settlement = view.querySelector(".return-settlement-section");
         const keepAsCredit = settlement.querySelector(".keep-return-credit")?.checked ? 1 : 0;
+        const cashCustomerCredit = keepAsCredit && this.isDefaultCashCustomer(dialog);
+        const customerCreditNote = settlement.querySelector(".cash-credit-note")?.value?.trim() || "";
+        if (cashCustomerCredit && !customerCreditNote) {
+            frappe.throw(__("A detailed note is required before keeping a Cash Customer refund as customer credit."));
+        }
         const payments = keepAsCredit ? [] : [...settlement.querySelectorAll(".refund-row")].map(row => ({ mode_of_payment: row.querySelector(".refund-mode")?.value || "", amount: flt(row.querySelector(".refund-amount")?.value || 0) })).filter(row => row.mode_of_payment && row.amount > 0);
         if (!keepAsCredit && !payments.length) frappe.throw(__("Add a refund method or keep it as customer credit."));
         return {
@@ -275,6 +329,7 @@ window.ReturnsManager = {
             reason: dialog.__manualReason || "",
             items,
             keep_as_credit: keepAsCredit,
+            customer_credit_note: cashCustomerCredit ? customerCreditNote : "",
             payments,
             submit: 1
         };
