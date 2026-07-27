@@ -1,0 +1,669 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-07-27 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "order_identity_section",
+  "naming_series",
+  "status",
+  "source_channel",
+  "external_reference",
+  "external_created_at",
+  "identity_column_break",
+  "company",
+  "order_type",
+  "fulfilment_method",
+  "customer_section",
+  "customer",
+  "customer_name",
+  "mobile_no",
+  "email_id",
+  "customer_resolution_status",
+  "address_section",
+  "customer_address",
+  "address_title",
+  "address_line1",
+  "address_line2",
+  "city",
+  "state",
+  "country",
+  "address_column_break",
+  "address_phone",
+  "formatted_address",
+  "delivery_zone",
+  "warehouse",
+  "delivery_fee",
+  "delivery_fee_rule",
+  "estimated_delivery_time_mins",
+  "delivery_instructions",
+  "items_section",
+  "items",
+  "totals_section",
+  "currency",
+  "price_list",
+  "products_subtotal",
+  "discount_amount",
+  "grand_total",
+  "prescription_tab",
+  "prescription_section",
+  "prescription_required",
+  "prescription_attachment",
+  "prescription_review_status",
+  "prescription_review_notes",
+  "prescription_column_break",
+  "prescription_reviewed_by",
+  "prescription_reviewed_at",
+  "payment_tab",
+  "payment_section",
+  "payment_timing",
+  "payment_method",
+  "mode_of_payment",
+  "payment_status",
+  "declared_paid_amount",
+  "verified_paid_amount",
+  "payment_column_break",
+  "transaction_reference",
+  "payment_proof",
+  "payment_review_notes",
+  "payment_verified_by",
+  "payment_verified_at",
+  "payment_entry",
+  "conversion_tab",
+  "conversion_section",
+  "conversion_path",
+  "sales_order",
+  "sales_invoice",
+  "converted_by",
+  "converted_at",
+  "delivery_status_snapshot",
+  "audit_tab",
+  "audit_section",
+  "placed_at",
+  "confirmed_at",
+  "on_hold_reason",
+  "audit_column_break",
+  "cancelled_at",
+  "cancelled_by",
+  "cancellation_reason",
+  "rejected_at",
+  "rejected_by",
+  "rejection_reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "order_identity_section",
+   "fieldtype": "Section Break",
+   "label": "Order Identity"
+  },
+  {
+   "default": "OO-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Naming Series",
+   "options": "OO-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nPlaced\nUnder Review\nPrescription Review\nStock Review\nPartially Available\nAwaiting Customer Decision\nReady for Payment\nPayment Verification\nPayment Failed\nConfirmed\nPreparing\nReady for Delivery\nReady for Pickup\nOut for Delivery\nDelivered\nReturned\nCompleted\nOn Hold\nRejected\nCancelled",
+   "reqd": 1
+  },
+  {
+   "default": "Internal Entry",
+   "fieldname": "source_channel",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Source Channel",
+   "options": "Website\nMobile App\nWhatsApp\nPhone\nSocial Media\nInternal Entry\nOther",
+   "reqd": 1
+  },
+  {
+   "fieldname": "external_reference",
+   "fieldtype": "Data",
+   "label": "External Reference",
+   "no_copy": 1
+  },
+  {
+   "fieldname": "external_created_at",
+   "fieldtype": "Datetime",
+   "label": "External Created At"
+  },
+  {
+   "fieldname": "identity_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "default": "Retail",
+   "fieldname": "order_type",
+   "fieldtype": "Select",
+   "label": "Order Type",
+   "options": "Retail\nCorporate",
+   "reqd": 1
+  },
+  {
+   "default": "Home Delivery",
+   "fieldname": "fulfilment_method",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Fulfilment Method",
+   "options": "Home Delivery\nPharmacy Pickup",
+   "reqd": 1
+  },
+  {
+   "fieldname": "customer_section",
+   "fieldtype": "Section Break",
+   "label": "Customer"
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Customer",
+   "options": "Customer"
+  },
+  {
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "mobile_no",
+   "fieldtype": "Data",
+   "in_global_search": 1,
+   "in_list_view": 1,
+   "label": "Mobile No",
+   "reqd": 1
+  },
+  {
+   "fieldname": "email_id",
+   "fieldtype": "Data",
+   "label": "Email",
+   "options": "Email"
+  },
+  {
+   "default": "Unresolved",
+   "fieldname": "customer_resolution_status",
+   "fieldtype": "Select",
+   "label": "Customer Resolution Status",
+   "options": "Unresolved\nMatched\nNew Customer Required\nAmbiguous Match\nConfirmed",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.fulfilment_method==\"Home Delivery\"",
+   "fieldname": "address_section",
+   "fieldtype": "Section Break",
+   "label": "Address & Delivery"
+  },
+  {
+   "fieldname": "customer_address",
+   "fieldtype": "Link",
+   "label": "Customer Address",
+   "options": "Address"
+  },
+  {
+   "fieldname": "address_title",
+   "fieldtype": "Data",
+   "label": "Address Title"
+  },
+  {
+   "fieldname": "address_line1",
+   "fieldtype": "Data",
+   "label": "Address Line 1"
+  },
+  {
+   "fieldname": "address_line2",
+   "fieldtype": "Data",
+   "label": "Address Line 2"
+  },
+  {
+   "fieldname": "city",
+   "fieldtype": "Data",
+   "label": "City"
+  },
+  {
+   "fieldname": "state",
+   "fieldtype": "Data",
+   "label": "State"
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Link",
+   "label": "Country",
+   "options": "Country"
+  },
+  {
+   "fieldname": "address_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "address_phone",
+   "fieldtype": "Data",
+   "label": "Address Phone"
+  },
+  {
+   "fieldname": "formatted_address",
+   "fieldtype": "Small Text",
+   "label": "Formatted Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_zone",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Delivery Zone",
+   "options": "Delivery Zone"
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "label": "Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "delivery_fee",
+   "fieldtype": "Currency",
+   "label": "Delivery Fee",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_fee_rule",
+   "fieldtype": "Data",
+   "label": "Delivery Fee Rule",
+   "read_only": 1
+  },
+  {
+   "fieldname": "estimated_delivery_time_mins",
+   "fieldtype": "Int",
+   "label": "Estimated Delivery Time (Mins)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_instructions",
+   "fieldtype": "Small Text",
+   "label": "Delivery Instructions"
+  },
+  {
+   "fieldname": "items_section",
+   "fieldtype": "Section Break",
+   "label": "Items"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Items",
+   "options": "Online Order Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "totals_section",
+   "fieldtype": "Section Break",
+   "label": "Totals"
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "price_list",
+   "fieldtype": "Link",
+   "label": "Price List",
+   "options": "Price List"
+  },
+  {
+   "fieldname": "products_subtotal",
+   "fieldtype": "Currency",
+   "label": "Products Subtotal",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "discount_amount",
+   "fieldtype": "Currency",
+   "label": "Order Discount Amount",
+   "options": "currency"
+  },
+  {
+   "fieldname": "grand_total",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Grand Total",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "prescription_tab",
+   "fieldtype": "Tab Break",
+   "label": "Prescription"
+  },
+  {
+   "fieldname": "prescription_section",
+   "fieldtype": "Section Break",
+   "label": "Prescription Review"
+  },
+  {
+   "default": "0",
+   "fieldname": "prescription_required",
+   "fieldtype": "Check",
+   "label": "Prescription Required",
+   "read_only": 1
+  },
+  {
+   "fieldname": "prescription_attachment",
+   "fieldtype": "Attach",
+   "label": "Prescription Attachment"
+  },
+  {
+   "default": "Not Required",
+   "fieldname": "prescription_review_status",
+   "fieldtype": "Select",
+   "label": "Prescription Review Status",
+   "options": "Not Required\nRequired - Not Uploaded\nAwaiting Review\nApproved\nPartially Approved\nRejected\nReplacement Requested",
+   "reqd": 1
+  },
+  {
+   "fieldname": "prescription_review_notes",
+   "fieldtype": "Small Text",
+   "label": "Prescription Review Notes"
+  },
+  {
+   "fieldname": "prescription_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "prescription_reviewed_by",
+   "fieldtype": "Link",
+   "label": "Prescription Reviewed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "prescription_reviewed_at",
+   "fieldtype": "Datetime",
+   "label": "Prescription Reviewed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_tab",
+   "fieldtype": "Tab Break",
+   "label": "Payment"
+  },
+  {
+   "fieldname": "payment_section",
+   "fieldtype": "Section Break",
+   "label": "Payment Review"
+  },
+  {
+   "default": "Collect on Delivery",
+   "fieldname": "payment_timing",
+   "fieldtype": "Select",
+   "label": "Payment Timing",
+   "options": "Collect on Delivery\nPrepaid\nPartially Prepaid\nNo Collection Required",
+   "reqd": 1
+  },
+  {
+   "fieldname": "payment_method",
+   "fieldtype": "Select",
+   "label": "Customer Payment Method",
+   "options": "Cash on Delivery\nInstaPay\nMobile Wallet\nCard Payment Link\nBank Transfer\nCash at Pharmacy\nOther"
+  },
+  {
+   "fieldname": "mode_of_payment",
+   "fieldtype": "Link",
+   "label": "ERP Mode of Payment",
+   "options": "Mode of Payment"
+  },
+  {
+   "default": "Not Declared",
+   "fieldname": "payment_status",
+   "fieldtype": "Select",
+   "label": "Payment Status",
+   "options": "Not Declared\nPending Collection\nAwaiting Verification\nVerified\nPartially Verified\nRejected\nFailed\nNo Collection Required",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "declared_paid_amount",
+   "fieldtype": "Currency",
+   "label": "Declared Paid Amount",
+   "options": "currency"
+  },
+  {
+   "default": "0",
+   "fieldname": "verified_paid_amount",
+   "fieldtype": "Currency",
+   "label": "Verified Paid Amount",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "transaction_reference",
+   "fieldtype": "Data",
+   "label": "Transaction Reference"
+  },
+  {
+   "fieldname": "payment_proof",
+   "fieldtype": "Attach",
+   "label": "Payment Proof"
+  },
+  {
+   "fieldname": "payment_review_notes",
+   "fieldtype": "Small Text",
+   "label": "Payment Review Notes"
+  },
+  {
+   "fieldname": "payment_verified_by",
+   "fieldtype": "Link",
+   "label": "Payment Verified By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_verified_at",
+   "fieldtype": "Datetime",
+   "label": "Payment Verified At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_entry",
+   "fieldtype": "Link",
+   "label": "Payment Entry",
+   "options": "Payment Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "conversion_tab",
+   "fieldtype": "Tab Break",
+   "label": "Conversion"
+  },
+  {
+   "fieldname": "conversion_section",
+   "fieldtype": "Section Break",
+   "label": "ERP Conversion"
+  },
+  {
+   "fieldname": "conversion_path",
+   "fieldtype": "Select",
+   "label": "Conversion Path",
+   "options": "Direct Sales Invoice\nSales Order then Sales Invoice",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sales_order",
+   "fieldtype": "Link",
+   "label": "Sales Order",
+   "options": "Sales Order",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "Sales Invoice",
+   "options": "Sales Invoice",
+   "read_only": 1
+  },
+  {
+   "fieldname": "converted_by",
+   "fieldtype": "Link",
+   "label": "Converted By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "converted_at",
+   "fieldtype": "Datetime",
+   "label": "Converted At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivery_status_snapshot",
+   "fieldtype": "Select",
+   "label": "Delivery Status Snapshot",
+   "options": "\nReady for Delivery\nOut for Delivery\nDelivered\nReturning to Pharmacy\nReturned to Pharmacy\nCancelled",
+   "read_only": 1
+  },
+  {
+   "fieldname": "audit_tab",
+   "fieldtype": "Tab Break",
+   "label": "Audit"
+  },
+  {
+   "fieldname": "audit_section",
+   "fieldtype": "Section Break",
+   "label": "Status Audit"
+  },
+  {
+   "fieldname": "placed_at",
+   "fieldtype": "Datetime",
+   "label": "Placed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "confirmed_at",
+   "fieldtype": "Datetime",
+   "label": "Confirmed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "on_hold_reason",
+   "fieldtype": "Small Text",
+   "label": "On Hold Reason"
+  },
+  {
+   "fieldname": "audit_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "cancelled_at",
+   "fieldtype": "Datetime",
+   "label": "Cancelled At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cancelled_by",
+   "fieldtype": "Link",
+   "label": "Cancelled By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cancellation_reason",
+   "fieldtype": "Small Text",
+   "label": "Cancellation Reason"
+  },
+  {
+   "fieldname": "rejected_at",
+   "fieldtype": "Datetime",
+   "label": "Rejected At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "rejected_by",
+   "fieldtype": "Link",
+   "label": "Rejected By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "rejection_reason",
+   "fieldtype": "Small Text",
+   "label": "Rejection Reason"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "links": [],
+ "modified": "2026-07-27 02:45:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Online Order",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 0,
+ "search_fields": "mobile_no,customer_name,external_reference,customer",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "customer_name",
+ "track_changes": 1
+}
