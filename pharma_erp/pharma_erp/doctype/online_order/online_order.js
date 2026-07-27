@@ -78,6 +78,18 @@ frappe.ui.form.on("Online Order", {
                 addControlledSubmitButton(frm);
             }
         }
+        if (frm.doc.payment_entry) {
+            frm.add_custom_button(__("Open Payment Entry"), () => {
+                frappe.set_route("Form", "Payment Entry", frm.doc.payment_entry);
+            }, __("Links"));
+        }
+        if (
+            frm.doc.fulfilment_method === "Pharmacy Pickup"
+            && frm.doc.status === "Ready for Pickup"
+            && frm.doc.sales_invoice
+        ) {
+            addPickupActions(frm);
+        }
     },
 });
 
@@ -102,7 +114,7 @@ function statusTransitions(frm) {
             "Cancelled",
         ],
         "Ready for Delivery": ["Out for Delivery", "Cancelled"],
-        "Ready for Pickup": ["Completed", "Cancelled"],
+        "Ready for Pickup": ["Cancelled"],
         "Out for Delivery": ["Delivered", "Returned"],
         "Delivered": ["Completed", "Returned"],
         "Returned": ["Completed"],
@@ -233,6 +245,155 @@ async function submitLinkedSalesInvoice(frm) {
             result.sales_invoice,
             result.online_order_status,
         ]),
+        indicator: "green",
+    });
+}
+
+async function addPickupActions(frm) {
+    const response = await frappe.db.get_value(
+        "Sales Invoice",
+        frm.doc.sales_invoice,
+        ["docstatus", "outstanding_amount", "grand_total"],
+    );
+    const invoice = response && response.message;
+    if (!invoice || Number(invoice.docstatus || 0) !== 1) return;
+
+    const outstanding = Number(invoice.outstanding_amount || 0);
+    if (
+        frm.doc.payment_timing !== "No Collection Required"
+        && outstanding > 0.01
+        && !frm.doc.payment_entry
+    ) {
+        frm.add_custom_button(
+            __("Create Pickup Payment Draft"),
+            () => createPickupPaymentDraft(frm, outstanding),
+            __("Pickup"),
+        );
+    }
+
+    frm.add_custom_button(
+        __("Complete Pharmacy Pickup"),
+        () => completePharmacyPickup(frm, outstanding),
+        __("Pickup"),
+    );
+}
+
+async function createPickupPaymentDraft(frm, outstanding) {
+    const values = await new Promise((resolve) => {
+        let submitted = false;
+        const dialog = new frappe.ui.Dialog({
+            title: __("Create Pickup Payment Draft"),
+            fields: [
+                {
+                    fieldname: "mode_of_payment",
+                    fieldtype: "Link",
+                    options: "Mode of Payment",
+                    label: __("Mode of Payment"),
+                    reqd: 1,
+                    default: frm.doc.mode_of_payment || "",
+                },
+                {
+                    fieldname: "amount",
+                    fieldtype: "Currency",
+                    label: __("Collection Amount"),
+                    reqd: 1,
+                    default: outstanding,
+                    description: __("Must equal the current Sales Invoice outstanding amount."),
+                },
+                {
+                    fieldname: "reference_no",
+                    fieldtype: "Data",
+                    label: __("Reference No"),
+                },
+                {
+                    fieldname: "collection_notes",
+                    fieldtype: "Small Text",
+                    label: __("Collection Notes"),
+                },
+            ],
+            primary_action_label: __("Create Draft"),
+            primary_action(data) {
+                submitted = true;
+                resolve(data);
+                dialog.hide();
+            },
+        });
+        dialog.onhide = () => {
+            if (!submitted) resolve(null);
+        };
+        dialog.show();
+    });
+    if (!values) return;
+
+    const response = await frappe.call({
+        method: "pharma_erp.pharma_erp.doctype.online_order.online_order.create_pickup_payment_draft",
+        args: {
+            order_name: frm.doc.name,
+            mode_of_payment: values.mode_of_payment,
+            amount: values.amount,
+            reference_no: values.reference_no || "",
+            collection_notes: values.collection_notes || "",
+        },
+        freeze: true,
+        freeze_message: __("Creating Pickup Payment Entry Draft..."),
+    });
+
+    await frm.reload_doc();
+    const result = response.message || {};
+    if (result.payment_entry) {
+        frappe.show_alert({
+            message: __("Payment Entry Draft {0} created. Review and submit it before completing pickup.", [result.payment_entry]),
+            indicator: "green",
+        });
+        frappe.set_route("Form", "Payment Entry", result.payment_entry);
+    }
+}
+
+async function completePharmacyPickup(frm, outstanding) {
+    const noCollection = frm.doc.payment_timing === "No Collection Required";
+    const message = noCollection
+        ? __("Complete Pharmacy Pickup without collection for Online Order {0}?", [frm.doc.name])
+        : outstanding > 0.01
+            ? __("Sales Invoice still has outstanding amount {0}. Submit the linked Payment Entry first.", [format_currency(outstanding, frm.doc.currency)])
+            : __("Confirm customer pickup and complete Online Order {0}?", [frm.doc.name]);
+
+    if (!noCollection && outstanding > 0.01) {
+        frappe.msgprint(message);
+        return;
+    }
+
+    const values = await new Promise((resolve) => {
+        frappe.prompt(
+            [{
+                fieldname: "pickup_notes",
+                fieldtype: "Small Text",
+                label: __("Pickup Completion Notes"),
+            }],
+            (data) => resolve(data),
+            __("Complete Pharmacy Pickup"),
+            __("Complete"),
+        );
+    });
+
+    const confirmed = await new Promise((resolve) => {
+        frappe.confirm(message, () => resolve(true), () => resolve(false));
+    });
+    if (!confirmed) return;
+
+    const response = await frappe.call({
+        method: "pharma_erp.pharma_erp.doctype.online_order.online_order.complete_pharmacy_pickup",
+        args: {
+            order_name: frm.doc.name,
+            pickup_notes: (values && values.pickup_notes) || "",
+        },
+        freeze: true,
+        freeze_message: __("Completing Pharmacy Pickup..."),
+    });
+
+    await frm.reload_doc();
+    const result = response.message || {};
+    frappe.show_alert({
+        message: __("Online Order {0} completed. Payment status: {1}.", [result.online_order, result.payment_status]),
         indicator: "green",
     });
 }

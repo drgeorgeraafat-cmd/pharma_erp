@@ -258,6 +258,16 @@ def before_cancel_linked_online_order_invoice(doc, method=None):
                 "Use the controlled return/reversal process."
             )
         )
+    if order.payment_entry and frappe.db.exists("Payment Entry", order.payment_entry):
+        payment_docstatus = cint(
+            frappe.db.get_value("Payment Entry", order.payment_entry, "docstatus")
+        )
+        if payment_docstatus < 2:
+            frappe.throw(
+                _(
+                    "Cancel or delete active pickup Payment Entry {0} before cancelling this Sales Invoice."
+                ).format(order.payment_entry)
+            )
 
 
 def on_cancel_linked_online_order_invoice(doc, method=None):
@@ -272,6 +282,15 @@ def on_cancel_linked_online_order_invoice(doc, method=None):
     order.conversion_path = None
     order.converted_by = None
     order.converted_at = None
+    order.payment_entry = None
+    order.verified_paid_amount = 0
+    order.payment_verified_by = None
+    order.payment_verified_at = None
+    order.payment_status = (
+        "No Collection Required"
+        if order.payment_timing == "No Collection Required"
+        else "Pending Collection"
+    )
     if order.meta.has_field("delivery_status_snapshot"):
         order.delivery_status_snapshot = ""
     for row in order.items:

@@ -382,3 +382,23 @@ for _online_order_event, _online_order_handler in _online_order_sales_invoice_ho
     )
 
 # END ONLINE ORDER SALES INVOICE STEP 2C HOOKS
+
+# BEGIN ONLINE ORDER PAYMENT ENTRY STEP 2D HOOKS
+
+_online_order_payment_entry_hooks = {
+    "validate": "pharma_erp.online_order_payment_entry_events.validate_linked_online_order_payment",
+    "on_submit": "pharma_erp.online_order_payment_entry_events.on_submit_linked_online_order_payment",
+    "before_cancel": "pharma_erp.online_order_payment_entry_events.before_cancel_linked_online_order_payment",
+    "on_cancel": "pharma_erp.online_order_payment_entry_events.on_cancel_linked_online_order_payment",
+    "on_trash": "pharma_erp.online_order_payment_entry_events.on_trash_linked_online_order_payment",
+}
+
+_online_order_payment_entry_events = doc_events.setdefault("Payment Entry", {})
+for _online_order_event, _online_order_handler in _online_order_payment_entry_hooks.items():
+    _online_order_merge_hook(
+        _online_order_payment_entry_events,
+        _online_order_event,
+        _online_order_handler,
+    )
+
+# END ONLINE ORDER PAYMENT ENTRY STEP 2D HOOKS

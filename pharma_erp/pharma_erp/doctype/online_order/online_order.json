@@ -90,7 +90,11 @@
   "cancellation_reason",
   "rejected_at",
   "rejected_by",
-  "rejection_reason"
+  "rejection_reason",
+  "pickup_completion_section",
+  "pickup_completed_by",
+  "pickup_completed_at",
+  "pickup_completion_notes"
  ],
  "fields": [
   {
@@ -439,7 +443,7 @@
    "fieldname": "payment_status",
    "fieldtype": "Select",
    "label": "Payment Status",
-   "options": "Not Declared\nPending Collection\nAwaiting Verification\nVerified\nPartially Verified\nRejected\nFailed\nNo Collection Required",
+   "options": "Not Declared\nPending Collection\nCollection Draft Created\nAwaiting Verification\nVerified\nPartially Verified\nRejected\nFailed\nNo Collection Required",
    "reqd": 1
   },
   {
@@ -613,6 +617,30 @@
    "fieldname": "rejection_reason",
    "fieldtype": "Small Text",
    "label": "Rejection Reason"
+  },
+  {
+   "fieldname": "pickup_completion_section",
+   "fieldtype": "Section Break",
+   "label": "Pharmacy Pickup Completion"
+  },
+  {
+   "fieldname": "pickup_completed_by",
+   "fieldtype": "Link",
+   "label": "Pickup Completed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pickup_completed_at",
+   "fieldtype": "Datetime",
+   "label": "Pickup Completed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pickup_completion_notes",
+   "fieldtype": "Small Text",
+   "label": "Pickup Completion Notes",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

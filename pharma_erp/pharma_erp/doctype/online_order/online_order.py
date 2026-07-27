@@ -9,6 +9,7 @@ from frappe.utils import cint, flt, now_datetime, today
 
 
 TERMINAL_STATUSES = {"Completed", "Rejected", "Cancelled"}
+PAYMENT_TOLERANCE = 0.01
 
 # Once an order has been confirmed, its commercial/customer/address/item data
 # becomes an auditable snapshot. Operational links and status fields may still
@@ -564,11 +565,23 @@ class OnlineOrder(Document):
             "Partially Verified",
         }:
             frappe.throw(_("Partial prepayment must be verified before confirmation."))
-        if self.payment_timing == "Collect on Delivery" and self.payment_status not in {
-            "Pending Collection",
-            "Not Declared",
-        }:
-            frappe.throw(_("Collect on Delivery orders must remain pending collection."))
+        if self.payment_timing == "Collect on Delivery":
+            allowed_collection_statuses = {"Pending Collection", "Not Declared"}
+            if self.status in {
+                "Ready for Delivery",
+                "Ready for Pickup",
+                "Out for Delivery",
+                "Delivered",
+                "Returned",
+                "Completed",
+            }:
+                allowed_collection_statuses.update(
+                    {"Collection Draft Created", "Partially Verified", "Verified"}
+                )
+            if self.payment_status not in allowed_collection_statuses:
+                frappe.throw(
+                    _("Collect on Delivery payment status is not valid for the current order stage.")
+                )
 
     def _set_status_timestamps(self):
         previous = self.get_doc_before_save()
@@ -676,6 +689,63 @@ def _delivery_fee_item():
     return str(
         frappe.db.get_single_value("Pharmacy POS Settings", "delivery_fee_item") or ""
     ).strip()
+
+
+def _mode_of_payment_account(mode_of_payment: str, company: str) -> str:
+    mode_of_payment = str(mode_of_payment or "").strip()
+    if not mode_of_payment or not frappe.db.exists("Mode of Payment", mode_of_payment):
+        frappe.throw(_("Select a valid Mode of Payment."))
+
+    account = frappe.db.get_value(
+        "Mode of Payment Account",
+        {
+            "parent": mode_of_payment,
+            "parenttype": "Mode of Payment",
+            "parentfield": "accounts",
+            "company": company,
+        },
+        "default_account",
+    )
+    if not account:
+        frappe.throw(
+            _("Set a Default Account for company {0} in Mode of Payment {1}.").format(
+                company, mode_of_payment
+            )
+        )
+
+    values = frappe.db.get_value(
+        "Account",
+        account,
+        ["company", "is_group", "disabled", "account_type"],
+        as_dict=True,
+    )
+    if not values:
+        frappe.throw(_("Mode of Payment account {0} was not found.").format(account))
+    if values.get("company") != company:
+        frappe.throw(_("Mode of Payment account belongs to another company."))
+    if cint(values.get("is_group")):
+        frappe.throw(_("Mode of Payment account cannot be a group account."))
+    if cint(values.get("disabled")):
+        frappe.throw(_("Mode of Payment account is disabled."))
+    if values.get("account_type") not in {"Bank", "Cash"}:
+        frappe.throw(_("Mode of Payment default account must be a Bank or Cash account."))
+    return account
+
+
+def _payment_entry_references_invoice(payment_entry, invoice_name: str) -> bool:
+    return any(
+        row.reference_doctype == "Sales Invoice"
+        and row.reference_name == invoice_name
+        and flt(row.allocated_amount) > 0
+        for row in payment_entry.references
+    )
+
+
+def _set_invoice_collection_fields(invoice_name: str, values: dict):
+    meta = frappe.get_meta("Sales Invoice")
+    updates = {key: value for key, value in values.items() if meta.has_field(key)}
+    if updates:
+        frappe.db.set_value("Sales Invoice", invoice_name, updates, update_modified=False)
 
 
 def _build_sales_invoice_draft(order):
@@ -980,6 +1050,252 @@ def submit_linked_sales_invoice(order_name: str):
 
 
 @frappe.whitelist()
+def create_pickup_payment_draft(
+    order_name: str,
+    mode_of_payment: str,
+    amount: float | None = None,
+    reference_no: str | None = None,
+    reference_date: str | None = None,
+    collection_notes: str | None = None,
+):
+    order = frappe.get_doc("Online Order", order_name)
+    if not frappe.has_permission("Online Order", "write", doc=order):
+        frappe.throw(
+            _("You do not have permission to update this Online Order."),
+            frappe.PermissionError,
+        )
+    if not frappe.has_permission("Payment Entry", "create"):
+        frappe.throw(
+            _("You do not have permission to create Payment Entry."),
+            frappe.PermissionError,
+        )
+    if not _has_field("Payment Entry", "custom_online_order"):
+        frappe.throw(_("Payment Entry.custom_online_order is not installed."))
+
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+
+    if order.fulfilment_method != "Pharmacy Pickup":
+        frappe.throw(_("Pickup payment can only be created for Pharmacy Pickup orders."))
+    if order.status != "Ready for Pickup":
+        frappe.throw(_("Online Order must be Ready for Pickup before collection."))
+    if order.payment_timing == "No Collection Required":
+        frappe.throw(_("This Online Order does not require collection."))
+    if not order.sales_invoice:
+        frappe.throw(_("A linked Sales Invoice is required."))
+
+    invoice = frappe.get_doc("Sales Invoice", order.sales_invoice)
+    if cint(invoice.docstatus) != 1:
+        frappe.throw(_("The linked Sales Invoice must be submitted."))
+    if invoice.get("custom_online_order") != order.name:
+        frappe.throw(_("The linked Sales Invoice does not point back to this Online Order."))
+
+    outstanding = max(0, flt(invoice.outstanding_amount))
+    if outstanding <= PAYMENT_TOLERANCE:
+        frappe.throw(_("The linked Sales Invoice has no outstanding amount to collect."))
+
+    requested_amount = flt(amount or outstanding)
+    if abs(requested_amount - outstanding) > PAYMENT_TOLERANCE:
+        frappe.throw(
+            _("Pickup collection amount must equal the current outstanding amount: {0}.").format(
+                outstanding
+            )
+        )
+
+    stale_payment_link_cleared = False
+    if order.payment_entry:
+        if not frappe.db.exists("Payment Entry", order.payment_entry):
+            order.payment_entry = None
+            stale_payment_link_cleared = True
+        elif cint(frappe.db.get_value("Payment Entry", order.payment_entry, "docstatus")) < 2:
+            frappe.throw(
+                _("Payment Entry {0} is already linked to this Online Order.").format(
+                    order.payment_entry
+                )
+            )
+        else:
+            order.payment_entry = None
+            stale_payment_link_cleared = True
+
+    if stale_payment_link_cleared:
+        order.payment_status = "Pending Collection"
+        order.verified_paid_amount = 0
+        order.payment_verified_by = None
+        order.payment_verified_at = None
+        order.save(ignore_permissions=True)
+        order.reload()
+
+    duplicate = frappe.db.get_value(
+        "Payment Entry",
+        {"custom_online_order": order.name, "docstatus": ["<", 2]},
+        "name",
+    )
+    if duplicate:
+        frappe.throw(
+            _("Active Payment Entry {0} already exists for this Online Order.").format(
+                duplicate
+            )
+        )
+
+    bank_account = _mode_of_payment_account(mode_of_payment, order.company)
+    account_type = frappe.db.get_value("Account", bank_account, "account_type")
+    reference_no = str(reference_no or "").strip()
+    if account_type == "Bank" and not reference_no:
+        frappe.throw(_("Reference No is required for bank collection."))
+
+    from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+
+    payment_entry = get_payment_entry(
+        "Sales Invoice",
+        invoice.name,
+        party_amount=outstanding,
+        bank_account=bank_account,
+        reference_date=reference_date or today(),
+        ignore_permissions=True,
+    )
+    payment_entry.mode_of_payment = mode_of_payment
+    payment_entry.posting_date = today()
+    payment_entry.reference_no = reference_no or order.name
+    payment_entry.reference_date = reference_date or today()
+    payment_entry.remarks = _(
+        "Pharmacy pickup collection for Online Order {0} against Sales Invoice {1}."
+    ).format(order.name, invoice.name)
+    payment_entry.custom_online_order = order.name
+
+    matching_rows = [
+        row
+        for row in payment_entry.references
+        if row.reference_doctype == "Sales Invoice" and row.reference_name == invoice.name
+    ]
+    if len(matching_rows) != 1:
+        frappe.throw(_("Payment Entry did not resolve exactly one Sales Invoice reference."))
+    matching_rows[0].allocated_amount = outstanding
+    payment_entry.set_missing_values()
+    payment_entry.set_amounts()
+    payment_entry.insert(ignore_permissions=True)
+
+    order.payment_entry = payment_entry.name
+    order.payment_status = "Collection Draft Created"
+    if collection_notes:
+        order.payment_review_notes = str(collection_notes).strip()
+    order.save(ignore_permissions=True)
+
+    _set_invoice_collection_fields(
+        invoice.name,
+        {
+            "custom_collection_payment_entry": payment_entry.name,
+            "custom_collection_verification_status": "Awaiting Confirmation",
+            "custom_collection_received_by": "Pharmacy Direct",
+            "custom_collection_review_notes": str(collection_notes or "").strip(),
+        },
+    )
+    order.add_comment(
+        "Info",
+        _("Pickup Payment Entry Draft {0} created for {1}.").format(
+            payment_entry.name, outstanding
+        ),
+    )
+
+    return {
+        "online_order": order.name,
+        "sales_invoice": invoice.name,
+        "payment_entry": payment_entry.name,
+        "payment_entry_docstatus": cint(payment_entry.docstatus),
+        "amount": flt(outstanding),
+        "payment_status": order.payment_status,
+    }
+
+
+@frappe.whitelist()
+def complete_pharmacy_pickup(order_name: str, pickup_notes: str | None = None):
+    order = frappe.get_doc("Online Order", order_name)
+    if not frappe.has_permission("Online Order", "write", doc=order):
+        frappe.throw(
+            _("You do not have permission to update this Online Order."),
+            frappe.PermissionError,
+        )
+
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+
+    if order.fulfilment_method != "Pharmacy Pickup":
+        frappe.throw(_("This action is only valid for Pharmacy Pickup orders."))
+    if order.status != "Ready for Pickup":
+        frappe.throw(_("Online Order must be Ready for Pickup before completion."))
+    if not order.sales_invoice:
+        frappe.throw(_("A linked Sales Invoice is required."))
+
+    invoice = frappe.get_doc("Sales Invoice", order.sales_invoice)
+    if cint(invoice.docstatus) != 1:
+        frappe.throw(_("The linked Sales Invoice must be submitted."))
+
+    no_collection = order.payment_timing == "No Collection Required"
+    if no_collection:
+        order.payment_status = "No Collection Required"
+        order.verified_paid_amount = 0
+        _set_invoice_collection_fields(
+            invoice.name,
+            {
+                "custom_collection_verification_status": "Not Required",
+                "custom_confirmed_customer_payment_method": "No Collection",
+                "custom_collection_received_by": "No Collection",
+                "custom_collection_confirmed_by": frappe.session.user,
+                "custom_collection_confirmed_at": now_datetime(),
+            },
+        )
+    else:
+        outstanding = max(0, flt(invoice.outstanding_amount))
+        if outstanding > PAYMENT_TOLERANCE:
+            frappe.throw(
+                _("Collect the full Sales Invoice outstanding amount before completing pickup: {0}.").format(
+                    outstanding
+                )
+            )
+        if not order.payment_entry or not frappe.db.exists("Payment Entry", order.payment_entry):
+            frappe.throw(_("A submitted pickup Payment Entry is required before completion."))
+        payment_entry = frappe.get_doc("Payment Entry", order.payment_entry)
+        if cint(payment_entry.docstatus) != 1:
+            frappe.throw(_("The linked pickup Payment Entry must be submitted."))
+        if payment_entry.get("custom_online_order") != order.name:
+            frappe.throw(_("The linked Payment Entry does not point back to this Online Order."))
+        if not _payment_entry_references_invoice(payment_entry, invoice.name):
+            frappe.throw(_("The linked Payment Entry is not allocated to the active Sales Invoice."))
+
+        order.payment_status = "Verified"
+        order.verified_paid_amount = flt(invoice.grand_total)
+        order.payment_verified_by = frappe.session.user
+        order.payment_verified_at = now_datetime()
+
+    order.status = "Completed"
+    if order.meta.has_field("pickup_completed_by"):
+        order.pickup_completed_by = frappe.session.user
+    if order.meta.has_field("pickup_completed_at"):
+        order.pickup_completed_at = now_datetime()
+    if order.meta.has_field("pickup_completion_notes"):
+        order.pickup_completion_notes = str(pickup_notes or "").strip()
+    order.save(ignore_permissions=True)
+    order.add_comment(
+        "Info",
+        _("Pharmacy pickup completed by {0}.").format(frappe.session.user),
+    )
+
+    return {
+        "online_order": order.name,
+        "status": order.status,
+        "sales_invoice": invoice.name,
+        "payment_entry": order.payment_entry,
+        "payment_status": order.payment_status,
+        "verified_paid_amount": flt(order.verified_paid_amount),
+    }
+
+
+@frappe.whitelist()
 def transition_status(order_name: str, target_status: str, reason: str | None = None):
     order = frappe.get_doc("Online Order", order_name)
     if not frappe.has_permission("Online Order", "write", doc=order):
@@ -988,6 +1304,12 @@ def transition_status(order_name: str, target_status: str, reason: str | None = 
     target_status = str(target_status or "").strip()
     if target_status not in ALLOWED_TRANSITIONS:
         frappe.throw(_("Invalid Online Order status: {0}").format(target_status))
+
+    if (
+        target_status == "Completed"
+        and order.fulfilment_method == "Pharmacy Pickup"
+    ):
+        frappe.throw(_("Use the controlled Complete Pharmacy Pickup action."))
 
     if target_status == "Cancelled":
         order.cancellation_reason = str(reason or order.cancellation_reason or "").strip()
