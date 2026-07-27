@@ -73,6 +73,10 @@ frappe.ui.form.on("Online Order", {
             frm.add_custom_button(__("Open Sales Invoice"), () => {
                 frappe.set_route("Form", "Sales Invoice", frm.doc.sales_invoice);
             }, __("Links"));
+
+            if (["Confirmed", "Preparing"].includes(frm.doc.status)) {
+                addControlledSubmitButton(frm);
+            }
         }
     },
 });
@@ -185,4 +189,50 @@ async function changeStatus(frm, target) {
         freeze_message: __("Updating Online Order..."),
     });
     await frm.reload_doc();
+}
+async function addControlledSubmitButton(frm) {
+    const response = await frappe.db.get_value(
+        "Sales Invoice",
+        frm.doc.sales_invoice,
+        ["docstatus", "grand_total", "update_stock"],
+    );
+    const invoice = response && response.message;
+    if (!invoice || Number(invoice.docstatus || 0) !== 0) return;
+
+    frm.add_custom_button(
+        __("Submit Linked Sales Invoice"),
+        () => submitLinkedSalesInvoice(frm),
+        __("Conversion"),
+    );
+}
+
+async function submitLinkedSalesInvoice(frm) {
+    const confirmed = await new Promise((resolve) => {
+        frappe.confirm(
+            __(
+                "Submit linked Sales Invoice {0}? This creates the normal accounting entries, keeps Update Stock disabled, and moves this order to its Ready status.",
+                [frm.doc.sales_invoice],
+            ),
+            () => resolve(true),
+            () => resolve(false),
+        );
+    });
+    if (!confirmed) return;
+
+    const response = await frappe.call({
+        method: "pharma_erp.pharma_erp.doctype.online_order.online_order.submit_linked_sales_invoice",
+        args: { order_name: frm.doc.name },
+        freeze: true,
+        freeze_message: __("Validating and submitting linked Sales Invoice..."),
+    });
+
+    await frm.reload_doc();
+    const result = response.message || {};
+    frappe.show_alert({
+        message: __("Sales Invoice {0} submitted. Online Order is now {1}.", [
+            result.sales_invoice,
+            result.online_order_status,
+        ]),
+        indicator: "green",
+    });
 }

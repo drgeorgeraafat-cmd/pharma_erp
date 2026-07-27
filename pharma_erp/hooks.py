@@ -350,3 +350,35 @@ else:
         _purchase_before_submit_list.append(_purchase_invoice_risk_submit_hook)
     _purchase_invoice_events["before_submit"] = _purchase_before_submit_list
 # END PHARMA PURCHASE RISK SUBMIT GUARD V1.2.10
+
+# BEGIN ONLINE ORDER SALES INVOICE STEP 2C HOOKS
+
+def _online_order_merge_hook(mapping, key, handler):
+    current = mapping.get(key)
+    if not current:
+        mapping[key] = handler
+    elif isinstance(current, str):
+        if current != handler:
+            mapping[key] = [current, handler]
+    elif handler not in current:
+        current.append(handler)
+
+
+_online_order_sales_invoice_hooks = {
+    "validate": "pharma_erp.online_order_sales_invoice_events.validate_linked_online_order_invoice",
+    "before_submit": "pharma_erp.online_order_sales_invoice_events.before_submit_linked_online_order_invoice",
+    "on_submit": "pharma_erp.online_order_sales_invoice_events.on_submit_linked_online_order_invoice",
+    "on_update_after_submit": "pharma_erp.online_order_sales_invoice_events.sync_online_order_after_invoice_update",
+    "before_cancel": "pharma_erp.online_order_sales_invoice_events.before_cancel_linked_online_order_invoice",
+    "on_cancel": "pharma_erp.online_order_sales_invoice_events.on_cancel_linked_online_order_invoice",
+}
+
+_online_order_sales_invoice_events = doc_events.setdefault("Sales Invoice", {})
+for _online_order_event, _online_order_handler in _online_order_sales_invoice_hooks.items():
+    _online_order_merge_hook(
+        _online_order_sales_invoice_events,
+        _online_order_event,
+        _online_order_handler,
+    )
+
+# END ONLINE ORDER SALES INVOICE STEP 2C HOOKS

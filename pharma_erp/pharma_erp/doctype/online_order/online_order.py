@@ -183,6 +183,9 @@ class OnlineOrder(Document):
             self.payment_status = "Not Declared"
 
     def _validate_status_transition(self):
+        if getattr(self.flags, "ignore_online_order_transition", False):
+            return
+
         if self.is_new():
             if self.status not in {"Draft", "Placed"}:
                 frappe.throw(_("A new Online Order must start as Draft or Placed."))
@@ -872,15 +875,26 @@ def create_sales_invoice_draft(order_name: str):
             )
         )
     if order.sales_invoice:
-        frappe.throw(
-            _("Sales Invoice {0} is already linked to this Online Order.").format(
-                order.sales_invoice
-            )
+        linked_docstatus = cint(
+            frappe.db.get_value("Sales Invoice", order.sales_invoice, "docstatus")
         )
+        if linked_docstatus != 2:
+            frappe.throw(
+                _("Sales Invoice {0} is already linked to this Online Order.").format(
+                    order.sales_invoice
+                )
+            )
+        order.sales_invoice = None
+        order.conversion_path = None
+        order.converted_by = None
+        order.converted_at = None
+        for order_row in order.items:
+            order_row.sales_invoice_item = None
+        order.save(ignore_permissions=True)
 
     duplicate = frappe.db.get_value(
         "Sales Invoice",
-        {"custom_online_order": order.name},
+        {"custom_online_order": order.name, "docstatus": ["<", 2]},
         "name",
     )
     if duplicate:
@@ -915,6 +929,53 @@ def create_sales_invoice_draft(order_name: str):
         "update_stock": cint(invoice.update_stock),
         "grand_total": flt(invoice.grand_total),
         "status": order.status,
+    }
+
+
+@frappe.whitelist()
+def submit_linked_sales_invoice(order_name: str):
+    order = frappe.get_doc("Online Order", order_name)
+    if not frappe.has_permission("Online Order", "write", doc=order):
+        frappe.throw(
+            _("You do not have permission to update this Online Order."),
+            frappe.PermissionError,
+        )
+    if not order.sales_invoice:
+        frappe.throw(_("Create and link a Sales Invoice Draft first."))
+
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+
+    invoice = frappe.get_doc("Sales Invoice", order.sales_invoice)
+    if not frappe.has_permission("Sales Invoice", "submit", doc=invoice):
+        frappe.throw(
+            _("You do not have permission to submit Sales Invoice."),
+            frappe.PermissionError,
+        )
+    if cint(invoice.docstatus) == 1:
+        frappe.throw(_("Sales Invoice {0} is already submitted.").format(invoice.name))
+    if cint(invoice.docstatus) == 2:
+        frappe.throw(_("Sales Invoice {0} is cancelled.").format(invoice.name))
+    if invoice.get("custom_online_order") != order.name:
+        frappe.throw(_("The linked Sales Invoice does not point back to this Online Order."))
+    if order.status not in {"Confirmed", "Preparing"}:
+        frappe.throw(
+            _("A linked Sales Invoice can only be submitted from Confirmed or Preparing orders.")
+        )
+
+    invoice.submit()
+    order.reload()
+
+    return {
+        "online_order": order.name,
+        "online_order_status": order.status,
+        "sales_invoice": invoice.name,
+        "sales_invoice_docstatus": cint(invoice.docstatus),
+        "update_stock": cint(invoice.update_stock),
+        "grand_total": flt(invoice.grand_total),
     }
 
 
