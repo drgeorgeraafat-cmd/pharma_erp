@@ -764,6 +764,12 @@ def declare_my_delivery_collection(
         verification_status = "Awaiting Confirmation"
         payment_entry_name = ""
 
+    # STEP2E4_POST_COLLECTION_RESYNC
+    frappe.get_attr(
+        "pharma_erp.pharma_erp.doctype.online_order.online_order."
+        "sync_home_delivery_after_collection"
+    )(invoice.name)
+
     return {
         "invoice_name": invoice.name,
         "delivery_status": "Delivered",

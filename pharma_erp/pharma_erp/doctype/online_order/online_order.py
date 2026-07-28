@@ -495,6 +495,9 @@ class OnlineOrder(Document):
             if self.fulfilment_method != "Home Delivery":
                 frappe.throw(_("Delivery execution statuses are only valid for Home Delivery orders."))
 
+        if self.status == "Completed" and self.fulfilment_method == "Home Delivery":
+            self._guard_home_delivery_completion_state()
+
         if self.status in {"Out for Delivery", "Delivered"}:
             if not self.sales_invoice:
                 frappe.throw(_("A linked Sales Invoice is required for delivery status sync."))
@@ -514,6 +517,27 @@ class OnlineOrder(Document):
         if self.status == "On Hold" and not self.on_hold_reason:
             frappe.throw(_("On Hold Reason is required."))
 
+
+    def _guard_home_delivery_completion_state(self):
+        if not self.sales_invoice:
+            frappe.throw(_("A linked Sales Invoice is required before Home Delivery completion."))
+        invoice = frappe.get_doc("Sales Invoice", self.sales_invoice)
+        if cint(invoice.docstatus) != 1:
+            frappe.throw(_("The linked Sales Invoice must be submitted."))
+        if str(invoice.get("custom_delivery_status") or "").strip() != "Delivered":
+            frappe.throw(_("The linked Sales Invoice delivery status must be Delivered."))
+
+        collection = _home_delivery_collection_state(self, invoice)
+        if not collection["collection_ready"]:
+            if collection["outstanding"] > PAYMENT_TOLERANCE:
+                frappe.throw(
+                    _("Delivery collection is incomplete. Remaining Sales Invoice outstanding: {0}.").format(
+                        collection["outstanding"]
+                    )
+                )
+            frappe.throw(
+                _("Delivery collection must be confirmed before completing the Online Order.")
+            )
 
     def _guard_submitted_sales_invoice(self, target_label):
         if not self.sales_invoice:
@@ -746,6 +770,259 @@ def _set_invoice_collection_fields(invoice_name: str, values: dict):
     updates = {key: value for key, value in values.items() if meta.has_field(key)}
     if updates:
         frappe.db.set_value("Sales Invoice", invoice_name, updates, update_modified=False)
+
+
+HOME_DELIVERY_INVOICE_STATUS_MAP = {
+    "Ready for Delivery": "Ready for Delivery",
+    "Out for Delivery": "Out for Delivery",
+    "Delivered": "Delivered",
+    "Returning to Pharmacy": "Returned",
+    "Returned to Pharmacy": "Returned",
+}
+
+
+def _submitted_payment_entry(payment_name: str | None) -> bool:
+    payment_name = str(payment_name or "").strip()
+    return bool(
+        payment_name
+        and frappe.db.exists("Payment Entry", payment_name)
+        and cint(frappe.db.get_value("Payment Entry", payment_name, "docstatus")) == 1
+    )
+
+
+def _home_delivery_collection_state(order, invoice):
+    outstanding = max(0, flt(invoice.outstanding_amount))
+    grand_total = max(0, flt(invoice.grand_total or order.grand_total))
+    collection_status = str(
+        invoice.get("custom_collection_verification_status") or ""
+    ).strip()
+    confirmed_method = str(
+        invoice.get("custom_confirmed_customer_payment_method") or ""
+    ).strip()
+    prepaid_status = str(
+        invoice.get("custom_prepaid_verification_status") or ""
+    ).strip()
+
+    collection_payment = str(
+        invoice.get("custom_collection_payment_entry") or ""
+    ).strip()
+    prepaid_payment = str(invoice.get("custom_prepaid_payment_entry") or "").strip()
+    linked_payment = collection_payment or prepaid_payment or str(order.payment_entry or "").strip()
+
+    # The Sales Invoice collection verification field may default to
+    # "Not Required" before delivery collection starts. That default must
+    # not bypass Collect on Delivery or prepaid verification.
+    no_collection = bool(
+        order.payment_timing == "No Collection Required"
+        or confirmed_method == "No Collection"
+    )
+
+    collection_payment_submitted = _submitted_payment_entry(collection_payment)
+    prepaid_payment_submitted = _submitted_payment_entry(prepaid_payment)
+    linked_payment_submitted = _submitted_payment_entry(linked_payment)
+
+    if no_collection:
+        payment_status = "No Collection Required"
+        verified_amount = 0.0
+        collection_ready = True
+    else:
+        if order.payment_timing == "Prepaid":
+            evidence_confirmed = bool(
+                prepaid_status == "Confirmed"
+                or (
+                    order.payment_status == "Verified"
+                    and linked_payment_submitted
+                )
+            )
+        elif order.payment_timing == "Partially Prepaid":
+            evidence_confirmed = bool(
+                collection_status == "Confirmed"
+                and (collection_payment_submitted or linked_payment_submitted)
+            )
+        else:
+            evidence_confirmed = bool(
+                collection_status == "Confirmed"
+                and (collection_payment_submitted or linked_payment_submitted)
+            )
+
+        collection_ready = bool(
+            outstanding <= PAYMENT_TOLERANCE and evidence_confirmed
+        )
+        verified_amount = max(0, grand_total - outstanding)
+
+        if collection_ready:
+            payment_status = "Verified"
+            verified_amount = grand_total
+        elif verified_amount > PAYMENT_TOLERANCE:
+            payment_status = "Partially Verified"
+        elif collection_status in {"Awaiting Confirmation", "Confirmed", "Disputed"}:
+            payment_status = "Awaiting Verification"
+        else:
+            payment_status = "Pending Collection"
+
+    return {
+        "outstanding": outstanding,
+        "grand_total": grand_total,
+        "collection_status": collection_status,
+        "confirmed_method": confirmed_method,
+        "payment_entry": linked_payment,
+        "payment_entry_submitted": linked_payment_submitted,
+        "payment_status": payment_status,
+        "verified_amount": verified_amount,
+        "no_collection": no_collection,
+        "collection_ready": collection_ready,
+    }
+
+
+def _latest_delivery_attempt_name(invoice_name: str) -> str:
+    if not frappe.db.exists("DocType", "Delivery Attempt"):
+        return ""
+
+    rows = frappe.get_all(
+        "Delivery Attempt",
+        filters={"parent_delivery_invoice": invoice_name},
+        fields=["name"],
+        order_by="attempt_number desc, creation desc",
+        limit_page_length=1,
+    )
+    return str(rows[0].name or "").strip() if rows else ""
+
+
+def _sync_home_delivery_snapshot(order, invoice):
+    latest_attempt = (
+        str(invoice.get("custom_current_delivery_attempt") or "").strip()
+        or _latest_delivery_attempt_name(invoice.name)
+        or str(order.get("delivery_attempt") or "").strip()
+    )
+
+    mappings = {
+        "delivery_boy": "custom_delivery_boy",
+        "delivery_trip": "custom_delivery_trip",
+        "delivery_departure_at": "custom_departure_time",
+        "delivery_delivered_at": "custom_delivery_time",
+    }
+    for target, source in mappings.items():
+        if order.meta.has_field(target):
+            order.set(target, invoice.get(source))
+
+    if order.meta.has_field("delivery_attempt"):
+        order.delivery_attempt = latest_attempt
+
+    if order.meta.has_field("delivery_status_snapshot"):
+        order.delivery_status_snapshot = str(
+            invoice.get("custom_delivery_status") or ""
+        ).strip()
+
+
+def _apply_home_delivery_collection_state(order, invoice):
+    collection = _home_delivery_collection_state(order, invoice)
+    order.payment_status = collection["payment_status"]
+    order.verified_paid_amount = collection["verified_amount"]
+
+    if collection["payment_entry"]:
+        order.payment_entry = collection["payment_entry"]
+
+    if collection["collection_ready"]:
+        verified_by = (
+            invoice.get("custom_collection_confirmed_by")
+            or invoice.get("custom_prepaid_confirmed_by")
+            or frappe.session.user
+        )
+        verified_at = (
+            invoice.get("custom_collection_confirmed_at")
+            or invoice.get("custom_prepaid_confirmed_at")
+            or now_datetime()
+        )
+        order.payment_verified_by = verified_by
+        order.payment_verified_at = verified_at
+    elif collection["payment_status"] == "Pending Collection":
+        order.payment_verified_by = None
+        order.payment_verified_at = None
+
+    return collection
+
+
+def _sync_home_delivery_order_from_invoice(order, invoice, save=True):
+    if order.fulfilment_method != "Home Delivery":
+        frappe.throw(_("Home Delivery sync is only valid for Home Delivery orders."))
+    if order.sales_invoice != invoice.name:
+        frappe.throw(_("Sales Invoice is not the active invoice linked to this Online Order."))
+    if cint(invoice.docstatus) != 1:
+        frappe.throw(_("The linked Sales Invoice must be submitted."))
+
+    invoice_delivery_status = str(
+        invoice.get("custom_delivery_status") or ""
+    ).strip()
+    target_status = HOME_DELIVERY_INVOICE_STATUS_MAP.get(invoice_delivery_status)
+
+    if (
+        target_status
+        and order.status not in TERMINAL_STATUSES
+        and order.status != target_status
+    ):
+        order.flags.ignore_online_order_transition = True
+        order.status = target_status
+
+    _sync_home_delivery_snapshot(order, invoice)
+    collection = _apply_home_delivery_collection_state(order, invoice)
+
+    if save:
+        order.save(ignore_permissions=True)
+
+    return {
+        "online_order": order.name,
+        "online_order_status": order.status,
+        "invoice_delivery_status": invoice_delivery_status,
+        "payment_status": order.payment_status,
+        "payment_entry": order.payment_entry,
+        "verified_paid_amount": flt(order.verified_paid_amount),
+        "outstanding": collection["outstanding"],
+        "collection_ready": collection["collection_ready"],
+    }
+
+
+def sync_home_delivery_after_collection(invoice_name: str):
+    """Trusted backend resync after delivery collection fields are final."""
+    invoice_name = str(invoice_name or "").strip()
+    if not invoice_name or not frappe.db.exists("Sales Invoice", invoice_name):
+        frappe.throw(_("Linked Sales Invoice was not found."))
+
+    invoice = frappe.get_doc("Sales Invoice", invoice_name)
+    order_name = str(invoice.get("custom_online_order") or "").strip()
+    if not order_name:
+        return {
+            "sales_invoice": invoice.name,
+            "online_order": "",
+            "synced": False,
+        }
+
+    if not frappe.db.exists("Online Order", order_name):
+        frappe.throw(
+            _("Linked Online Order {0} was not found.").format(order_name)
+        )
+
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order_name,),
+    )
+
+    order = frappe.get_doc("Online Order", order_name)
+    invoice.reload()
+
+    if order.fulfilment_method != "Home Delivery":
+        return {
+            "sales_invoice": invoice.name,
+            "online_order": order.name,
+            "synced": False,
+        }
+
+    result = _sync_home_delivery_order_from_invoice(
+        order,
+        invoice,
+        save=True,
+    )
+    result["synced"] = True
+    return result
 
 
 def _build_sales_invoice_draft(order):
@@ -1296,6 +1573,108 @@ def complete_pharmacy_pickup(order_name: str, pickup_notes: str | None = None):
 
 
 @frappe.whitelist()
+def sync_home_delivery_execution(order_name: str):
+    order = frappe.get_doc("Online Order", order_name)
+    if not frappe.has_permission("Online Order", "write", doc=order):
+        frappe.throw(
+            _("You do not have permission to update this Online Order."),
+            frappe.PermissionError,
+        )
+
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+
+    if order.fulfilment_method != "Home Delivery":
+        frappe.throw(_("This action is only valid for Home Delivery orders."))
+    if not order.sales_invoice:
+        frappe.throw(_("A linked Sales Invoice is required."))
+
+    invoice = frappe.get_doc("Sales Invoice", order.sales_invoice)
+    before_status = order.status
+    before_payment_status = order.payment_status
+    result = _sync_home_delivery_order_from_invoice(order, invoice, save=True)
+
+    if before_status != order.status or before_payment_status != order.payment_status:
+        order.add_comment(
+            "Info",
+            _(
+                "Home Delivery state refreshed from Sales Invoice {0}: order {1}, payment {2}."
+            ).format(invoice.name, order.status, order.payment_status),
+        )
+
+    return result
+
+
+@frappe.whitelist()
+def complete_home_delivery(order_name: str, completion_notes: str | None = None):
+    order = frappe.get_doc("Online Order", order_name)
+    if not frappe.has_permission("Online Order", "write", doc=order):
+        frappe.throw(
+            _("You do not have permission to update this Online Order."),
+            frappe.PermissionError,
+        )
+
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+
+    if order.fulfilment_method != "Home Delivery":
+        frappe.throw(_("This action is only valid for Home Delivery orders."))
+    if order.status != "Delivered":
+        frappe.throw(_("Online Order must be Delivered before completion."))
+    if not order.sales_invoice:
+        frappe.throw(_("A linked Sales Invoice is required."))
+
+    invoice = frappe.get_doc("Sales Invoice", order.sales_invoice)
+    _sync_home_delivery_order_from_invoice(order, invoice, save=False)
+
+    if order.status != "Delivered":
+        frappe.throw(
+            _("The linked Sales Invoice is not currently marked Delivered.")
+        )
+
+    collection = _home_delivery_collection_state(order, invoice)
+    if not collection["collection_ready"]:
+        if collection["outstanding"] > PAYMENT_TOLERANCE:
+            frappe.throw(
+                _("Confirm delivery collection first. Remaining outstanding: {0}.").format(
+                    collection["outstanding"]
+                )
+            )
+        frappe.throw(
+            _("Delivery collection verification must be Confirmed before completion.")
+        )
+
+    order.status = "Completed"
+    if order.meta.has_field("delivery_completed_by"):
+        order.delivery_completed_by = frappe.session.user
+    if order.meta.has_field("delivery_completed_at"):
+        order.delivery_completed_at = now_datetime()
+    if order.meta.has_field("delivery_completion_notes"):
+        order.delivery_completion_notes = str(completion_notes or "").strip()
+    order.save(ignore_permissions=True)
+    order.add_comment(
+        "Info",
+        _("Home Delivery completed by {0}.").format(frappe.session.user),
+    )
+
+    return {
+        "online_order": order.name,
+        "status": order.status,
+        "sales_invoice": invoice.name,
+        "invoice_delivery_status": invoice.get("custom_delivery_status"),
+        "payment_entry": order.payment_entry,
+        "payment_status": order.payment_status,
+        "verified_paid_amount": flt(order.verified_paid_amount),
+    }
+
+
+@frappe.whitelist()
 def transition_status(order_name: str, target_status: str, reason: str | None = None):
     order = frappe.get_doc("Online Order", order_name)
     if not frappe.has_permission("Online Order", "write", doc=order):
@@ -1310,6 +1689,19 @@ def transition_status(order_name: str, target_status: str, reason: str | None = 
         and order.fulfilment_method == "Pharmacy Pickup"
     ):
         frappe.throw(_("Use the controlled Complete Pharmacy Pickup action."))
+
+    if order.fulfilment_method == "Home Delivery" and target_status in {
+        "Ready for Delivery",
+        "Out for Delivery",
+        "Delivered",
+        "Returned",
+        "Completed",
+    }:
+        frappe.throw(
+            _(
+                "Use Delivery Management for execution, then use Refresh Delivery & Collection Status or Complete Home Delivery."
+            )
+        )
 
     if target_status == "Cancelled":
         order.cancellation_reason = str(reason or order.cancellation_reason or "").strip()

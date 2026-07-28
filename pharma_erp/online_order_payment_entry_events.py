@@ -4,12 +4,39 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
+from pharma_erp.pharma_erp.doctype.online_order.online_order import (
+    _home_delivery_collection_state,
+    _sync_home_delivery_order_from_invoice,
+)
+
 PAYMENT_TOLERANCE = 0.01
 EXACT_PICKUP_AMOUNT_GUARD_VERSION = "v0.8.0-step2d2"
+HOME_DELIVERY_PAYMENT_INFERENCE_VERSION = "v0.8.0-step2e"
 
 
 def _online_order_name(doc) -> str:
-    return str(doc.get("custom_online_order") or "").strip()
+    direct = str(doc.get("custom_online_order") or "").strip()
+    if direct:
+        return direct
+
+    order_names = set()
+    for row in doc.get("references") or []:
+        if row.reference_doctype != "Sales Invoice" or flt(row.allocated_amount) <= 0:
+            continue
+        order_name = str(
+            frappe.db.get_value(
+                "Sales Invoice",
+                row.reference_name,
+                "custom_online_order",
+            )
+            or ""
+        ).strip()
+        if order_name:
+            order_names.add(order_name)
+
+    if len(order_names) == 1:
+        return next(iter(order_names))
+    return ""
 
 
 def _get_order(doc):
@@ -113,13 +140,51 @@ def _set_invoice_collection_fields(invoice_name, values):
         frappe.db.set_value("Sales Invoice", invoice_name, updates, update_modified=False)
 
 
+def _validate_home_delivery_payment(doc, order):
+    prepaid_stage = bool(
+        order.payment_timing in {"Prepaid", "Partially Prepaid"}
+        and order.status not in {"Delivered", "Returned", "Completed"}
+    )
+    if order.status not in {"Delivered", "Completed"} and not prepaid_stage:
+        frappe.throw(
+            _("Home Delivery collection can only be posted after the order is Delivered.")
+        )
+    if doc.payment_type != "Receive":
+        frappe.throw(_("Home Delivery collection Payment Entry must use Payment Type Receive."))
+    if doc.party_type != "Customer" or doc.party != order.customer:
+        frappe.throw(
+            _("Home Delivery collection customer must match the Online Order customer.")
+        )
+    if doc.company != order.company:
+        frappe.throw(
+            _("Home Delivery collection company must match the Online Order company.")
+        )
+    if not order.sales_invoice:
+        frappe.throw(_("Online Order has no active Sales Invoice."))
+    if cint(frappe.db.get_value("Sales Invoice", order.sales_invoice, "docstatus")) != 1:
+        frappe.throw(_("The linked Sales Invoice must be submitted."))
+    if not _allocated_invoice_rows(doc, order.sales_invoice):
+        frappe.throw(
+            _("Home Delivery collection must allocate an amount to Sales Invoice {0}.").format(
+                order.sales_invoice
+            )
+        )
+
+
 def validate_linked_online_order_payment(doc, method=None):
     order = _get_order(doc)
     if not order:
         return
 
+    if doc.meta.has_field("custom_online_order") and not doc.get("custom_online_order"):
+        doc.custom_online_order = order.name
+
+    if order.fulfilment_method == "Home Delivery":
+        _validate_home_delivery_payment(doc, order)
+        return
+
     if order.fulfilment_method != "Pharmacy Pickup":
-        frappe.throw(_("Pickup collection Payment Entries are only valid for Pharmacy Pickup orders."))
+        frappe.throw(_("Unsupported Online Order fulfilment method for collection."))
     if order.status not in {"Ready for Pickup", "Completed"}:
         frappe.throw(_("Online Order must be Ready for Pickup before collection."))
     if doc.payment_type != "Receive":
@@ -158,6 +223,18 @@ def on_submit_linked_online_order_payment(doc, method=None):
     order.reload()
 
     invoice = frappe.get_doc("Sales Invoice", order.sales_invoice)
+
+    if order.fulfilment_method == "Home Delivery":
+        order.payment_entry = doc.name
+        result = _sync_home_delivery_order_from_invoice(order, invoice, save=True)
+        order.add_comment(
+            "Info",
+            _(
+                "Payment Entry {0} submitted for Home Delivery collection. Payment status: {1}."
+            ).format(doc.name, result["payment_status"]),
+        )
+        return
+
     outstanding = max(0, flt(invoice.outstanding_amount))
     verified_amount = max(0, flt(invoice.grand_total) - outstanding)
 
@@ -197,7 +274,7 @@ def before_cancel_linked_online_order_payment(doc, method=None):
     if order.status == "Completed":
         frappe.throw(
             _(
-                "Pickup Payment Entry cannot be cancelled after the Online Order is Completed. Use the controlled return/reversal process."
+                "Online Order collection Payment Entry cannot be cancelled after the Online Order is Completed. Use the controlled return/reversal process."
             )
         )
 
@@ -208,6 +285,37 @@ def on_cancel_linked_online_order_payment(doc, method=None):
         return
 
     invoice = frappe.get_doc("Sales Invoice", order.sales_invoice) if order.sales_invoice else None
+
+    if order.fulfilment_method == "Home Delivery":
+        if order.payment_entry == doc.name:
+            order.payment_entry = None
+        if invoice and invoice.get("custom_collection_payment_entry") == doc.name:
+            _set_invoice_collection_fields(
+                invoice.name,
+                {
+                    "custom_collection_payment_entry": None,
+                    "custom_collection_verification_status": "Awaiting Confirmation",
+                    "custom_collection_confirmed_by": None,
+                    "custom_collection_confirmed_at": None,
+                },
+            )
+            invoice.reload()
+        if invoice:
+            _sync_home_delivery_order_from_invoice(order, invoice, save=True)
+        else:
+            order.payment_status = "Pending Collection"
+            order.verified_paid_amount = 0
+            order.payment_verified_by = None
+            order.payment_verified_at = None
+            order.save(ignore_permissions=True)
+        order.add_comment(
+            "Info",
+            _("Payment Entry {0} was cancelled; Home Delivery collection was refreshed.").format(
+                doc.name
+            ),
+        )
+        return
+
     outstanding = max(0, flt(invoice.outstanding_amount)) if invoice else flt(order.grand_total)
     verified_amount = max(0, flt(order.grand_total) - outstanding)
 
@@ -249,8 +357,27 @@ def on_trash_linked_online_order_payment(doc, method=None):
         return
     if order.status == "Completed":
         frappe.throw(
-            _("Pickup Payment Entry cannot be deleted after the Online Order is Completed.")
+            _("Online Order collection Payment Entry cannot be deleted after completion.")
         )
+
+    if order.fulfilment_method == "Home Delivery":
+        if order.payment_entry == doc.name:
+            order.payment_entry = None
+            order.payment_status = (
+                "No Collection Required"
+                if order.payment_timing == "No Collection Required"
+                else "Pending Collection"
+            )
+            order.verified_paid_amount = 0
+            order.payment_verified_by = None
+            order.payment_verified_at = None
+            order.save(ignore_permissions=True)
+            order.add_comment(
+                "Info",
+                _("Home Delivery Payment Entry Draft {0} was deleted.").format(doc.name),
+            )
+        return
+
     if order.payment_entry == doc.name:
         order.payment_entry = None
         order.payment_status = (

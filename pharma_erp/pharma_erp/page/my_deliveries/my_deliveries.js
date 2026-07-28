@@ -1054,6 +1054,19 @@ class MyDeliveriesPage {
         const displayOutstanding = partialReturnRequest
             ? Number(partialReturnRequest.remaining_collectible || 0)
             : Number(order.group_outstanding_amount ?? order.outstanding_amount ?? 0);
+        const step2e3CollectionRequiredAtDelivery = (
+        ["Collect on Delivery", "Partially Prepaid"].includes(prepaidTiming)
+        && displayOutstanding > 0.01
+        && !["Confirmed", "Awaiting Confirmation"].includes(collectionStatus)
+        );
+        const step2e3CollectionStatusDisplay = step2e3CollectionRequiredAtDelivery
+        ? `${__("مطلوب عند التسليم")} — ${this.format_money(displayOutstanding)}`
+        : this.get_collection_status_label(collectionStatus);
+        const step2e3ShowDeliveryReturnReason = (
+        deliveryReturnStatus !== "Not Required"
+        && Boolean(deliveryReturnReason)
+        );
+
         const reportedMethod = order.custom_driver_reported_customer_payment_method || "";
         const reportedAmount = Number(order.custom_driver_reported_collected_amount || 0);
         const collectionProof = order.custom_driver_collection_proof || "";
@@ -1185,14 +1198,14 @@ class MyDeliveriesPage {
                     ${reportedMethod ? this.info_row("طريقة دفع العميل", reportedMethod) : ""}
                     ${reportedAmount ? this.info_row("المبلغ المعلن", this.format_money(reportedAmount)) : ""}
                     ${collectionProof ? this.info_row("إثبات التحصيل", "تم إرفاق صورة") : ""}
-                    ${this.info_row("حالة التحصيل", this.get_collection_status_label(collectionStatus))}
+                    ${this.info_row("حالة التحصيل", step2e3CollectionStatusDisplay)}
                     ${order.custom_delivery_card_pos_terminal ? this.info_row("ماكينة الفيزا", order.custom_delivery_card_pos_terminal) : ""}
                     ${this.info_row("حالة الأوردر", this.get_status_label(status))}
                     ${driverReturnStatus !== "Not Required" ? this.info_row("حالة رجوع الطيار", this.get_driver_return_status_label(driverReturnStatus)) : ""}
                     ${order.custom_delivery_return_type && order.custom_delivery_return_type !== "Not Required" ? this.info_row("نوع المرتجع", order.custom_delivery_return_type) : ""}
                     ${partialReturnRequest ? this.info_row("طلب المرتجع", partialReturnRequest.name || "") : ""}
                     ${deliveryReturnStatus !== "Not Required" ? this.info_row("حالة المرتجع", this.get_delivery_return_status_label(deliveryReturnStatus)) : ""}
-                    ${deliveryReturnReason ? this.info_row("سبب الرجوع", deliveryReturnReason) : ""}
+                    ${step2e3ShowDeliveryReturnReason ? this.info_row("سبب الرجوع", deliveryReturnReason) : ""}
                     ${addOnStatus ? this.info_row("حالة الإضافة", this.get_add_on_status_label(addOnStatus)) : ""}
                     ${order.custom_delivery_attempt_count ? this.info_row("محاولات التوصيل", order.custom_delivery_attempt_count) : ""}
                     ${order.custom_delivery_trip_stop_sequence ? this.info_row("ترتيب الوقفة", order.custom_delivery_trip_stop_sequence) : ""}

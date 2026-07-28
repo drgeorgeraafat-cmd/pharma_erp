@@ -94,7 +94,17 @@
   "pickup_completion_section",
   "pickup_completed_by",
   "pickup_completed_at",
-  "pickup_completion_notes"
+  "pickup_completion_notes",
+  "delivery_execution_section",
+  "delivery_boy",
+  "delivery_trip",
+  "delivery_attempt",
+  "delivery_execution_column_break",
+  "delivery_departure_at",
+  "delivery_delivered_at",
+  "delivery_completed_by",
+  "delivery_completed_at",
+  "delivery_completion_notes"
  ],
  "fields": [
   {
@@ -641,6 +651,77 @@
    "fieldtype": "Small Text",
    "label": "Pickup Completion Notes",
    "read_only": 1
+  },
+  {
+   "fieldname": "delivery_execution_section",
+   "fieldtype": "Section Break",
+   "label": "Home Delivery Execution",
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_boy",
+   "fieldtype": "Link",
+   "label": "Delivery Boy",
+   "options": "Employee",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_trip",
+   "fieldtype": "Link",
+   "label": "Delivery Trip",
+   "options": "Delivery Trip",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_attempt",
+   "fieldtype": "Link",
+   "label": "Delivery Attempt",
+   "options": "Delivery Attempt",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_execution_column_break",
+   "fieldtype": "Column Break",
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_departure_at",
+   "fieldtype": "Datetime",
+   "label": "Delivery Departure At",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_delivered_at",
+   "fieldtype": "Datetime",
+   "label": "Delivered At",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_completed_by",
+   "fieldtype": "Link",
+   "label": "Delivery Completed By",
+   "options": "User",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_completed_at",
+   "fieldtype": "Datetime",
+   "label": "Delivery Completed At",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
+  },
+  {
+   "fieldname": "delivery_completion_notes",
+   "fieldtype": "Small Text",
+   "label": "Delivery Completion Notes",
+   "read_only": 1,
+   "depends_on": "eval:doc.fulfilment_method == 'Home Delivery'"
   }
  ],
  "index_web_pages_for_search": 0,

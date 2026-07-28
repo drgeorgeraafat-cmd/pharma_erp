@@ -90,6 +90,13 @@ frappe.ui.form.on("Online Order", {
         ) {
             addPickupActions(frm);
         }
+
+        if (
+            frm.doc.fulfilment_method === "Home Delivery"
+            && frm.doc.sales_invoice
+        ) {
+            addHomeDeliveryActions(frm);
+        }
     },
 });
 
@@ -106,18 +113,14 @@ function statusTransitions(frm) {
         "Payment Verification": ["Confirmed", "Payment Failed", "On Hold", "Cancelled"],
         "Payment Failed": ["Ready for Payment", "Cancelled"],
         "Confirmed": ["Preparing", "Cancelled"],
-        "Preparing": [
-            frm.doc.fulfilment_method === "Pharmacy Pickup"
-                ? "Ready for Pickup"
-                : "Ready for Delivery",
-            "On Hold",
-            "Cancelled",
-        ],
-        "Ready for Delivery": ["Out for Delivery", "Cancelled"],
+        "Preparing": frm.doc.fulfilment_method === "Pharmacy Pickup"
+            ? ["Ready for Pickup", "On Hold", "Cancelled"]
+            : ["On Hold", "Cancelled"],
+        "Ready for Delivery": [],
         "Ready for Pickup": ["Cancelled"],
-        "Out for Delivery": ["Delivered", "Returned"],
-        "Delivered": ["Completed", "Returned"],
-        "Returned": ["Completed"],
+        "Out for Delivery": [],
+        "Delivered": [],
+        "Returned": [],
         "On Hold": ["Under Review", "Prescription Review", "Stock Review", "Ready for Payment", "Preparing", "Rejected", "Cancelled"],
     };
     return transitions[frm.doc.status] || [];
@@ -394,6 +397,93 @@ async function completePharmacyPickup(frm, outstanding) {
     const result = response.message || {};
     frappe.show_alert({
         message: __("Online Order {0} completed. Payment status: {1}.", [result.online_order, result.payment_status]),
+        indicator: "green",
+    });
+}
+
+function addHomeDeliveryActions(frm) {
+    frm.add_custom_button(
+        __("Open Delivery Management"),
+        () => frappe.set_route("delivery-management"),
+        __("Delivery"),
+    );
+
+    if (!["Completed", "Rejected", "Cancelled"].includes(frm.doc.status)) {
+        frm.add_custom_button(
+            __("Refresh Delivery & Collection Status"),
+            () => syncHomeDeliveryExecution(frm),
+            __("Delivery"),
+        );
+    }
+
+    if (frm.doc.status === "Delivered") {
+        frm.add_custom_button(
+            __("Complete Home Delivery"),
+            () => completeHomeDelivery(frm),
+            __("Delivery"),
+        );
+    }
+}
+
+async function syncHomeDeliveryExecution(frm) {
+    const response = await frappe.call({
+        method: "pharma_erp.pharma_erp.doctype.online_order.online_order.sync_home_delivery_execution",
+        args: { order_name: frm.doc.name },
+        freeze: true,
+        freeze_message: __("Refreshing delivery and collection status..."),
+    });
+
+    await frm.reload_doc();
+    const result = response.message || {};
+    frappe.show_alert({
+        message: __("Delivery status: {0}. Payment status: {1}.", [
+            result.online_order_status || frm.doc.status,
+            result.payment_status || frm.doc.payment_status,
+        ]),
+        indicator: result.collection_ready ? "green" : "blue",
+    });
+}
+
+async function completeHomeDelivery(frm) {
+    const values = await new Promise((resolve) => {
+        frappe.prompt(
+            [{
+                fieldname: "completion_notes",
+                fieldtype: "Small Text",
+                label: __("Home Delivery Completion Notes"),
+            }],
+            (data) => resolve(data),
+            __("Complete Home Delivery"),
+            __("Continue"),
+        );
+    });
+
+    const confirmed = await new Promise((resolve) => {
+        frappe.confirm(
+            __("Confirm delivery completion for Online Order {0}? Collection must already be verified.", [frm.doc.name]),
+            () => resolve(true),
+            () => resolve(false),
+        );
+    });
+    if (!confirmed) return;
+
+    const response = await frappe.call({
+        method: "pharma_erp.pharma_erp.doctype.online_order.online_order.complete_home_delivery",
+        args: {
+            order_name: frm.doc.name,
+            completion_notes: (values && values.completion_notes) || "",
+        },
+        freeze: true,
+        freeze_message: __("Completing Home Delivery..."),
+    });
+
+    await frm.reload_doc();
+    const result = response.message || {};
+    frappe.show_alert({
+        message: __("Online Order {0} completed. Payment status: {1}.", [
+            result.online_order,
+            result.payment_status,
+        ]),
         indicator: "green",
     });
 }

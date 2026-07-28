@@ -1322,6 +1322,12 @@ def confirm_delivery_collection(
     )
     invoice.reload()
     _refresh_invoice_trip(invoice)
+    # STEP2E4_POST_COLLECTION_RESYNC
+    frappe.get_attr(
+        "pharma_erp.pharma_erp.doctype.online_order.online_order."
+        "sync_home_delivery_after_collection"
+    )(invoice.name)
+
     return _collection_result(invoice.name)
 
 

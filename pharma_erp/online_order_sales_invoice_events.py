@@ -4,24 +4,18 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
+from pharma_erp.pharma_erp import payment_card_management as shift_finance
+
 from pharma_erp.pharma_erp.doctype.online_order.online_order import (
     _active_conversion_rows,
     _default_invoice_warehouse,
     _delivery_fee_item,
+    _sync_home_delivery_order_from_invoice,
 )
 
 MONEY_TOLERANCE = 0.01
 QTY_TOLERANCE = 0.000001
 LATE_EXECUTION_STATUSES = {"Out for Delivery", "Delivered", "Returned", "Completed"}
-DELIVERY_STATUS_MAP = {
-    "Ready for Delivery": "Ready for Delivery",
-    "Out for Delivery": "Out for Delivery",
-    "Delivered": "Delivered",
-    "Returning to Pharmacy": "Returned",
-    "Returned to Pharmacy": "Returned",
-}
-
-
 def _online_order_name(doc) -> str:
     return str(doc.get("custom_online_order") or "").strip()
 
@@ -170,6 +164,58 @@ def validate_linked_online_order_invoice(doc, method=None):
     _assert_close(_("Invoice Discount Amount"), doc.discount_amount, order.discount_amount)
 
 
+
+def _bind_home_delivery_invoice_to_active_shift(doc, order):
+    """Bind a controlled Online Order delivery invoice to the open shift.
+
+    Delivery Management is intentionally scoped to the active Pharmacy Shift.
+    A submitted Home Delivery invoice without a shift link becomes invisible
+    on the operational board, so submission must not proceed without this
+    binding.
+    """
+    if order.fulfilment_method != "Home Delivery":
+        return ""
+
+    active_shift = shift_finance._current_open_shift(doc.company)
+    if not active_shift:
+        frappe.throw(
+            _(
+                "An open Pharmacy Shift is required before submitting a Home "
+                "Delivery Sales Invoice. Open the shift first, then retry."
+            )
+        )
+
+    active_shift_name = active_shift.name
+
+    current_shift = str(
+        doc.get("custom_delivery_shift")
+        or doc.get("custom_pharmacy_shift")
+        or ""
+    ).strip()
+
+    if current_shift and current_shift != active_shift_name:
+        frappe.throw(
+            _(
+                "Sales Invoice is linked to delivery shift {0}, but the active "
+                "shift is {1}. Use the controlled shift transfer process."
+            ).format(current_shift, active_shift_name)
+        )
+
+    for fieldname in (
+        "custom_pharmacy_shift",
+        "custom_delivery_shift",
+    ):
+        if doc.meta.has_field(fieldname):
+            doc.set(fieldname, active_shift_name)
+
+    if (
+        doc.meta.has_field("custom_original_delivery_shift")
+        and not doc.get("custom_original_delivery_shift")
+    ):
+        doc.custom_original_delivery_shift = active_shift_name
+
+    return active_shift_name
+
 def before_submit_linked_online_order_invoice(doc, method=None):
     order = _get_order(doc)
     if not order:
@@ -183,6 +229,8 @@ def before_submit_linked_online_order_invoice(doc, method=None):
             _("Online Order must be Confirmed or Preparing before Sales Invoice submit.")
         )
     order._guard_confirmation_ready()
+
+    _bind_home_delivery_invoice_to_active_shift(doc, order)
 
     if order.status == "Confirmed":
         order.status = "Preparing"
@@ -212,13 +260,12 @@ def on_submit_linked_online_order_invoice(doc, method=None):
         frappe.throw(_("Online Order active Sales Invoice link changed during submit."))
 
     if order.fulfilment_method == "Home Delivery":
-        target = "Ready for Delivery"
-        snapshot = "Ready for Delivery"
+        result = _sync_home_delivery_order_from_invoice(order, doc, save=True)
+        target = result["online_order_status"]
     else:
         target = "Ready for Pickup"
-        snapshot = ""
+        _save_order_status(order, target, "")
 
-    _save_order_status(order, target, snapshot)
     order.add_comment(
         "Info",
         _("Sales Invoice {0} submitted; Online Order moved to {1}.").format(
@@ -234,15 +281,7 @@ def sync_online_order_after_invoice_update(doc, method=None):
     if order.fulfilment_method != "Home Delivery":
         return
 
-    invoice_delivery_status = str(doc.get("custom_delivery_status") or "").strip()
-    target = DELIVERY_STATUS_MAP.get(invoice_delivery_status)
-    if not target:
-        return
-
-    if order.status == target and order.delivery_status_snapshot == invoice_delivery_status:
-        return
-
-    _save_order_status(order, target, invoice_delivery_status)
+    _sync_home_delivery_order_from_invoice(order, doc, save=True)
 
 
 def before_cancel_linked_online_order_invoice(doc, method=None):
@@ -258,15 +297,23 @@ def before_cancel_linked_online_order_invoice(doc, method=None):
                 "Use the controlled return/reversal process."
             )
         )
-    if order.payment_entry and frappe.db.exists("Payment Entry", order.payment_entry):
+    payment_links = {
+        str(order.payment_entry or "").strip(),
+        str(doc.get("custom_collection_payment_entry") or "").strip(),
+        str(doc.get("custom_prepaid_payment_entry") or "").strip(),
+    }
+    payment_links.discard("")
+    for payment_name in sorted(payment_links):
+        if not frappe.db.exists("Payment Entry", payment_name):
+            continue
         payment_docstatus = cint(
-            frappe.db.get_value("Payment Entry", order.payment_entry, "docstatus")
+            frappe.db.get_value("Payment Entry", payment_name, "docstatus")
         )
         if payment_docstatus < 2:
             frappe.throw(
                 _(
-                    "Cancel or delete active pickup Payment Entry {0} before cancelling this Sales Invoice."
-                ).format(order.payment_entry)
+                    "Cancel or delete active collection Payment Entry {0} before cancelling this Sales Invoice."
+                ).format(payment_name)
             )
 
 
@@ -293,6 +340,18 @@ def on_cancel_linked_online_order_invoice(doc, method=None):
     )
     if order.meta.has_field("delivery_status_snapshot"):
         order.delivery_status_snapshot = ""
+    for fieldname in (
+        "delivery_boy",
+        "delivery_trip",
+        "delivery_attempt",
+        "delivery_departure_at",
+        "delivery_delivered_at",
+        "delivery_completed_by",
+        "delivery_completed_at",
+        "delivery_completion_notes",
+    ):
+        if order.meta.has_field(fieldname):
+            order.set(fieldname, None)
     for row in order.items:
         row.sales_invoice_item = None
     order.save(ignore_permissions=True)

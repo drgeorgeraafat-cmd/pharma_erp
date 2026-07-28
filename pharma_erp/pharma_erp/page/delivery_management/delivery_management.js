@@ -1757,6 +1757,19 @@ class DeliveryManagementPage {
         const displayOutstanding = partialReturnRequest
             ? Number(partialReturnRequest.remaining_collectible || 0)
             : Number(order.group_outstanding_amount ?? order.outstanding_amount ?? 0);
+        const step2e3CollectionRequiredAtDelivery = (
+        ["Collect on Delivery", "Partially Prepaid"].includes(prepaidTiming)
+        && displayOutstanding > 0.01
+        && !["Confirmed", "Awaiting Confirmation"].includes(collectionStatus)
+        );
+        const step2e3CollectionStatusDisplay = step2e3CollectionRequiredAtDelivery
+        ? `${__("مطلوب عند التسليم")} — ${this.format_money(displayOutstanding)}`
+        : this.get_collection_status_label(collectionStatus);
+        const step2e3ShowDeliveryReturnReason = (
+        deliveryReturnStatus !== "Not Required"
+        && Boolean(deliveryReturnReason)
+        );
+
         const reportedMethod = order.custom_driver_reported_customer_payment_method || "";
         const reportedAmount = Number(order.custom_driver_reported_collected_amount || 0);
         const collectionProof = order.custom_driver_collection_proof || "";
@@ -1957,7 +1970,7 @@ class DeliveryManagementPage {
                     ${deliveryReturnType !== "Not Required" ? this.info_row("نوع المرتجع", deliveryReturnType) : ""}
                     ${partialReturnRequest ? this.info_row("طلب المرتجع", partialReturnRequest.name || "") : ""}
                     ${deliveryReturnStatus !== "Not Required" ? this.info_row("حالة المرتجع", this.get_delivery_return_status_label(deliveryReturnStatus)) : ""}
-                    ${deliveryReturnReason ? this.info_row("سبب الرجوع", deliveryReturnReason) : ""}
+                    ${step2e3ShowDeliveryReturnReason ? this.info_row("سبب الرجوع", deliveryReturnReason) : ""}
                     ${returnCreditNote ? this.info_row("مرتجع المبيعات", returnCreditNote) : ""}
                     ${order.sales_shift || order.custom_pharmacy_shift ? this.info_row("وردية البيع", order.sales_shift || order.custom_pharmacy_shift) : ""}
                     ${order.current_delivery_shift || order.custom_delivery_shift ? this.info_row("وردية التوصيل", order.current_delivery_shift || order.custom_delivery_shift) : ""}
@@ -1972,7 +1985,7 @@ class DeliveryManagementPage {
                     ${reportedMethod ? this.info_row("طريقة دفع العميل", reportedMethod) : ""}
                     ${reportedAmount ? this.info_row("المبلغ المعلن من الطيار", this.format_money(reportedAmount)) : ""}
                     ${collectionProof ? this.info_row("إثبات التحصيل", "تم إرفاق صورة") : ""}
-                    ${this.info_row("حالة التحصيل", this.get_collection_status_label(collectionStatus))}
+                    ${this.info_row("حالة التحصيل", step2e3CollectionStatusDisplay)}
                     ${order.custom_delivery_card_pos_terminal ? this.info_row("ماكينة الفيزا", order.custom_delivery_card_pos_terminal) : ""}
                     ${order.custom_collection_difference ? this.info_row("فرق التحصيل", this.format_money(order.custom_collection_difference)) : ""}
 
