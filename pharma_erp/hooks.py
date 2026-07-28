@@ -258,6 +258,11 @@ doctype_js = {
 doc_events = {
     "Item": {
         "validate": "pharma_erp.online_catalog_readiness.validate_item_online_catalog_selection",
+        "on_update": "pharma_erp.website_item_publishing.sync_managed_website_item_from_item",
+    },
+    "Website Item": {
+        "validate": "pharma_erp.website_item_publishing.validate_controlled_website_item",
+        "on_update": "pharma_erp.website_item_publishing.sync_website_item_publication_flag",
     },
     "Customer": {
         "before_insert": "pharma_erp.customer_events.set_customer_code"
