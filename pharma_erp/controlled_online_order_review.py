@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from collections import Counter
 from typing import Any
 
@@ -330,8 +331,14 @@ def _snapshot(order) -> dict[str, Any]:
         "status": order.status,
         "source_channel": order.source_channel,
         "external_reference": order.external_reference,
+        "customer": order.customer or "",
         "customer_name": order.customer_name,
         "mobile_no": order.mobile_no,
+        "email_id": order.email_id or "",
+        "customer_resolution_status": order.customer_resolution_status or "Unresolved",
+        "customer_resolution_method": getattr(order, "custom_customer_resolution_method", "") or "",
+        "website_user": getattr(order, "custom_website_user", "") or "",
+        "customer_address": order.customer_address or "",
         "fulfilment_method": order.fulfilment_method,
         "company": order.company,
         "warehouse": order.warehouse or "",
@@ -344,6 +351,18 @@ def _snapshot(order) -> dict[str, Any]:
         "prescription_review_notes": order.prescription_review_notes or "",
         "prescription_reviewed_by": order.prescription_reviewed_by or "",
         "prescription_reviewed_at": order.prescription_reviewed_at,
+        "delivery_fee": flt(order.delivery_fee),
+        "delivery_fee_rule": order.delivery_fee_rule or "",
+        "estimated_delivery_time_mins": cint(order.estimated_delivery_time_mins),
+        "final_confirmation_readiness_status": getattr(
+            order, "custom_final_confirmation_readiness_status", "Pending"
+        ) or "Pending",
+        "final_confirmation_checked_by": getattr(
+            order, "custom_final_confirmation_checked_by", ""
+        ) or "",
+        "final_confirmation_checked_at": getattr(
+            order, "custom_final_confirmation_checked_at", None
+        ),
         "items": rows,
         "review_blockers": blockers["review"],
         "confirmation_blockers": blockers["confirmation"],
@@ -409,8 +428,12 @@ def get_review_queue(
             "status",
             "source_channel",
             "external_reference",
+            "customer",
             "customer_name",
             "mobile_no",
+            "customer_resolution_status",
+            "delivery_zone",
+            "warehouse",
             "fulfilment_method",
             "grand_total",
             "currency",
@@ -799,6 +822,530 @@ def apply_stock_review(
             "notes": _clean_text(notes, 1000),
             "reviewed_by": frappe.session.user,
             "reviewed_at": now_datetime(),
+        },
+    )
+    return _snapshot(order)
+
+CUSTOMER_RESOLUTION_METHODS = {
+    "Website User",
+    "Mobile",
+    "Email",
+    "Manual Confirmation",
+}
+
+
+def _normalise_match_mobile(value: Any) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def _normalise_match_email(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _customer_identity(customer: str) -> dict[str, Any]:
+    values = frappe.db.get_value(
+        "Customer",
+        customer,
+        ["name", "customer_name", "mobile_no", "email_id", "disabled"],
+        as_dict=True,
+    )
+    if not values or cint(values.get("disabled")):
+        frappe.throw(_("Customer {0} was not found or is disabled.").format(frappe.bold(customer)))
+    customer_code = customer
+    if frappe.get_meta("Customer").has_field("custom_customer_code"):
+        customer_code = frappe.db.get_value("Customer", customer, "custom_customer_code") or customer
+    return {
+        "name": values.get("name"),
+        "customer_code": customer_code,
+        "customer_name": values.get("customer_name") or customer,
+        "mobile_no": values.get("mobile_no") or "",
+        "email_id": values.get("email_id") or "",
+    }
+
+
+def _customer_addresses(customer: str) -> list[dict[str, Any]]:
+    address_names = frappe.get_all(
+        "Dynamic Link",
+        filters={
+            "parenttype": "Address",
+            "link_doctype": "Customer",
+            "link_name": customer,
+        },
+        pluck="parent",
+    )
+    if not address_names:
+        return []
+    rows = frappe.get_all(
+        "Address",
+        filters={"name": ["in", list(dict.fromkeys(address_names))], "disabled": 0},
+        fields=[
+            "name",
+            "address_title",
+            "address_type",
+            "address_line1",
+            "address_line2",
+            "city",
+            "state",
+            "country",
+            "phone",
+            "is_shipping_address",
+            "is_primary_address",
+            "custom_delivery_zone",
+        ],
+        order_by="is_shipping_address desc, is_primary_address desc, modified desc",
+    )
+    for row in rows:
+        row["label"] = " — ".join(
+            part
+            for part in (
+                row.get("address_title") or row.get("name"),
+                row.get("address_line1"),
+                row.get("city"),
+            )
+            if part
+        )
+    return rows
+
+
+def _customer_contacts(customer: str) -> list[dict[str, Any]]:
+    contact_names = frappe.get_all(
+        "Dynamic Link",
+        filters={
+            "parenttype": "Contact",
+            "link_doctype": "Customer",
+            "link_name": customer,
+        },
+        pluck="parent",
+    )
+    if not contact_names:
+        return []
+    return frappe.get_all(
+        "Contact",
+        filters={"name": ["in", list(dict.fromkeys(contact_names))]},
+        fields=["name", "full_name", "email_id", "mobile_no", "phone", "user", "is_primary_contact"],
+        order_by="is_primary_contact desc, modified desc",
+    )
+
+
+def _website_user_customers(website_user: str) -> set[str]:
+    user = str(website_user or "").strip()
+    if not user or user == "Guest":
+        return set()
+    customers: set[str] = set()
+    if frappe.db.exists("DocType", "Portal User"):
+        for customer in frappe.get_all(
+            "Portal User",
+            filters={"parenttype": "Customer", "user": user},
+            pluck="parent",
+        ):
+            customers.add(str(customer))
+    contact_names = frappe.get_all("Contact", filters={"user": user}, pluck="name")
+    if contact_names:
+        for customer in frappe.get_all(
+            "Dynamic Link",
+            filters={
+                "parenttype": "Contact",
+                "parent": ["in", contact_names],
+                "link_doctype": "Customer",
+            },
+            pluck="link_name",
+        ):
+            customers.add(str(customer))
+    return {
+        customer
+        for customer in customers
+        if frappe.db.exists("Customer", {"name": customer, "disabled": 0})
+    }
+
+
+def _customer_resolution_candidates(order) -> list[dict[str, Any]]:
+    matched: dict[str, set[str]] = {}
+
+    def add(customer: str, method: str) -> None:
+        if customer and frappe.db.exists("Customer", {"name": customer, "disabled": 0}):
+            matched.setdefault(str(customer), set()).add(method)
+
+    website_user = getattr(order, "custom_website_user", "") or ""
+    for customer in _website_user_customers(website_user):
+        add(customer, "Website User")
+
+    mobile = _normalise_match_mobile(order.mobile_no)
+    email = _normalise_match_email(order.email_id)
+
+    direct_customers = frappe.get_all(
+        "Customer",
+        filters={"disabled": 0},
+        fields=["name", "mobile_no", "email_id"],
+        limit_page_length=1000,
+    )
+    for row in direct_customers:
+        if mobile and _normalise_match_mobile(row.get("mobile_no")) == mobile:
+            add(row.get("name"), "Mobile")
+        if email and _normalise_match_email(row.get("email_id")) == email:
+            add(row.get("name"), "Email")
+
+    contact_filters: dict[str, Any] = {}
+    contacts = frappe.get_all(
+        "Contact",
+        filters=contact_filters,
+        fields=["name", "mobile_no", "phone", "email_id", "user"],
+        limit_page_length=2000,
+    )
+    contact_methods: dict[str, set[str]] = {}
+    for contact in contacts:
+        methods: set[str] = set()
+        if mobile and mobile in {
+            _normalise_match_mobile(contact.get("mobile_no")),
+            _normalise_match_mobile(contact.get("phone")),
+        }:
+            methods.add("Mobile")
+        if email and _normalise_match_email(contact.get("email_id")) == email:
+            methods.add("Email")
+        if website_user and contact.get("user") == website_user:
+            methods.add("Website User")
+        if methods:
+            contact_methods[str(contact.get("name"))] = methods
+
+    if contact_methods:
+        links = frappe.get_all(
+            "Dynamic Link",
+            filters={
+                "parenttype": "Contact",
+                "parent": ["in", list(contact_methods)],
+                "link_doctype": "Customer",
+            },
+            fields=["parent", "link_name"],
+        )
+        for link in links:
+            for method in contact_methods.get(str(link.get("parent")), set()):
+                add(link.get("link_name"), method)
+
+    candidates: list[dict[str, Any]] = []
+    for customer, methods in matched.items():
+        identity = _customer_identity(customer)
+        identity["match_methods"] = sorted(methods)
+        identity["address_count"] = len(_customer_addresses(customer))
+        identity["website_user_match"] = cint("Website User" in methods)
+        candidates.append(identity)
+    candidates.sort(
+        key=lambda row: (
+            -cint(row.get("website_user_match")),
+            row.get("customer_name") or "",
+            row.get("name") or "",
+        )
+    )
+    return candidates
+
+
+def _validate_customer_address(customer: str, address_name: str) -> dict[str, Any]:
+    if not address_name:
+        return {}
+    if not frappe.db.exists("Address", address_name):
+        frappe.throw(_("Address {0} was not found.").format(frappe.bold(address_name)))
+    linked = frappe.db.exists(
+        "Dynamic Link",
+        {
+            "parenttype": "Address",
+            "parent": address_name,
+            "link_doctype": "Customer",
+            "link_name": customer,
+        },
+    )
+    if not linked:
+        frappe.throw(_("The selected address is not linked to Customer {0}.").format(frappe.bold(customer)))
+    values = frappe.db.get_value(
+        "Address",
+        address_name,
+        [
+            "address_title",
+            "address_line1",
+            "address_line2",
+            "city",
+            "state",
+            "country",
+            "phone",
+            "disabled",
+            "custom_delivery_zone",
+        ],
+        as_dict=True,
+    ) or {}
+    if cint(values.get("disabled")):
+        frappe.throw(_("The selected address is disabled."))
+    return values
+
+
+def _apply_address_to_order(order, address_name: str, values: dict[str, Any]) -> None:
+    if not address_name:
+        return
+    order.customer_address = address_name
+    order.address_title = values.get("address_title") or address_name
+    order.address_line1 = values.get("address_line1") or ""
+    order.address_line2 = values.get("address_line2") or ""
+    order.city = values.get("city") or ""
+    order.state = values.get("state") or ""
+    order.country = values.get("country") or "Egypt"
+    order.address_phone = values.get("phone") or order.mobile_no or ""
+    order.formatted_address = ", ".join(
+        part
+        for part in (
+            order.address_line1,
+            order.address_line2,
+            order.city,
+            order.state,
+            order.country,
+        )
+        if part
+    )
+
+
+def _zone_options(order) -> list[dict[str, Any]]:
+    zones = frappe.get_all(
+        "Delivery Zone",
+        filters={"is_active": 1},
+        fields=[
+            "name",
+            "zone_name",
+            "zone_name_ar",
+            "warehouse",
+            "priority",
+            "delivery_fee",
+            "minimum_order_amount",
+            "small_order_threshold",
+            "small_order_delivery_fee",
+            "free_delivery_above",
+            "estimated_time_mins",
+        ],
+        order_by="priority asc, zone_name asc",
+    )
+    result: list[dict[str, Any]] = []
+    for zone in zones:
+        if order.warehouse and zone.get("warehouse") and zone.get("warehouse") != order.warehouse:
+            continue
+        zone["label"] = zone.get("zone_name_ar") or zone.get("zone_name") or zone.get("name")
+        result.append(zone)
+    return result
+
+
+def _zone_delivery_fee(zone: dict[str, Any], products_subtotal: float) -> tuple[float, str]:
+    subtotal = flt(products_subtotal)
+    minimum = flt(zone.get("minimum_order_amount"))
+    if minimum and subtotal + 0.000001 < minimum:
+        frappe.throw(
+            _("Order subtotal {0} is below the minimum {1} for Delivery Zone {2}.").format(
+                subtotal, minimum, frappe.bold(zone.get("name"))
+            )
+        )
+    free_above = flt(zone.get("free_delivery_above"))
+    if free_above and subtotal + 0.000001 >= free_above:
+        return 0.0, f"Free Delivery Above {free_above:g}"
+    small_threshold = flt(zone.get("small_order_threshold"))
+    small_fee = flt(zone.get("small_order_delivery_fee"))
+    if small_threshold and subtotal < small_threshold and small_fee > 0:
+        return small_fee, f"Small Order Delivery Fee Below {small_threshold:g}"
+    return flt(zone.get("delivery_fee")), "Delivery Zone Standard Fee"
+
+
+@frappe.whitelist()
+def get_customer_resolution_context(online_order: str | None = None) -> dict[str, Any]:
+    order = _get_order(online_order, "read")
+    selected_customer = order.customer or ""
+    return {
+        "online_order": order.name,
+        "website_user": getattr(order, "custom_website_user", "") or "",
+        "customer": selected_customer,
+        "customer_address": order.customer_address or "",
+        "customer_resolution_status": order.customer_resolution_status or "Unresolved",
+        "customer_resolution_method": getattr(order, "custom_customer_resolution_method", "") or "",
+        "candidates": _customer_resolution_candidates(order),
+        "selected_customer": _customer_identity(selected_customer) if selected_customer else {},
+        "addresses": _customer_addresses(selected_customer) if selected_customer else [],
+        "contacts": _customer_contacts(selected_customer) if selected_customer else [],
+        "controlled_resolution": 1,
+    }
+
+
+@frappe.whitelist()
+def get_customer_profile(customer: str | None = None) -> dict[str, Any]:
+    _require_authenticated_user()
+    name = _clean_text(customer, 140)
+    if not name:
+        frappe.throw(_("Customer is required."))
+    if not frappe.has_permission("Customer", "read"):
+        frappe.throw(_("You do not have permission to read Customers."), frappe.PermissionError)
+    return {
+        "customer": _customer_identity(name),
+        "addresses": _customer_addresses(name),
+        "contacts": _customer_contacts(name),
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def apply_customer_resolution(
+    online_order: str | None = None,
+    customer: str | None = None,
+    resolution_method: str | None = None,
+    address_name: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    customer_name = _clean_text(customer, 140)
+    method = _clean_text(resolution_method, 60)
+    address = _clean_text(address_name, 140)
+    if method not in CUSTOMER_RESOLUTION_METHODS:
+        frappe.throw(_("Select a valid customer resolution method."))
+    identity = _customer_identity(customer_name)
+    candidates = {row["name"]: row for row in _customer_resolution_candidates(order)}
+    if method != "Manual Confirmation":
+        candidate = candidates.get(customer_name)
+        if not candidate or method not in set(candidate.get("match_methods") or []):
+            frappe.throw(_("The selected Customer does not match the selected resolution method."))
+    address_values = _validate_customer_address(customer_name, address) if address else {}
+
+    order.customer = customer_name
+    order.customer_resolution_status = "Matched" if method == "Website User" else "Confirmed"
+    if order.meta.has_field("custom_customer_resolution_method"):
+        order.custom_customer_resolution_method = method
+    if order.meta.has_field("custom_customer_resolution_notes"):
+        order.custom_customer_resolution_notes = _clean_text(notes, 1000)
+    if order.meta.has_field("custom_customer_resolved_by"):
+        order.custom_customer_resolved_by = frappe.session.user
+    if order.meta.has_field("custom_customer_resolved_at"):
+        order.custom_customer_resolved_at = now_datetime()
+    _apply_address_to_order(order, address, address_values)
+    order.save(ignore_permissions=True)
+    _audit_comment(
+        order,
+        _("Controlled Customer Resolution"),
+        {
+            "customer": customer_name,
+            "customer_code": identity.get("customer_code"),
+            "resolution_method": method,
+            "resolution_status": order.customer_resolution_status,
+            "custom_website_user": getattr(order, "custom_website_user", "") or "",
+            "address": address,
+            "notes": _clean_text(notes, 1000),
+            "resolved_by": frappe.session.user,
+            "resolved_at": now_datetime(),
+        },
+    )
+    return _snapshot(order)
+
+
+@frappe.whitelist()
+def get_delivery_zone_context(online_order: str | None = None) -> dict[str, Any]:
+    order = _get_order(online_order, "read")
+    return {
+        "online_order": order.name,
+        "fulfilment_method": order.fulfilment_method,
+        "warehouse": order.warehouse or "",
+        "delivery_zone": order.delivery_zone or "",
+        "products_subtotal": flt(order.products_subtotal),
+        "current_delivery_fee": flt(order.delivery_fee),
+        "zones": _zone_options(order),
+        "controlled_delivery_zone": 1,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def apply_delivery_zone(
+    online_order: str | None = None,
+    delivery_zone: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    if order.fulfilment_method != "Home Delivery":
+        frappe.throw(_("Delivery Zone is only used for Home Delivery orders."))
+    zone_name = _clean_text(delivery_zone, 140)
+    zone = frappe.db.get_value(
+        "Delivery Zone",
+        zone_name,
+        [
+            "name",
+            "is_active",
+            "warehouse",
+            "delivery_fee",
+            "minimum_order_amount",
+            "small_order_threshold",
+            "small_order_delivery_fee",
+            "free_delivery_above",
+            "estimated_time_mins",
+        ],
+        as_dict=True,
+    )
+    if not zone or not cint(zone.get("is_active")):
+        frappe.throw(_("Select an active Delivery Zone."))
+    zone_warehouse = zone.get("warehouse") or ""
+    if order.warehouse and zone_warehouse and order.warehouse != zone_warehouse:
+        frappe.throw(
+            _("Delivery Zone warehouse {0} does not match reviewed warehouse {1}.").format(
+                frappe.bold(zone_warehouse), frappe.bold(order.warehouse)
+            )
+        )
+    if zone_warehouse:
+        _warehouse_state(zone_warehouse, order.company)
+    fee, rule = _zone_delivery_fee(zone, flt(order.products_subtotal))
+    order.delivery_zone = zone_name
+    order.warehouse = order.warehouse or zone_warehouse
+    order.delivery_fee = fee
+    order.delivery_fee_rule = rule
+    order.estimated_delivery_time_mins = cint(zone.get("estimated_time_mins"))
+    order.save(ignore_permissions=True)
+    _audit_comment(
+        order,
+        _("Controlled Delivery Zone Resolution"),
+        {
+            "delivery_zone": zone_name,
+            "warehouse": order.warehouse,
+            "products_subtotal": flt(order.products_subtotal),
+            "delivery_fee": flt(order.delivery_fee),
+            "delivery_fee_rule": order.delivery_fee_rule,
+            "grand_total": flt(order.grand_total),
+            "notes": _clean_text(notes, 1000),
+            "resolved_by": frappe.session.user,
+            "resolved_at": now_datetime(),
+        },
+    )
+    return _snapshot(order)
+
+
+@frappe.whitelist(methods=["POST"])
+def verify_final_confirmation_readiness(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    current = _snapshot(order)
+    blockers = list(current.get("review_blockers") or []) + list(
+        current.get("confirmation_blockers") or []
+    )
+    if blockers:
+        frappe.throw(
+            _("Final confirmation readiness is blocked: {0}").format(" | ".join(blockers))
+        )
+    if order.meta.has_field("custom_final_confirmation_readiness_status"):
+        order.custom_final_confirmation_readiness_status = "Ready"
+    if order.meta.has_field("custom_final_confirmation_checked_by"):
+        order.custom_final_confirmation_checked_by = frappe.session.user
+    if order.meta.has_field("custom_final_confirmation_checked_at"):
+        order.custom_final_confirmation_checked_at = now_datetime()
+    if order.meta.has_field("custom_final_confirmation_notes"):
+        order.custom_final_confirmation_notes = _clean_text(notes, 1000)
+    order.save(ignore_permissions=True)
+    _audit_comment(
+        order,
+        _("Final Confirmation Readiness Verified"),
+        {
+            "status": order.status,
+            "customer": order.customer,
+            "customer_resolution_status": order.customer_resolution_status,
+            "customer_address": order.customer_address,
+            "delivery_zone": order.delivery_zone,
+            "warehouse": order.warehouse,
+            "grand_total": flt(order.grand_total),
+            "checked_by": frappe.session.user,
+            "checked_at": now_datetime(),
+            "notes": _clean_text(notes, 1000),
+            "creates_financial_or_stock_documents": 0,
         },
     )
     return _snapshot(order)

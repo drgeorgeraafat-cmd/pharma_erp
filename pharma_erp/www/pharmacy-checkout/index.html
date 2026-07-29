@@ -12,6 +12,7 @@
          id="pharma-controlled-checkout-page"
          data-csrf="{{ csrf_token }}"
          data-validate-endpoint="/api/method/pharma_erp.controlled_cart_checkout.validate_cart"
+         data-identity-endpoint="/api/method/pharma_erp.controlled_cart_checkout.get_checkout_identity"
          data-create-endpoint="/api/method/pharma_erp.controlled_cart_checkout.create_online_order">
     <header class="pharma-checkout-header">
         <div>
@@ -28,6 +29,7 @@
         <form id="pharma-checkout-form" class="pharma-checkout-form-card" novalidate>
             <section class="pharma-form-section">
                 <h2>بيانات العميل</h2>
+                <div id="pharma-checkout-account-panel" class="pharma-checkout-note" hidden></div>
                 <div class="pharma-form-grid">
                     <label class="pharma-form-field">
                         <span>الاسم *</span>
@@ -61,6 +63,14 @@
 
             <section class="pharma-form-section" data-delivery-fields>
                 <h2>عنوان التوصيل</h2>
+                <div id="pharma-saved-address-wrap" class="pharma-form-grid" hidden>
+                    <label class="pharma-form-field pharma-form-field--full">
+                        <span>اختيار عنوان محفوظ</span>
+                        <select id="pharma-saved-address" name="customer_address">
+                            <option value="">كتابة عنوان جديد</option>
+                        </select>
+                    </label>
+                </div>
                 <div class="pharma-form-grid">
                     <label class="pharma-form-field pharma-form-field--full">
                         <span>العنوان الرئيسي *</span>

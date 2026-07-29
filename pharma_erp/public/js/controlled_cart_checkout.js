@@ -351,7 +351,11 @@
         const subtotal = document.getElementById("pharma-checkout-subtotal");
         const total = document.getElementById("pharma-checkout-total");
         const csrf = root.dataset.csrf || "";
+        const accountPanel = document.getElementById("pharma-checkout-account-panel");
+        const savedAddressWrap = document.getElementById("pharma-saved-address-wrap");
+        const savedAddressSelect = document.getElementById("pharma-saved-address");
         let validated = null;
+        let checkoutIdentity = null;
 
         const items = loadCart();
         if (!items.length) {
@@ -363,6 +367,62 @@
             input.addEventListener("change", () => toggleDeliveryFields(root));
         });
         toggleDeliveryFields(root);
+
+        function fillAddress(address) {
+            const fieldMap = {
+                address_line1: "address_line1",
+                address_line2: "address_line2",
+                city: "city",
+                state: "state",
+                country: "country",
+            };
+            for (const [key, name] of Object.entries(fieldMap)) {
+                const input = form.elements[name];
+                if (input) input.value = address?.[key] || (name === "country" ? "Egypt" : "");
+            }
+        }
+
+        try {
+            checkoutIdentity = await apiRequest(root.dataset.identityEndpoint, { method: "GET" });
+            if (checkoutIdentity.authenticated && accountPanel) {
+                accountPanel.hidden = false;
+                if (checkoutIdentity.customer_linked) {
+                    const customer = checkoutIdentity.customer || {};
+                    accountPanel.textContent = `تم ربط حساب الموقع بكود العميل ${customer.customer_code || customer.customer || ""}. يمكنك اختيار عنوان محفوظ.`;
+                    const nameInput = form.elements.customer_name;
+                    const mobileInput = form.elements.mobile_no;
+                    const emailInput = form.elements.email_id;
+                    if (nameInput && customer.customer_name) nameInput.value = customer.customer_name;
+                    if (mobileInput && customer.mobile_no) mobileInput.value = customer.mobile_no;
+                    if (emailInput && customer.email_id) emailInput.value = customer.email_id;
+                    const addresses = checkoutIdentity.addresses || [];
+                    if (addresses.length && savedAddressWrap && savedAddressSelect) {
+                        savedAddressWrap.hidden = false;
+                        for (const address of addresses) {
+                            const option = document.createElement("option");
+                            option.value = address.name;
+                            option.textContent = address.label || address.address_title || address.name;
+                            option.dataset.address = JSON.stringify(address);
+                            savedAddressSelect.appendChild(option);
+                        }
+                        savedAddressSelect.addEventListener("change", () => {
+                            const option = savedAddressSelect.options[savedAddressSelect.selectedIndex];
+                            const address = option?.dataset.address ? JSON.parse(option.dataset.address) : null;
+                            fillAddress(address);
+                        });
+                    }
+                } else if (checkoutIdentity.ambiguous_customer_links) {
+                    accountPanel.textContent = "حساب الموقع مرتبط بأكثر من كود عميل. سيتم إيقاف الربط التلقائي وإرسال الطلب للمراجعة الداخلية.";
+                } else {
+                    accountPanel.textContent = "حساب الموقع غير مربوط بعد بكود عميل داخل الصيدلية. سيتم اقتراح المطابقة أثناء مراجعة الطلب.";
+                }
+            }
+        } catch (identityError) {
+            if (accountPanel) {
+                accountPanel.hidden = false;
+                accountPanel.textContent = "تعذر تحميل بيانات حساب العميل المحفوظة. يمكنك استكمال الطلب يدويًا.";
+            }
+        }
 
         try {
             validated = await apiRequest(root.dataset.validateEndpoint, {
@@ -403,6 +463,7 @@
                 customer_name: data.get("customer_name"),
                 mobile_no: data.get("mobile_no"),
                 email_id: data.get("email_id"),
+                customer_address: data.get("customer_address"),
                 fulfilment_method: data.get("fulfilment_method"),
                 address_line1: data.get("address_line1"),
                 address_line2: data.get("address_line2"),

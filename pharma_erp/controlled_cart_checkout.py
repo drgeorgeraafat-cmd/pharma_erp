@@ -313,6 +313,189 @@ def _mask_mobile(value: Any) -> str:
     return "*" * max(0, len(mobile) - 4) + mobile[-4:]
 
 
+
+
+def _website_user_customers(website_user: str) -> list[str]:
+    user = str(website_user or "").strip()
+    if not user or user == "Guest":
+        return []
+    customers: set[str] = set()
+    if frappe.db.exists("DocType", "Portal User"):
+        for customer in frappe.get_all(
+            "Portal User",
+            filters={"parenttype": "Customer", "user": user},
+            pluck="parent",
+        ):
+            customers.add(str(customer))
+    contact_names = frappe.get_all("Contact", filters={"user": user}, pluck="name")
+    if contact_names:
+        for customer in frappe.get_all(
+            "Dynamic Link",
+            filters={
+                "parenttype": "Contact",
+                "parent": ["in", contact_names],
+                "link_doctype": "Customer",
+            },
+            pluck="link_name",
+        ):
+            customers.add(str(customer))
+    return sorted(
+        customer
+        for customer in customers
+        if frappe.db.exists("Customer", {"name": customer, "disabled": 0})
+    )
+
+
+def _customer_checkout_identity(customer: str) -> dict[str, Any]:
+    values = frappe.db.get_value(
+        "Customer",
+        customer,
+        ["name", "customer_name", "mobile_no", "email_id"],
+        as_dict=True,
+    ) or {}
+    customer_code = customer
+    if frappe.get_meta("Customer").has_field("custom_customer_code"):
+        customer_code = frappe.db.get_value("Customer", customer, "custom_customer_code") or customer
+
+    contacts = []
+    contact_names = frappe.get_all(
+        "Dynamic Link",
+        filters={
+            "parenttype": "Contact",
+            "link_doctype": "Customer",
+            "link_name": customer,
+        },
+        pluck="parent",
+    )
+    if contact_names:
+        contacts = frappe.get_all(
+            "Contact",
+            filters={"name": ["in", list(dict.fromkeys(contact_names))]},
+            fields=["name", "full_name", "email_id", "mobile_no", "phone", "is_primary_contact"],
+            order_by="is_primary_contact desc, modified desc",
+        )
+    primary = contacts[0] if contacts else {}
+
+    address_names = frappe.get_all(
+        "Dynamic Link",
+        filters={
+            "parenttype": "Address",
+            "link_doctype": "Customer",
+            "link_name": customer,
+        },
+        pluck="parent",
+    )
+    addresses = []
+    if address_names:
+        addresses = frappe.get_all(
+            "Address",
+            filters={"name": ["in", list(dict.fromkeys(address_names))], "disabled": 0},
+            fields=[
+                "name",
+                "address_title",
+                "address_type",
+                "address_line1",
+                "address_line2",
+                "city",
+                "state",
+                "country",
+                "phone",
+                "is_shipping_address",
+                "is_primary_address",
+                "custom_delivery_zone",
+            ],
+            order_by="is_shipping_address desc, is_primary_address desc, modified desc",
+        )
+    for address in addresses:
+        address["label"] = " — ".join(
+            part
+            for part in (
+                address.get("address_title") or address.get("name"),
+                address.get("address_line1"),
+                address.get("city"),
+            )
+            if part
+        )
+
+    return {
+        "customer": values.get("name"),
+        "customer_code": customer_code,
+        "customer_name": values.get("customer_name") or customer,
+        "mobile_no": values.get("mobile_no") or primary.get("mobile_no") or primary.get("phone") or "",
+        "email_id": values.get("email_id") or primary.get("email_id") or "",
+        "addresses": addresses,
+    }
+
+
+def _validate_checkout_address(customer: str, address_name: str) -> dict[str, Any]:
+    if not address_name:
+        return {}
+    linked = frappe.db.exists(
+        "Dynamic Link",
+        {
+            "parenttype": "Address",
+            "parent": address_name,
+            "link_doctype": "Customer",
+            "link_name": customer,
+        },
+    )
+    if not linked:
+        frappe.throw(_("The selected saved address is not linked to your Customer account."))
+    values = frappe.db.get_value(
+        "Address",
+        address_name,
+        [
+            "address_title",
+            "address_line1",
+            "address_line2",
+            "city",
+            "state",
+            "country",
+            "phone",
+            "disabled",
+        ],
+        as_dict=True,
+    ) or {}
+    if cint(values.get("disabled")):
+        frappe.throw(_("The selected saved address is disabled."))
+    return values
+
+
+@frappe.whitelist(allow_guest=True)
+def get_checkout_identity() -> dict[str, Any]:
+    website_user = frappe.session.user or "Guest"
+    if website_user == "Guest":
+        return {
+            "authenticated": 0,
+            "website_user": "",
+            "customer_linked": 0,
+            "ambiguous_customer_links": 0,
+            "customer": {},
+            "addresses": [],
+        }
+    customers = _website_user_customers(website_user)
+    if len(customers) != 1:
+        return {
+            "authenticated": 1,
+            "website_user": website_user,
+            "customer_linked": 0,
+            "ambiguous_customer_links": cint(len(customers) > 1),
+            "customer_link_count": len(customers),
+            "customer": {},
+            "addresses": [],
+        }
+    identity = _customer_checkout_identity(customers[0])
+    return {
+        "authenticated": 1,
+        "website_user": website_user,
+        "customer_linked": 1,
+        "ambiguous_customer_links": 0,
+        "customer_link_count": 1,
+        "customer": {key: value for key, value in identity.items() if key != "addresses"},
+        "addresses": identity.get("addresses") or [],
+    }
+
+
 @frappe.whitelist(allow_guest=True)
 def validate_cart(items: str | list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Revalidate a browser cart against the controlled published catalog."""
@@ -342,6 +525,18 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
         frappe.throw(_("Customer name is required."))
     if email_id and ("@" not in email_id or "." not in email_id.split("@")[-1]):
         frappe.throw(_("Enter a valid email address."))
+
+    website_user = frappe.session.user if frappe.session.user != "Guest" else ""
+    linked_customers = _website_user_customers(website_user) if website_user else []
+    linked_customer = linked_customers[0] if len(linked_customers) == 1 else ""
+    selected_address = _clean_text(data.get("customer_address"), 140)
+    if selected_address and not linked_customer:
+        frappe.throw(_("A saved address requires one linked Customer account."))
+    selected_address_values = (
+        _validate_checkout_address(linked_customer, selected_address)
+        if linked_customer and selected_address
+        else {}
+    )
 
     existing_orders = frappe.get_all(
         "Online Order",
@@ -380,11 +575,17 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
             _("Too many recent checkout attempts for this mobile number. Try again later.")
         )
 
-    address_line1 = _clean_text(data.get("address_line1"), 180)
-    address_line2 = _clean_text(data.get("address_line2"), 180)
-    city = _clean_text(data.get("city"), 120)
-    state = _clean_text(data.get("state"), 120)
-    country = _clean_text(data.get("country"), 120) or "Egypt"
+    address_line1 = _clean_text(
+        selected_address_values.get("address_line1") or data.get("address_line1"), 180
+    )
+    address_line2 = _clean_text(
+        selected_address_values.get("address_line2") or data.get("address_line2"), 180
+    )
+    city = _clean_text(selected_address_values.get("city") or data.get("city"), 120)
+    state = _clean_text(selected_address_values.get("state") or data.get("state"), 120)
+    country = _clean_text(
+        selected_address_values.get("country") or data.get("country"), 120
+    ) or "Egypt"
     delivery_instructions = _clean_text(data.get("delivery_instructions"), 500)
 
     if fulfilment_method == "Home Delivery":
@@ -406,8 +607,7 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
         value for value in (address_line1, address_line2, city, state, country) if value
     )
 
-    order = frappe.get_doc(
-        {
+    order_data = {
             "doctype": "Online Order",
             "status": "Placed",
             "source_channel": "Website",
@@ -439,8 +639,21 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
             "payment_timing": "Collect on Delivery",
             "payment_method": payment_method,
             "payment_status": "Not Declared",
+            "customer": linked_customer or None,
+            "customer_address": selected_address or None,
+            "customer_resolution_status": "Matched" if linked_customer else "Unresolved",
         }
-    )
+    online_meta = frappe.get_meta("Online Order")
+    if website_user and online_meta.has_field("custom_website_user"):
+        order_data["custom_website_user"] = website_user
+    if linked_customer and online_meta.has_field("custom_customer_resolution_method"):
+        order_data["custom_customer_resolution_method"] = "Website User"
+    if linked_customer and online_meta.has_field("custom_customer_resolved_at"):
+        order_data["custom_customer_resolved_at"] = now_datetime()
+    if linked_customer and online_meta.has_field("custom_customer_resolution_notes"):
+        order_data["custom_customer_resolution_notes"] = "Matched from authenticated Website User."
+
+    order = frappe.get_doc(order_data)
 
     for item in cart["items"]:
         order.append(

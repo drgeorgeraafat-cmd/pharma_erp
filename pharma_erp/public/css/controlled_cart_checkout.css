@@ -347,6 +347,7 @@
 }
 
 .pharma-form-field input,
+.pharma-form-field select,
 .pharma-form-field textarea {
     width: 100%;
     border: 1px solid var(--pharma-line);
@@ -470,4 +471,15 @@
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.pharma-checkout-account-linked {
+    border-color: #a7d8b2;
+    background: #f4fbf6;
+    color: #245b31;
+}
+
+#pharma-saved-address-wrap[hidden],
+#pharma-checkout-account-panel[hidden] {
+    display: none !important;
 }

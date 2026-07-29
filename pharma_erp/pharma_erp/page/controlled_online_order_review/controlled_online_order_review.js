@@ -54,10 +54,10 @@ class ControlledOnlineOrderReviewPage {
                     <div>
                         <div class="coor-banner-title">مراجعة طلبات الموقع قبل التأكيد</div>
                         <div class="coor-banner-subtitle">
-                            مراجعة الوصفة والمخزون فقط. لا تُنشئ هذه الصفحة فاتورة أو قيدًا ماليًا أو حركة مخزنية.
+                            مراجعة الوصفة والمخزون وربط العميل والعنوان ومنطقة التوصيل قبل التأكيد النهائي، بدون إنشاء مستندات مالية أو مخزنية.
                         </div>
                     </div>
-                    <span class="indicator-pill blue">Step 3B.4</span>
+                    <span class="indicator-pill blue">Step 3B.5</span>
                 </div>
                 <div class="coor-summary"></div>
                 <div class="coor-loading text-muted">جاري تحميل طلبات الموقع...</div>
@@ -115,6 +115,15 @@ class ControlledOnlineOrderReviewPage {
         });
         this.$main.on("click", ".coor-view-snapshot", async (event) => {
             await this.show_snapshot($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-customer-resolution", async (event) => {
+            await this.open_customer_resolution_dialog($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-delivery-zone", async (event) => {
+            await this.open_delivery_zone_dialog($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-final-readiness", async (event) => {
+            await this.verify_final_readiness($(event.currentTarget).data("order"));
         });
     }
 
@@ -179,7 +188,7 @@ class ControlledOnlineOrderReviewPage {
                 <tr>
                     <td><a href="#" class="coor-order-link coor-open-order" data-order="${this.escape(order.name)}">${this.escape(order.name)}</a></td>
                     <td>${this.status_badge(order.status)}</td>
-                    <td>${this.escape(order.customer_name || "-")}</td>
+                    <td>${this.escape(order.customer_name || "-")}<br><small>${this.escape(order.customer || order.customer_resolution_status || "Unresolved")}</small></td>
                     <td dir="ltr">${this.escape(order.mobile_no || "-")}</td>
                     <td>${this.escape(order.fulfilment_method || "-")}</td>
                     <td>${this.escape(this.money(order.grand_total, order.currency))}</td>
@@ -191,7 +200,10 @@ class ControlledOnlineOrderReviewPage {
                             ${startButton}
                             ${prescriptionButton}
                             <button class="btn btn-primary btn-xs coor-stock-review" data-order="${this.escape(order.name)}">مراجعة المخزون</button>
+                            <button class="btn btn-default btn-xs coor-customer-resolution" data-order="${this.escape(order.name)}">ربط العميل</button>
+                            <button class="btn btn-default btn-xs coor-delivery-zone" data-order="${this.escape(order.name)}">منطقة التوصيل</button>
                             <button class="btn btn-default btn-xs coor-view-snapshot" data-order="${this.escape(order.name)}">الجاهزية</button>
+                            <button class="btn btn-success btn-xs coor-final-readiness" data-order="${this.escape(order.name)}">تأكيد الجاهزية</button>
                         </div>
                     </td>
                 </tr>
@@ -245,6 +257,11 @@ class ControlledOnlineOrderReviewPage {
                     <div><b>الإجمالي:</b> ${this.escape(this.money(snapshot.grand_total, snapshot.currency))}</div>
                     <div><b>الوصفة:</b> ${Number(snapshot.prescription_required) ? "مطلوبة" : "غير مطلوبة"}</div>
                     <div><b>قرار الوصفة:</b> ${this.escape(snapshot.prescription_review_status || "-")}</div>
+                    <div><b>كود العميل:</b> ${this.escape(snapshot.customer || "غير مربوط")}</div>
+                    <div><b>حالة الربط:</b> ${this.escape(snapshot.customer_resolution_status || "Unresolved")}</div>
+                    <div><b>منطقة التوصيل:</b> ${this.escape(snapshot.delivery_zone || "غير محددة")}</div>
+                    <div><b>رسوم التوصيل:</b> ${this.escape(this.money(snapshot.delivery_fee, snapshot.currency))}</div>
+                    <div><b>الجاهزية النهائية:</b> ${this.escape(snapshot.final_confirmation_readiness_status || "Pending")}</div>
                 </div>
                 <h5>عوائق إكمال المراجعة</h5>
                 ${this.blocker_list(reviewBlockers, "لا توجد عوائق مراجعة حالية.")}
@@ -390,6 +407,204 @@ class ControlledOnlineOrderReviewPage {
                 });
                 dialog.hide();
                 frappe.show_alert({ message: __("Stock review saved."), indicator: "green" });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+
+    async open_customer_resolution_dialog(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_review.get_customer_resolution_context",
+            { online_order: orderName }
+        );
+        const candidates = context.candidates || [];
+        const candidateHtml = candidates.length
+            ? `<div class="alert alert-info"><b>مطابقات مقترحة:</b><ul>${candidates.map((row) =>
+                `<li>${this.escape(row.customer_code)} — ${this.escape(row.customer_name)} (${this.escape((row.match_methods || []).join(", "))})</li>`
+            ).join("")}</ul></div>`
+            : `<div class="alert alert-warning">لا توجد مطابقة فريدة تلقائية. يمكن اختيار العميل يدويًا بعد التحقق.</div>`;
+
+        const dialog = new frappe.ui.Dialog({
+            title: `ربط العميل ${context.online_order}`,
+            size: "large",
+            fields: [
+                { fieldname: "candidate_info", fieldtype: "HTML", options: candidateHtml },
+                {
+                    fieldname: "customer",
+                    label: __("Customer"),
+                    fieldtype: "Link",
+                    options: "Customer",
+                    reqd: 1,
+                    default: context.customer || (candidates.length === 1 ? candidates[0].name : ""),
+                },
+                {
+                    fieldname: "resolution_method",
+                    label: __("Resolution Method"),
+                    fieldtype: "Select",
+                    options: "Website User\nMobile\nEmail\nManual Confirmation",
+                    reqd: 1,
+                    default: context.customer_resolution_method || (
+                        candidates.length === 1 && Number(candidates[0].website_user_match || 0)
+                            ? "Website User"
+                            : "Manual Confirmation"
+                    ),
+                },
+                {
+                    fieldname: "address_name",
+                    label: __("Saved Address"),
+                    fieldtype: "Select",
+                    options: "",
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Resolution Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Apply Customer Resolution"),
+            primary_action: async (values) => {
+                await this.call(
+                    "pharma_erp.controlled_online_order_review.apply_customer_resolution",
+                    {
+                        online_order: context.online_order,
+                        customer: values.customer,
+                        resolution_method: values.resolution_method,
+                        address_name: values.address_name || "",
+                        notes: values.notes || "",
+                    }
+                );
+                dialog.hide();
+                frappe.show_alert({ message: __("Customer resolution saved."), indicator: "green" });
+                await this.load_orders();
+            },
+        });
+
+        const setAddresses = async (customer) => {
+            const field = dialog.fields_dict.address_name;
+            if (!customer) {
+                field.df.options = "";
+                field.refresh();
+                return;
+            }
+            const profile = await this.call(
+                "pharma_erp.controlled_online_order_review.get_customer_profile",
+                { customer }
+            );
+            const addresses = profile.addresses || [];
+            field.df.options = ["", ...addresses.map((row) => row.name)];
+            field.refresh();
+            if (context.customer === customer && context.customer_address) {
+                field.set_value(context.customer_address);
+            }
+        };
+        dialog.fields_dict.customer.df.onchange = async () => {
+            await setAddresses(dialog.get_value("customer"));
+        };
+        dialog.show();
+        await setAddresses(dialog.get_value("customer"));
+    }
+
+    async open_delivery_zone_dialog(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_review.get_delivery_zone_context",
+            { online_order: orderName }
+        );
+        if (context.fulfilment_method !== "Home Delivery") {
+            frappe.msgprint(__("Delivery Zone is only used for Home Delivery orders."));
+            return;
+        }
+        const zones = context.zones || [];
+        if (!zones.length) {
+            frappe.msgprint(__("No active Delivery Zone matches the reviewed Warehouse."));
+            return;
+        }
+        const zoneMap = Object.fromEntries(zones.map((zone) => [zone.name, zone]));
+        const dialog = new frappe.ui.Dialog({
+            title: `منطقة توصيل ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "current_info",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-info">المخزن المعتمد: <b>${this.escape(context.warehouse || "-")}</b> — إجمالي المنتجات: <b>${this.money(context.products_subtotal, "EGP")}</b></div>`,
+                },
+                {
+                    fieldname: "delivery_zone",
+                    label: __("Delivery Zone"),
+                    fieldtype: "Select",
+                    options: zones.map((zone) => zone.name),
+                    reqd: 1,
+                    default: context.delivery_zone || zones[0].name,
+                },
+                { fieldname: "zone_info", fieldtype: "HTML" },
+                { fieldname: "notes", label: __("Notes"), fieldtype: "Small Text" },
+            ],
+            primary_action_label: __("Apply Delivery Zone"),
+            primary_action: async (values) => {
+                await this.call(
+                    "pharma_erp.controlled_online_order_review.apply_delivery_zone",
+                    {
+                        online_order: context.online_order,
+                        delivery_zone: values.delivery_zone,
+                        notes: values.notes || "",
+                    }
+                );
+                dialog.hide();
+                frappe.show_alert({ message: __("Delivery Zone saved."), indicator: "green" });
+                await this.load_orders();
+            },
+        });
+        const showZone = () => {
+            const zone = zoneMap[dialog.get_value("delivery_zone")] || {};
+            dialog.fields_dict.zone_info.$wrapper.html(`
+                <div class="coor-dialog-summary">
+                    <div><b>المخزن:</b> ${this.escape(zone.warehouse || "-")}</div>
+                    <div><b>الرسوم الأساسية:</b> ${this.money(zone.delivery_fee, "EGP")}</div>
+                    <div><b>الحد الأدنى:</b> ${this.money(zone.minimum_order_amount, "EGP")}</div>
+                    <div><b>التوصيل المجاني فوق:</b> ${this.money(zone.free_delivery_above, "EGP")}</div>
+                    <div><b>الوقت المتوقع:</b> ${this.escape(zone.estimated_time_mins || 0)} دقيقة</div>
+                </div>
+            `);
+        };
+        dialog.fields_dict.delivery_zone.df.onchange = showZone;
+        dialog.show();
+        showZone();
+    }
+
+    async verify_final_readiness(orderName) {
+        const snapshot = await this.get_snapshot(orderName);
+        const blockers = [
+            ...(snapshot.review_blockers || []),
+            ...(snapshot.confirmation_blockers || []),
+        ];
+        if (blockers.length) {
+            frappe.msgprint({
+                title: __("Final Confirmation Readiness Blocked"),
+                indicator: "orange",
+                message: this.blocker_list(blockers, ""),
+            });
+            return;
+        }
+        const dialog = new frappe.ui.Dialog({
+            title: `تأكيد الجاهزية النهائية ${snapshot.name}`,
+            fields: [
+                {
+                    fieldname: "summary",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-success">العميل والعنوان ومنطقة التوصيل والمخزون جاهزة. لن يتم إنشاء فاتورة أو قيد أو حركة مخزون.</div>`,
+                },
+                { fieldname: "notes", label: __("Readiness Notes"), fieldtype: "Small Text" },
+            ],
+            primary_action_label: __("Verify Final Readiness"),
+            primary_action: async (values) => {
+                await this.call(
+                    "pharma_erp.controlled_online_order_review.verify_final_confirmation_readiness",
+                    { online_order: snapshot.name, notes: values.notes || "" }
+                );
+                dialog.hide();
+                frappe.show_alert({ message: __("Final readiness verified."), indicator: "green" });
                 await this.load_orders();
             },
         });
