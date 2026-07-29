@@ -1,0 +1,88 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Online Pharmacy Catalog{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_product_listing.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-catalog" id="pharma-controlled-catalog"
+         data-endpoint="/api/method/pharma_erp.controlled_product_listing.get_public_products">
+    <header class="pharma-catalog__hero">
+        <div class="pharma-catalog__brand">
+            {% if brand.company_logo %}
+            <img class="pharma-catalog__logo" src="{{ brand.company_logo }}" alt="{{ brand.company_name }}">
+            {% endif %}
+            <div>
+                <p class="pharma-catalog__eyebrow">ONLINE CATALOG</p>
+                <h1>{{ brand.company_name }}</h1>
+                <p>تصفح المنتجات المنشورة والمتاحة أونلاين</p>
+            </div>
+        </div>
+        <div class="pharma-catalog__safe-note">
+            <strong>عرض المنتجات فقط</strong>
+            <span>هذه الصفحة لا تنشئ طلبات أو فواتير أو حركات مخزنية.</span>
+        </div>
+    </header>
+
+    <div class="pharma-catalog__filters" aria-label="Product filters">
+        <label class="pharma-catalog__field pharma-catalog__field--search">
+            <span>بحث</span>
+            <input id="pharma-catalog-search" type="search"
+                   placeholder="اسم المنتج، الكود، المادة أو كلمة البحث"
+                   autocomplete="off">
+        </label>
+
+        <label class="pharma-catalog__field">
+            <span>التصنيف</span>
+            <select id="pharma-catalog-category">
+                <option value="">كل التصنيفات</option>
+            </select>
+        </label>
+
+        <label class="pharma-catalog__field">
+            <span>حالة التوفر</span>
+            <select id="pharma-catalog-availability">
+                <option value="">كل الحالات</option>
+                <option value="Available">متاح</option>
+                <option value="Temporarily Unavailable">غير متاح مؤقتًا</option>
+                <option value="Coming Soon">قريبًا</option>
+            </select>
+        </label>
+
+        <label class="pharma-catalog__featured-filter">
+            <input id="pharma-catalog-featured" type="checkbox">
+            <span>المنتجات المميزة فقط</span>
+        </label>
+    </div>
+
+    <div class="pharma-catalog__toolbar">
+        <p id="pharma-catalog-result-count" aria-live="polite">جارٍ تحميل المنتجات…</p>
+        <button id="pharma-catalog-clear" type="button" class="pharma-catalog__text-button">
+            مسح الفلاتر
+        </button>
+    </div>
+
+    <div id="pharma-catalog-error" class="pharma-catalog__message pharma-catalog__message--error" hidden></div>
+    <div id="pharma-catalog-empty" class="pharma-catalog__message" hidden>
+        <strong>لا توجد منتجات مطابقة.</strong>
+        <span>جرّب تغيير البحث أو الفلاتر.</span>
+    </div>
+    <div id="pharma-catalog-loading" class="pharma-catalog__loading" aria-label="Loading products">
+        <span></span><span></span><span></span>
+    </div>
+
+    <div id="pharma-catalog-grid" class="pharma-catalog__grid" aria-live="polite"></div>
+
+    <div class="pharma-catalog__load-more-wrap">
+        <button id="pharma-catalog-load-more" type="button" class="pharma-catalog__primary-button" hidden>
+            عرض منتجات أكثر
+        </button>
+    </div>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/controlled_product_listing.js"></script>
+{% endblock %}

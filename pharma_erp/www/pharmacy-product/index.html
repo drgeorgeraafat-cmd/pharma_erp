@@ -1,0 +1,66 @@
+{% extends "templates/web.html" %}
+
+{% block title %}{{ product.item_name }}{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_product_listing.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-product" dir="rtl">
+    <nav class="pharma-product__breadcrumb" aria-label="Breadcrumb">
+        <a href="/pharmacy-shop/">المتجر</a>
+        <span aria-hidden="true">/</span>
+        {% if product.category %}<span>{{ product.category }}</span>{% endif %}
+    </nav>
+
+    <div class="pharma-product__layout">
+        <div class="pharma-product__media">
+            {% if product.image %}
+            <img src="{{ product.image }}" alt="{{ product.item_name }}">
+            {% else %}
+            <div class="pharma-product__image-placeholder">لا توجد صورة</div>
+            {% endif %}
+        </div>
+
+        <article class="pharma-product__content">
+            <div class="pharma-product__badges">
+                {% if product.featured %}<span class="pharma-badge pharma-badge--featured">مميز</span>{% endif %}
+                {% if product.category %}<span class="pharma-badge">{{ product.category }}</span>{% endif %}
+                <span class="pharma-badge pharma-badge--availability" data-availability="{{ product.availability }}">
+                    {{ product.availability_label_ar }}
+                </span>
+                {% if product.requires_prescription %}
+                <span class="pharma-badge pharma-badge--rx">يتطلب روشتة</span>
+                {% endif %}
+            </div>
+
+            <p class="pharma-product__code">كود الصنف: {{ product.item_code }}</p>
+            <h1>{{ product.item_name }}</h1>
+            <p class="pharma-product__price">{{ product.price_formatted }}</p>
+
+            {% if product.description_ar %}
+            <section class="pharma-product__description">
+                <h2>الوصف</h2>
+                <p>{{ product.description_ar }}</p>
+            </section>
+            {% endif %}
+
+            {% if product.description_en %}
+            <section class="pharma-product__description" dir="ltr">
+                <h2>English Description</h2>
+                <p>{{ product.description_en }}</p>
+            </section>
+            {% endif %}
+
+            <aside class="pharma-product__safety-note">
+                هذه صفحة عرض فقط. إنشاء الطلب والتحصيل سيتم من خلال مسار الطلب الإلكتروني المنضبط.
+            </aside>
+
+            <div class="pharma-product__actions">
+                <a class="pharma-catalog__primary-button" href="/pharmacy-shop/">العودة للمنتجات</a>
+            </div>
+        </article>
+    </div>
+</section>
+{% endblock %}

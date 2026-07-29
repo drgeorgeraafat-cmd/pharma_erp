@@ -1,0 +1,361 @@
+.pharma-catalog,
+.pharma-product {
+    --pharma-ink: #17322d;
+    --pharma-muted: #62726e;
+    --pharma-line: #dce6e2;
+    --pharma-soft: #f4f8f6;
+    --pharma-accent: #13795b;
+    --pharma-accent-dark: #0d5d45;
+    --pharma-warning: #a65a00;
+    --pharma-danger: #9d2c38;
+    color: var(--pharma-ink);
+    direction: rtl;
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 28px 18px 56px;
+}
+
+.pharma-catalog__hero {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    align-items: center;
+    padding: 28px;
+    border: 1px solid var(--pharma-line);
+    border-radius: 24px;
+    background: linear-gradient(135deg, #ffffff, var(--pharma-soft));
+    box-shadow: 0 16px 40px rgba(23, 50, 45, 0.08);
+}
+
+.pharma-catalog__brand {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+}
+
+.pharma-catalog__logo {
+    width: 76px;
+    height: 76px;
+    object-fit: contain;
+    border-radius: 16px;
+    background: #fff;
+    border: 1px solid var(--pharma-line);
+    padding: 8px;
+}
+
+.pharma-catalog__eyebrow {
+    margin: 0 0 6px;
+    color: var(--pharma-accent);
+    font-weight: 800;
+    letter-spacing: .08em;
+    font-size: .8rem;
+}
+
+.pharma-catalog__hero h1,
+.pharma-product h1 {
+    margin: 0;
+    color: var(--pharma-ink);
+}
+
+.pharma-catalog__hero h1 { font-size: clamp(1.7rem, 4vw, 2.7rem); }
+.pharma-catalog__hero p:last-child { margin: 8px 0 0; color: var(--pharma-muted); }
+
+.pharma-catalog__safe-note {
+    min-width: 260px;
+    border-right: 4px solid var(--pharma-accent);
+    background: #fff;
+    border-radius: 14px;
+    padding: 14px 16px;
+    display: grid;
+    gap: 4px;
+}
+
+.pharma-catalog__safe-note span,
+.pharma-product__safety-note { color: var(--pharma-muted); font-size: .9rem; }
+
+.pharma-catalog__filters {
+    display: grid;
+    grid-template-columns: minmax(260px, 2fr) repeat(2, minmax(180px, 1fr)) auto;
+    gap: 14px;
+    align-items: end;
+    margin: 26px 0 14px;
+    padding: 18px;
+    border: 1px solid var(--pharma-line);
+    border-radius: 18px;
+    background: #fff;
+}
+
+.pharma-catalog__field { display: grid; gap: 7px; }
+.pharma-catalog__field span { font-weight: 700; font-size: .9rem; }
+.pharma-catalog__field input,
+.pharma-catalog__field select {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--pharma-line);
+    border-radius: 12px;
+    padding: 8px 12px;
+    background: #fff;
+    color: var(--pharma-ink);
+}
+
+.pharma-catalog__field input:focus,
+.pharma-catalog__field select:focus {
+    outline: 3px solid rgba(19, 121, 91, .14);
+    border-color: var(--pharma-accent);
+}
+
+.pharma-catalog__featured-filter {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    padding: 0 8px;
+    font-weight: 700;
+}
+
+.pharma-catalog__toolbar,
+.pharma-product-card__footer,
+.pharma-product__actions,
+.pharma-product__badges {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pharma-catalog__toolbar { justify-content: space-between; margin: 14px 2px 18px; }
+.pharma-catalog__toolbar p { margin: 0; color: var(--pharma-muted); font-weight: 700; }
+
+.pharma-catalog__text-button {
+    border: 0;
+    background: transparent;
+    color: var(--pharma-accent);
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.pharma-catalog__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 290px));
+    justify-content: center;
+    gap: 18px;
+}
+
+.pharma-product-card {
+    border: 1px solid var(--pharma-line);
+    border-radius: 18px;
+    overflow: hidden;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    transition: transform .18s ease, box-shadow .18s ease;
+}
+
+.pharma-product-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 14px 34px rgba(23, 50, 45, .11);
+}
+
+.pharma-product-card__media {
+    position: relative;
+    display: block;
+    aspect-ratio: 1 / 1;
+    background: var(--pharma-soft);
+    overflow: hidden;
+}
+
+.pharma-product-card__media img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 16px;
+    transition: transform .24s ease;
+}
+
+.pharma-product-card:hover .pharma-product-card__media img { transform: scale(1.035); }
+
+.pharma-product-card__placeholder,
+.pharma-product__image-placeholder {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    color: var(--pharma-muted);
+}
+
+.pharma-product-card__badges {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.pharma-product-card__body {
+    padding: 16px;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+}
+
+.pharma-product-card__category,
+.pharma-product-card__code {
+    color: var(--pharma-muted);
+    font-size: .82rem;
+    margin: 0 0 6px;
+}
+
+.pharma-product-card__title {
+    color: var(--pharma-ink);
+    font-weight: 800;
+    line-height: 1.45;
+    min-height: 2.9em;
+    text-decoration: none;
+}
+
+.pharma-product-card__summary {
+    color: var(--pharma-muted);
+    font-size: .9rem;
+    line-height: 1.65;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin: 10px 0 14px;
+}
+
+.pharma-product-card__footer {
+    justify-content: space-between;
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--pharma-line);
+}
+
+.pharma-product-card__price {
+    color: var(--pharma-accent-dark);
+    direction: ltr;
+    font-size: 1.05rem;
+    unicode-bidi: isolate;
+    white-space: nowrap;
+}
+.pharma-product-card__details { margin-top: 12px; color: var(--pharma-accent); font-weight: 800; }
+
+.pharma-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 5px 9px;
+    background: #eaf2ef;
+    color: var(--pharma-ink);
+    font-size: .76rem;
+    font-weight: 800;
+}
+
+.pharma-badge--featured { background: #fff0ca; color: #815100; }
+.pharma-badge--rx { background: #ffe6e9; color: var(--pharma-danger); }
+.pharma-badge--availability[data-availability="Available"] { background: #ddf5e8; color: #17633f; }
+.pharma-badge--availability[data-availability="Temporarily Unavailable"] { background: #fff0d8; color: var(--pharma-warning); }
+.pharma-badge--availability[data-availability="Coming Soon"] { background: #e6edff; color: #294a9f; }
+
+.pharma-catalog__message {
+    display: grid;
+    gap: 4px;
+    text-align: center;
+    padding: 28px;
+    border: 1px dashed var(--pharma-line);
+    border-radius: 16px;
+    color: var(--pharma-muted);
+}
+
+.pharma-catalog__message[hidden],
+.pharma-catalog__loading[hidden] { display: none !important; }
+.pharma-catalog__message--error { color: var(--pharma-danger); border-color: #efb8bf; background: #fff7f8; }
+
+.pharma-catalog__loading {
+    min-height: 160px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.pharma-catalog__loading span {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--pharma-accent);
+    animation: pharma-pulse .9s infinite alternate;
+}
+
+.pharma-catalog__loading span:nth-child(2) { animation-delay: .15s; }
+.pharma-catalog__loading span:nth-child(3) { animation-delay: .3s; }
+@keyframes pharma-pulse { to { transform: translateY(-8px); opacity: .4; } }
+
+.pharma-catalog__load-more-wrap { display: flex; justify-content: center; padding-top: 24px; }
+.pharma-catalog__primary-button,
+.pharma-catalog__secondary-button {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 44px;
+    border-radius: 12px;
+    padding: 10px 18px;
+    font-weight: 800;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.pharma-catalog__primary-button { border: 1px solid var(--pharma-accent); color: #fff; background: var(--pharma-accent); }
+.pharma-catalog__primary-button:hover { color: #fff; background: var(--pharma-accent-dark); }
+.pharma-catalog__secondary-button { border: 1px solid var(--pharma-line); color: var(--pharma-ink); background: #fff; }
+.pharma-catalog__primary-button:disabled { opacity: .55; cursor: wait; }
+
+.pharma-product__breadcrumb { display: flex; gap: 8px; color: var(--pharma-muted); margin-bottom: 20px; }
+.pharma-product__breadcrumb a { color: var(--pharma-accent); font-weight: 800; }
+.pharma-product__layout { display: grid; grid-template-columns: minmax(320px, .85fr) minmax(0, 1.15fr); gap: 42px; }
+.pharma-product__media { aspect-ratio: 1 / 1; background: var(--pharma-soft); border: 1px solid var(--pharma-line); border-radius: 22px; overflow: hidden; }
+.pharma-product__media img { width: 100%; height: 100%; object-fit: contain; padding: 28px; }
+.pharma-product__content { padding: 12px 0; }
+.pharma-product__badges { flex-wrap: wrap; margin-bottom: 14px; }
+.pharma-product__code { color: var(--pharma-muted); margin: 0 0 8px; }
+.pharma-product h1 {
+    font-size: clamp(2rem, 4vw, 3rem);
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+.pharma-product__price {
+    color: var(--pharma-accent-dark);
+    direction: ltr;
+    font-size: 1.75rem;
+    font-weight: 900;
+    margin: 18px 0;
+    unicode-bidi: isolate;
+    white-space: nowrap;
+}
+.pharma-product__description { padding: 18px 0; border-top: 1px solid var(--pharma-line); }
+.pharma-product__description h2 { font-size: 1.1rem; margin: 0 0 8px; }
+.pharma-product__description p { white-space: pre-line; color: var(--pharma-muted); line-height: 1.8; }
+.pharma-product__safety-note { border-right: 4px solid var(--pharma-accent); background: var(--pharma-soft); border-radius: 12px; padding: 14px; margin: 18px 0; }
+.pharma-product__actions { flex-wrap: wrap; }
+
+@media (max-width: 1024px) {
+    .pharma-catalog__grid { grid-template-columns: repeat(auto-fit, minmax(240px, 290px)); }
+    .pharma-catalog__filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+    .pharma-catalog__hero { align-items: stretch; flex-direction: column; }
+    .pharma-catalog__safe-note { min-width: 0; }
+    .pharma-catalog__filters { grid-template-columns: 1fr; }
+    .pharma-catalog__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .pharma-product__layout { grid-template-columns: 1fr; gap: 22px; }
+}
+
+@media (max-width: 480px) {
+    .pharma-catalog, .pharma-product { padding-inline: 12px; }
+    .pharma-catalog__grid { grid-template-columns: 1fr; }
+    .pharma-catalog__brand { align-items: flex-start; }
+    .pharma-catalog__logo { width: 58px; height: 58px; }
+}
