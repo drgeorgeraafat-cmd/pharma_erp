@@ -11,6 +11,7 @@ from frappe.utils import cint, flt, now_datetime, strip_html
 from pharma_erp.controlled_online_order_review import _snapshot as _review_snapshot
 
 PAYMENT_TOLERANCE = 0.01
+POST_CONVERSION_TOLERANCE = 0.01
 PAYMENT_SELECTION_STATUSES = {"Ready for Payment", "Payment Verification"}
 CONFIRMABLE_STATUSES = {"Ready for Payment", "Payment Verification"}
 CONVERSION_STATUSES = {"Confirmed", "Preparing"}
@@ -283,6 +284,14 @@ def _state_snapshot(order) -> dict[str, Any]:
             order, "custom_conversion_readiness_status", "Pending"
         )
         or "Pending",
+        "conversion_execution_status": getattr(
+            order, "custom_conversion_execution_status", "Pending"
+        )
+        or "Pending",
+        "post_conversion_integrity_status": getattr(
+            order, "custom_post_conversion_integrity_status", "Pending"
+        )
+        or "Pending",
         "confirmed_at": order.confirmed_at,
         "sales_order": order.sales_order or "",
         "sales_invoice": order.sales_invoice or "",
@@ -421,6 +430,14 @@ def apply_payment_selection(
     _set_if_has(order, "custom_conversion_readiness_notes", "")
     _set_if_has(order, "custom_conversion_readiness_checked_by", None)
     _set_if_has(order, "custom_conversion_readiness_checked_at", None)
+    _set_if_has(order, "custom_conversion_execution_status", "Pending")
+    _set_if_has(order, "custom_conversion_execution_notes", "")
+    _set_if_has(order, "custom_conversion_executed_by", None)
+    _set_if_has(order, "custom_conversion_executed_at", None)
+    _set_if_has(order, "custom_post_conversion_integrity_status", "Pending")
+    _set_if_has(order, "custom_post_conversion_integrity_notes", "")
+    _set_if_has(order, "custom_post_conversion_checked_by", None)
+    _set_if_has(order, "custom_post_conversion_checked_at", None)
     order.save(ignore_permissions=True)
 
     _audit_comment(
@@ -506,6 +523,14 @@ def confirm_online_order(
     _set_if_has(order, "custom_conversion_readiness_notes", "")
     _set_if_has(order, "custom_conversion_readiness_checked_by", None)
     _set_if_has(order, "custom_conversion_readiness_checked_at", None)
+    _set_if_has(order, "custom_conversion_execution_status", "Pending")
+    _set_if_has(order, "custom_conversion_execution_notes", "")
+    _set_if_has(order, "custom_conversion_executed_by", None)
+    _set_if_has(order, "custom_conversion_executed_at", None)
+    _set_if_has(order, "custom_post_conversion_integrity_status", "Pending")
+    _set_if_has(order, "custom_post_conversion_integrity_notes", "")
+    _set_if_has(order, "custom_post_conversion_checked_by", None)
+    _set_if_has(order, "custom_post_conversion_checked_at", None)
     order.save(ignore_permissions=True)
     _audit_comment(
         order,
@@ -570,3 +595,336 @@ def verify_conversion_readiness(
         },
     )
     return _state_snapshot(order)
+
+
+def _active_sales_invoice(order):
+    invoice_name = str(order.sales_invoice or "").strip()
+    if not invoice_name or not frappe.db.exists("Sales Invoice", invoice_name):
+        return None
+    invoice = frappe.get_doc("Sales Invoice", invoice_name)
+    if cint(invoice.docstatus) == 2:
+        return None
+    return invoice
+
+
+def _sales_invoice_creation_blockers(order) -> list[str]:
+    blockers = list(_conversion_blockers(order))
+    if getattr(order, "custom_conversion_readiness_status", "Pending") != "Ready":
+        blockers.append(_("Sales Invoice conversion readiness is not Ready."))
+    if _active_sales_invoice(order):
+        blockers.append(
+            _("An active Sales Invoice Draft is already linked to this Online Order.")
+        )
+    return list(dict.fromkeys(blockers))
+
+
+def _post_conversion_integrity_blockers(order, invoice=None) -> list[str]:
+    blockers: list[str] = []
+    invoice = invoice or _active_sales_invoice(order)
+    if not invoice:
+        return [_('An active linked Sales Invoice Draft is required.')]
+
+    if order.sales_order:
+        blockers.append(_("The Online Order must not use the Sales Order conversion path."))
+    if order.sales_invoice != invoice.name:
+        blockers.append(_("The Online Order active Sales Invoice link is inconsistent."))
+    if order.conversion_path != "Direct Sales Invoice":
+        blockers.append(_("Conversion Path must be Direct Sales Invoice."))
+    if cint(invoice.docstatus) != 0:
+        blockers.append(_("The linked Sales Invoice must remain Draft during Step 3B.7."))
+    if cint(invoice.update_stock):
+        blockers.append(_("The linked Sales Invoice Draft must keep Update Stock disabled."))
+    if cint(invoice.is_pos):
+        blockers.append(_("The linked Sales Invoice Draft must remain non-POS."))
+    if cint(invoice.is_return):
+        blockers.append(
+            _("A return Sales Invoice cannot be linked as the active conversion draft.")
+        )
+    if str(invoice.get("custom_online_order") or "").strip() != order.name:
+        blockers.append(
+            _("Sales Invoice custom_online_order does not match the Online Order.")
+        )
+    if invoice.customer != order.customer:
+        blockers.append(_("Sales Invoice Customer does not match the Online Order."))
+    if invoice.company != order.company:
+        blockers.append(_("Sales Invoice Company does not match the Online Order."))
+    if invoice.currency != order.currency:
+        blockers.append(_("Sales Invoice Currency does not match the Online Order."))
+    if (
+        abs(flt(invoice.grand_total) - flt(order.grand_total))
+        > POST_CONVERSION_TOLERANCE
+    ):
+        blockers.append(_("Sales Invoice grand total does not match the Online Order."))
+
+    if order.fulfilment_method == "Home Delivery":
+        if invoice.customer_address != order.customer_address:
+            blockers.append(
+                _("Sales Invoice Customer Address does not match the Online Order.")
+            )
+        if invoice.shipping_address_name != order.customer_address:
+            blockers.append(
+                _("Sales Invoice Shipping Address does not match the Online Order.")
+            )
+        if str(invoice.get("custom_delivery_zone") or "") != str(
+            order.delivery_zone or ""
+        ):
+            blockers.append(
+                _("Sales Invoice Delivery Zone does not match the Online Order.")
+            )
+        if (
+            abs(flt(invoice.get("custom_delivery_fee")) - flt(order.delivery_fee))
+            > POST_CONVERSION_TOLERANCE
+        ):
+            blockers.append(
+                _("Sales Invoice Delivery Fee does not match the Online Order.")
+            )
+
+    active_invoice_count = frappe.db.count(
+        "Sales Invoice",
+        {"custom_online_order": order.name, "docstatus": ["<", 2]},
+    )
+    if cint(active_invoice_count) != 1:
+        blockers.append(
+            _("Exactly one active Sales Invoice must exist for this Online Order.")
+        )
+
+    mapped_rows = 0
+    for row in order.items:
+        if flt(row.approved_qty) <= 0:
+            continue
+        if str(row.availability_status or "") in {"Removed", "Unavailable"}:
+            continue
+        mapped_rows += 1
+        invoice_item = str(row.sales_invoice_item or "").strip()
+        if not invoice_item:
+            blockers.append(
+                _(
+                    "Online Order item row {0} is not linked to a Sales Invoice Item."
+                ).format(row.idx)
+            )
+            continue
+        if not frappe.db.exists(
+            "Sales Invoice Item",
+            {"name": invoice_item, "parent": invoice.name},
+        ):
+            blockers.append(
+                _(
+                    "Sales Invoice Item link for Online Order row {0} is invalid."
+                ).format(row.idx)
+            )
+    if not mapped_rows:
+        blockers.append(
+            _("No approved Online Order items are linked to the Sales Invoice Draft.")
+        )
+
+    gl_entries = frappe.db.count(
+        "GL Entry",
+        {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+    )
+    stock_entries = frappe.db.count(
+        "Stock Ledger Entry",
+        {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+    )
+    if gl_entries:
+        blockers.append(_("A Draft Sales Invoice must not create GL Entries."))
+    if stock_entries:
+        blockers.append(
+            _("A non-stock Draft Sales Invoice must not create Stock Ledger Entries.")
+        )
+    return list(dict.fromkeys(blockers))
+
+
+def _sales_invoice_draft_context(order) -> dict[str, Any]:
+    invoice = _active_sales_invoice(order)
+    creation_blockers = _sales_invoice_creation_blockers(order)
+    integrity_blockers = (
+        _post_conversion_integrity_blockers(order, invoice) if invoice else []
+    )
+    invoice_state: dict[str, Any] = {}
+    if invoice:
+        invoice_state = {
+            "name": invoice.name,
+            "docstatus": cint(invoice.docstatus),
+            "update_stock": cint(invoice.update_stock),
+            "is_pos": cint(invoice.is_pos),
+            "is_return": cint(invoice.is_return),
+            "customer": invoice.customer or "",
+            "company": invoice.company or "",
+            "currency": invoice.currency or "",
+            "customer_address": invoice.customer_address or "",
+            "shipping_address_name": invoice.shipping_address_name or "",
+            "grand_total": flt(invoice.grand_total),
+            "outstanding_amount": flt(invoice.outstanding_amount),
+            "custom_online_order": invoice.get("custom_online_order") or "",
+            "custom_delivery_zone": invoice.get("custom_delivery_zone") or "",
+            "custom_delivery_fee": flt(invoice.get("custom_delivery_fee")),
+            "item_count": len(invoice.items or []),
+            "gl_entry_count": frappe.db.count(
+                "GL Entry",
+                {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+            ),
+            "stock_ledger_entry_count": frappe.db.count(
+                "Stock Ledger Entry",
+                {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+            ),
+        }
+
+    return {
+        **_state_snapshot(order),
+        "conversion_execution_status": getattr(
+            order, "custom_conversion_execution_status", "Pending"
+        )
+        or "Pending",
+        "post_conversion_integrity_status": getattr(
+            order, "custom_post_conversion_integrity_status", "Pending"
+        )
+        or "Pending",
+        "invoice": invoice_state,
+        "creation_blockers": creation_blockers,
+        "can_create_draft": cint(not creation_blockers and not invoice),
+        "integrity_blockers": integrity_blockers,
+        "post_conversion_ready": cint(bool(invoice) and not integrity_blockers),
+        "controlled_sales_invoice_draft_creation": 1,
+        "submits_sales_invoice": 0,
+        "creates_payment_entry": 0,
+        "creates_gl_entries": 0,
+        "creates_stock_entries": 0,
+    }
+
+
+@frappe.whitelist()
+def get_sales_invoice_draft_context(
+    online_order: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "read")
+    return _sales_invoice_draft_context(order)
+
+
+@frappe.whitelist(methods=["POST"])
+def create_controlled_sales_invoice_draft(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+
+    existing = _active_sales_invoice(order)
+    if existing:
+        result = _sales_invoice_draft_context(order)
+        result["created"] = 0
+        result["idempotent_replay"] = 1
+        return result
+
+    blockers = _sales_invoice_creation_blockers(order)
+    if blockers:
+        frappe.throw(
+            _("Controlled Sales Invoice Draft creation is blocked: {0}").format(
+                " | ".join(blockers)
+            )
+        )
+
+    from pharma_erp.pharma_erp.doctype.online_order.online_order import (
+        create_sales_invoice_draft,
+    )
+
+    creation_result = create_sales_invoice_draft(order.name)
+    order.reload()
+    invoice = _active_sales_invoice(order)
+    integrity_blockers = _post_conversion_integrity_blockers(order, invoice)
+    if integrity_blockers:
+        frappe.throw(
+            _(
+                "Created Sales Invoice Draft failed controlled integrity checks: {0}"
+            ).format(" | ".join(integrity_blockers))
+        )
+
+    _set_if_has(order, "custom_conversion_execution_status", "Draft Created")
+    _set_if_has(
+        order,
+        "custom_conversion_execution_notes",
+        _clean_text(notes, 1000),
+    )
+    _set_if_has(order, "custom_conversion_executed_by", frappe.session.user)
+    _set_if_has(order, "custom_conversion_executed_at", now_datetime())
+    _set_if_has(order, "custom_post_conversion_integrity_status", "Pending")
+    _set_if_has(order, "custom_post_conversion_integrity_notes", "")
+    _set_if_has(order, "custom_post_conversion_checked_by", None)
+    _set_if_has(order, "custom_post_conversion_checked_at", None)
+    order.save(ignore_permissions=True)
+
+    _audit_comment(
+        order,
+        _("Controlled Sales Invoice Draft Creation"),
+        {
+            "sales_invoice": order.sales_invoice,
+            "docstatus": cint(invoice.docstatus),
+            "update_stock": cint(invoice.update_stock),
+            "grand_total": flt(invoice.grand_total),
+            "online_order_total": flt(order.grand_total),
+            "conversion_path": order.conversion_path,
+            "created_by": frappe.session.user,
+            "created_at": now_datetime(),
+            "notes": _clean_text(notes, 1000),
+            "creates_sales_invoice_draft": 1,
+            "submits_sales_invoice": 0,
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 0,
+            "creates_stock_entries": 0,
+        },
+    )
+    result = _sales_invoice_draft_context(order)
+    result["created"] = 1
+    result["idempotent_replay"] = 0
+    result["underlying_result"] = creation_result
+    return result
+
+
+@frappe.whitelist(methods=["POST"])
+def verify_post_conversion_integrity(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+    invoice = _active_sales_invoice(order)
+    blockers = _post_conversion_integrity_blockers(order, invoice)
+    readiness = "Ready" if not blockers else "Blocked"
+
+    _set_if_has(order, "custom_post_conversion_integrity_status", readiness)
+    _set_if_has(
+        order,
+        "custom_post_conversion_integrity_notes",
+        _clean_text(notes, 1000),
+    )
+    _set_if_has(order, "custom_post_conversion_checked_by", frappe.session.user)
+    _set_if_has(order, "custom_post_conversion_checked_at", now_datetime())
+    order.save(ignore_permissions=True)
+
+    _audit_comment(
+        order,
+        _("Controlled Post-Conversion Integrity Verification"),
+        {
+            "integrity_status": readiness,
+            "blockers": blockers,
+            "sales_invoice": order.sales_invoice or "",
+            "docstatus": cint(invoice.docstatus) if invoice else None,
+            "update_stock": cint(invoice.update_stock) if invoice else None,
+            "grand_total": flt(invoice.grand_total) if invoice else 0,
+            "checked_by": frappe.session.user,
+            "checked_at": now_datetime(),
+            "notes": _clean_text(notes, 1000),
+            "submits_sales_invoice": 0,
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 0,
+            "creates_stock_entries": 0,
+        },
+    )
+    return _sales_invoice_draft_context(order)

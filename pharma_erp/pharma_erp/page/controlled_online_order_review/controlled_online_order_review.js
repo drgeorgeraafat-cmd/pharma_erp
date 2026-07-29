@@ -56,10 +56,10 @@ class ControlledOnlineOrderReviewPage {
                     <div>
                         <div class="coor-banner-title">مراجعة طلبات الموقع قبل التأكيد</div>
                         <div class="coor-banner-subtitle">
-                            مراجعة الدفع وتأكيد الطلب والتحقق من جاهزية التحويل بعد اكتمال مراجعة العميل والمخزون والتوصيل، بدون إنشاء مستندات مالية أو مخزنية.
+                            إنشاء Sales Invoice Draft غير مخزنية بعد جاهزية التحويل، ثم فحص سلامة الربط والإجمالي ومنع التكرار قبل السماح بالـSubmit في المرحلة التالية.
                         </div>
                     </div>
-                    <span class="indicator-pill blue">Step 3B.6</span>
+                    <span class="indicator-pill blue">Step 3B.7</span>
                 </div>
                 <div class="coor-summary"></div>
                 <div class="coor-loading text-muted">جاري تحميل طلبات الموقع...</div>
@@ -85,7 +85,7 @@ class ControlledOnlineOrderReviewPage {
             .coor-card-label { color:var(--text-muted); font-size:12px; }
             .coor-card-value { font-size:24px; font-weight:700; margin-top:4px; }
             .coor-table-wrap { overflow:auto; border:1px solid var(--border-color); border-radius:12px; background:var(--fg-color); }
-            .coor-table { width:100%; min-width:1320px; border-collapse:collapse; }
+            .coor-table { width:100%; min-width:1480px; border-collapse:collapse; }
             .coor-table th, .coor-table td { padding:11px 10px; border-bottom:1px solid var(--border-color); vertical-align:middle; text-align:right; }
             .coor-table th { background:var(--subtle-fg); font-weight:600; white-space:nowrap; }
             .coor-order-link { font-weight:700; }
@@ -139,6 +139,15 @@ class ControlledOnlineOrderReviewPage {
         this.$main.on("click", ".coor-conversion-readiness", async (event) => {
             await this.verify_conversion_readiness($(event.currentTarget).data("order"));
         });
+        this.$main.on("click", ".coor-create-invoice-draft", async (event) => {
+            await this.create_sales_invoice_draft($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-post-conversion-integrity", async (event) => {
+            await this.verify_post_conversion_integrity($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-open-sales-invoice", (event) => {
+            frappe.set_route("Form", "Sales Invoice", $(event.currentTarget).data("invoice"));
+        });
     }
 
     async call(method, args = {}) {
@@ -176,6 +185,7 @@ class ControlledOnlineOrderReviewPage {
             ["قرار العميل", counts["Awaiting Customer Decision"] || 0],
             ["جاهز للدفع/التأكيد", (counts["Ready for Payment"] || 0) + (counts["Payment Verification"] || 0)],
             ["طلبات مؤكدة", counts["Confirmed"] || 0],
+            ["مسودات فواتير", this.orders.filter((row) => row.sales_invoice).length],
         ];
         this.$main.find(".coor-summary").html(cards.map(([label, value]) => `
             <div class="coor-card">
@@ -210,7 +220,19 @@ class ControlledOnlineOrderReviewPage {
                 ? `<button class="btn btn-success btn-xs coor-confirm-order" data-order="${this.escape(order.name)}">تأكيد الطلب</button>`
                 : "";
             const conversionButton = ["Confirmed", "Preparing"].includes(order.status)
+                && !order.sales_invoice
                 ? `<button class="btn btn-primary btn-xs coor-conversion-readiness" data-order="${this.escape(order.name)}">جاهزية التحويل</button>`
+                : "";
+            const createDraftButton = ["Confirmed", "Preparing"].includes(order.status)
+                && order.custom_conversion_readiness_status === "Ready"
+                && !order.sales_invoice
+                ? `<button class="btn btn-success btn-xs coor-create-invoice-draft" data-order="${this.escape(order.name)}">إنشاء مسودة الفاتورة</button>`
+                : "";
+            const integrityButton = order.sales_invoice
+                ? `<button class="btn btn-warning btn-xs coor-post-conversion-integrity" data-order="${this.escape(order.name)}">فحص ما بعد التحويل</button>`
+                : "";
+            const openInvoiceButton = order.sales_invoice
+                ? `<button class="btn btn-default btn-xs coor-open-sales-invoice" data-invoice="${this.escape(order.sales_invoice)}">فتح الفاتورة</button>`
                 : "";
             const reviewLocked = ["Confirmed", "Preparing"].includes(order.status);
             const stockButton = reviewLocked
@@ -238,6 +260,12 @@ class ControlledOnlineOrderReviewPage {
                     <td>${this.escape(this.money(order.grand_total, order.currency))}</td>
                     <td>${this.escape(order.payment_method || "-")}<br><small>${this.escape(order.payment_status || "-")}</small></td>
                     <td>${this.escape(order.custom_order_confirmation_readiness_status || "Pending")}</td>
+                    <td>
+                        ${order.sales_invoice
+                            ? `<a href="#" class="coor-open-sales-invoice" data-invoice="${this.escape(order.sales_invoice)}">${this.escape(order.sales_invoice)}</a>`
+                            : this.escape(order.custom_conversion_execution_status || "Pending")}
+                        <br><small>${this.escape(order.custom_post_conversion_integrity_status || "Pending")}</small>
+                    </td>
                     <td class="coor-rx">${Number(order.prescription_required || 0) ? "نعم" : "لا"}</td>
                     <td>${this.escape(order.prescription_review_status || "-")}</td>
                     <td>${this.escape(frappe.datetime.str_to_user(order.creation))}</td>
@@ -254,6 +282,9 @@ class ControlledOnlineOrderReviewPage {
                             ${readinessButton}
                             ${confirmButton}
                             ${conversionButton}
+                            ${createDraftButton}
+                            ${integrityButton}
+                            ${openInvoiceButton}
                         </div>
                     </td>
                 </tr>
@@ -266,7 +297,7 @@ class ControlledOnlineOrderReviewPage {
                     <thead><tr>
                         <th>الطلب</th><th>الحالة</th><th>العميل</th><th>الموبايل</th>
                         <th>الاستلام</th><th>الإجمالي</th><th>الدفع</th><th>جاهزية التأكيد</th>
-                        <th>وصفة</th><th>قرار الوصفة</th><th>وقت الطلب</th><th>الإجراءات</th>
+                        <th>التحويل</th><th>وصفة</th><th>قرار الوصفة</th><th>وقت الطلب</th><th>الإجراءات</th>
                     </tr></thead>
                     <tbody>${rows}</tbody>
                 </table>
@@ -890,6 +921,108 @@ class ControlledOnlineOrderReviewPage {
                 const ready = result.conversion_readiness_status === "Ready";
                 frappe.show_alert({
                     message: ready ? __("Sales Invoice conversion readiness is Ready.") : __("Conversion readiness is Blocked."),
+                    indicator: ready ? "green" : "orange",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+    async create_sales_invoice_draft(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_sales_invoice_draft_context",
+            { online_order: orderName }
+        );
+        const blockers = context.creation_blockers || [];
+        if (!Number(context.can_create_draft || 0) || blockers.length) {
+            frappe.msgprint({
+                title: __("Sales Invoice Draft Creation Blocked"),
+                indicator: "orange",
+                message: this.blocker_list(blockers.length ? blockers : ["Verify conversion readiness first."], ""),
+            });
+            return;
+        }
+        const dialog = new frappe.ui.Dialog({
+            title: `إنشاء مسودة فاتورة ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "draft_summary",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-success">سيتم إنشاء <b>Draft Sales Invoice</b> بقيمة <b>${this.escape(this.money(context.grand_total, context.currency))}</b>، مع <b>Update Stock = 0</b>. لن يتم Submit أو إنشاء Payment Entry أو GL أو حركة مخزون.</div>`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Draft Creation Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Create Controlled Draft"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.create_controlled_sales_invoice_draft",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                frappe.show_alert({
+                    message: result.created
+                        ? __("Sales Invoice Draft {0} created.", [result.sales_invoice])
+                        : __("Existing Sales Invoice Draft {0} reused.", [result.sales_invoice]),
+                    indicator: "green",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+    async verify_post_conversion_integrity(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_sales_invoice_draft_context",
+            { online_order: orderName }
+        );
+        const invoice = context.invoice || {};
+        const blockers = context.integrity_blockers || [];
+        const summary = invoice.name
+            ? `<div class="coor-dialog-summary">
+                <div><b>الفاتورة:</b> ${this.escape(invoice.name)}</div>
+                <div><b>Docstatus:</b> ${this.escape(invoice.docstatus)}</div>
+                <div><b>Update Stock:</b> ${this.escape(invoice.update_stock)}</div>
+                <div><b>الإجمالي:</b> ${this.escape(this.money(invoice.grand_total, invoice.currency))}</div>
+                <div><b>GL Entries:</b> ${this.escape(invoice.gl_entry_count)}</div>
+                <div><b>Stock Ledger:</b> ${this.escape(invoice.stock_ledger_entry_count)}</div>
+            </div>`
+            : `<div class="alert alert-warning">لا توجد Sales Invoice Draft مرتبطة.</div>`;
+        const dialog = new frappe.ui.Dialog({
+            title: `فحص ما بعد التحويل ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "integrity_summary",
+                    fieldtype: "HTML",
+                    options: `${summary}${blockers.length
+                        ? `<div class="alert alert-warning"><b>عوائق السلامة:</b>${this.blocker_list(blockers, "")}</div>`
+                        : `<div class="alert alert-success">الربط والإجمالي وحالة Draft وUpdate Stock سليمة. لن يتم Submit في هذه الخطوة.</div>`}`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Post-Conversion Integrity Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Verify Post-Conversion Integrity"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.verify_post_conversion_integrity",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                const ready = result.post_conversion_integrity_status === "Ready";
+                frappe.show_alert({
+                    message: ready
+                        ? __("Post-conversion integrity is Ready.")
+                        : __("Post-conversion integrity is Blocked."),
                     indicator: ready ? "green" : "orange",
                 });
                 await this.load_orders();

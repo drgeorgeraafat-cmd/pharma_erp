@@ -229,6 +229,16 @@ def before_submit_linked_online_order_invoice(doc, method=None):
             _("Online Order must be Confirmed or Preparing before Sales Invoice submit.")
         )
     order._guard_confirmation_ready()
+    if (
+        order.meta.has_field("custom_post_conversion_integrity_status")
+        and order.custom_post_conversion_integrity_status != "Ready"
+    ):
+        frappe.throw(
+            _(
+                "Verify Controlled Post-Conversion Integrity before submitting "
+                "the linked Sales Invoice."
+            )
+        )
 
     _bind_home_delivery_invoice_to_active_shift(doc, order)
 
@@ -329,6 +339,18 @@ def on_cancel_linked_online_order_invoice(doc, method=None):
     order.conversion_path = None
     order.converted_by = None
     order.converted_at = None
+    for fieldname, value in (
+        ("custom_conversion_execution_status", "Pending"),
+        ("custom_conversion_execution_notes", ""),
+        ("custom_conversion_executed_by", None),
+        ("custom_conversion_executed_at", None),
+        ("custom_post_conversion_integrity_status", "Pending"),
+        ("custom_post_conversion_integrity_notes", ""),
+        ("custom_post_conversion_checked_by", None),
+        ("custom_post_conversion_checked_at", None),
+    ):
+        if order.meta.has_field(fieldname):
+            order.set(fieldname, value)
     order.payment_entry = None
     order.verified_paid_amount = 0
     order.payment_verified_by = None

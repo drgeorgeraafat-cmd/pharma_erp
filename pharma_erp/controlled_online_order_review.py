@@ -383,6 +383,12 @@ def _snapshot(order) -> dict[str, Any]:
         "conversion_readiness_status": getattr(
             order, "custom_conversion_readiness_status", "Pending"
         ) or "Pending",
+        "conversion_execution_status": getattr(
+            order, "custom_conversion_execution_status", "Pending"
+        ) or "Pending",
+        "post_conversion_integrity_status": getattr(
+            order, "custom_post_conversion_integrity_status", "Pending"
+        ) or "Pending",
         "confirmed_at": order.confirmed_at,
         "sales_order": order.sales_order or "",
         "sales_invoice": order.sales_invoice or "",
@@ -469,6 +475,8 @@ def get_review_queue(
             "custom_payment_selection_status",
             "custom_order_confirmation_readiness_status",
             "custom_conversion_readiness_status",
+            "custom_conversion_execution_status",
+            "custom_post_conversion_integrity_status",
             "confirmed_at",
             "sales_order",
             "sales_invoice",
