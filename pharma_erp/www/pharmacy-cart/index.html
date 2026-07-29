@@ -1,0 +1,67 @@
+{% extends "templates/web.html" %}
+
+{% block title %}سلة المشتريات{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_product_listing.css">
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_cart_checkout.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-cart-page"
+         id="pharma-controlled-cart-page"
+         data-csrf="{{ csrf_token }}"
+         data-validate-endpoint="/api/method/pharma_erp.controlled_cart_checkout.validate_cart">
+    <header class="pharma-cart-header">
+        <div>
+            <p class="pharma-catalog__eyebrow">CONTROLLED CART</p>
+            <h1>سلة المشتريات</h1>
+            <p>السلة محفوظة داخل المتصفح فقط حتى تأكيد صفحة الدفع.</p>
+        </div>
+        <a class="pharma-cart-secondary" href="/pharmacy-shop/">متابعة التسوق</a>
+    </header>
+
+    <div id="pharma-cart-error" class="pharma-cart-message pharma-cart-message--error" hidden></div>
+    <div id="pharma-cart-loading" class="pharma-cart-message">جارٍ التحقق من المنتجات والأسعار…</div>
+    <div id="pharma-cart-empty" class="pharma-cart-message" hidden>
+        السلة فارغة. أضف منتجًا منشورًا ومتاحًا من المتجر.
+    </div>
+
+    <div class="pharma-cart-layout">
+        <div>
+            <div id="pharma-cart-items" class="pharma-cart-list"></div>
+            <button id="pharma-cart-clear" type="button" class="pharma-cart-secondary">
+                تفريغ السلة
+            </button>
+        </div>
+
+        <aside class="pharma-cart-summary">
+            <h2>ملخص السلة</h2>
+            <div class="pharma-summary-line">
+                <span>إجمالي المنتجات</span>
+                <strong id="pharma-cart-subtotal">0.00 EGP</strong>
+            </div>
+            <div class="pharma-summary-line">
+                <span>رسوم التوصيل</span>
+                <span>تُحدد بعد المراجعة</span>
+            </div>
+            <div class="pharma-summary-line pharma-summary-line--total">
+                <span>الإجمالي الحالي</span>
+                <strong id="pharma-cart-total">0.00 EGP</strong>
+            </div>
+            <p class="pharma-checkout-note">
+                فتح السلة وتعديلها لا ينشئ Quotation أو Sales Order أو Online Order.
+            </p>
+            <a id="pharma-cart-checkout"
+               class="pharma-cart-primary is-disabled"
+               href="/pharmacy-checkout/">
+                المتابعة لبيانات الطلب
+            </a>
+        </aside>
+    </div>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/controlled_cart_checkout.js"></script>
+{% endblock %}

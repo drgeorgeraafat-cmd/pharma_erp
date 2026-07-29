@@ -1,0 +1,52 @@
+{% extends "templates/web.html" %}
+
+{% block title %}تم استلام الطلب{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_product_listing.css">
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_cart_checkout.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-order-success"
+         id="pharma-controlled-order-success"
+         data-receipt-endpoint="/api/method/pharma_erp.controlled_cart_checkout.get_public_order_receipt">
+    <div id="pharma-success-loading" class="pharma-cart-message">جارٍ تحميل تأكيد الطلب…</div>
+    <div id="pharma-success-error" class="pharma-cart-message pharma-cart-message--error" hidden></div>
+
+    <article id="pharma-success-content" class="pharma-success-card" hidden>
+        <div class="pharma-success-check">✓</div>
+        <div>
+            <p class="pharma-catalog__eyebrow">ONLINE ORDER RECEIVED</p>
+            <h1>تم استلام طلبك للمراجعة</h1>
+            <p>لم يتم إنشاء فاتورة أو تحصيل أو حركة مخزنية. فريق الصيدلية سيراجع الطلب أولًا.</p>
+        </div>
+
+        <div class="pharma-success-details">
+            <div class="pharma-success-line"><span>رقم الطلب</span><strong id="pharma-success-order"></strong></div>
+            <div class="pharma-success-line"><span>الحالة</span><strong id="pharma-success-status"></strong></div>
+            <div class="pharma-success-line"><span>الموبايل</span><strong id="pharma-success-mobile"></strong></div>
+            <div class="pharma-success-line"><span>طريقة الاستلام</span><strong id="pharma-success-fulfilment"></strong></div>
+            <div class="pharma-success-line"><span>الإجمالي الحالي</span><strong id="pharma-success-total"></strong></div>
+            <div class="pharma-success-line"><span>حالة الدفع</span><strong id="pharma-success-payment"></strong></div>
+        </div>
+
+        <div id="pharma-success-items" class="pharma-success-items"></div>
+
+        <p id="pharma-success-delivery-note" class="pharma-success-note" hidden>
+            رسوم التوصيل ما زالت بانتظار المراجعة وتحديد منطقة التوصيل داخل النظام.
+        </p>
+        <p id="pharma-success-rx-note" class="pharma-success-note pharma-success-note--warning" hidden>
+            الطلب يحتوي صنفًا يتطلب روشتة، وسيتم التواصل لاستكمال مراجعة الروشتة.
+        </p>
+
+        <div class="pharma-product__actions">
+            <a class="pharma-cart-primary" href="/pharmacy-shop/">العودة للمتجر</a>
+        </div>
+    </article>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/controlled_cart_checkout.js"></script>
+{% endblock %}

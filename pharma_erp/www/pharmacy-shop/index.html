@@ -4,6 +4,7 @@
 
 {% block head_include %}
 <link rel="stylesheet" href="/assets/pharma_erp/css/controlled_product_listing.css">
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_cart_checkout.css">
 {% endblock %}
 
 {% block page_content %}
@@ -21,8 +22,8 @@
             </div>
         </div>
         <div class="pharma-catalog__safe-note">
-            <strong>عرض المنتجات فقط</strong>
-            <span>هذه الصفحة لا تنشئ طلبات أو فواتير أو حركات مخزنية.</span>
+            <strong>سلة منضبطة</strong>
+            <span>إضافة المنتج للسلة محلية. لا يُنشأ Online Order إلا بعد تأكيد صفحة الدفع.</span>
         </div>
     </header>
 
@@ -59,9 +60,14 @@
 
     <div class="pharma-catalog__toolbar">
         <p id="pharma-catalog-result-count" aria-live="polite">جارٍ تحميل المنتجات…</p>
-        <button id="pharma-catalog-clear" type="button" class="pharma-catalog__text-button">
-            مسح الفلاتر
-        </button>
+        <div class="pharma-catalog__toolbar-actions">
+            <a href="/pharmacy-cart/" class="pharma-cart-link">
+                السلة (<span data-pharma-cart-count>0</span>)
+            </a>
+            <button id="pharma-catalog-clear" type="button" class="pharma-catalog__text-button">
+                مسح الفلاتر
+            </button>
+        </div>
     </div>
 
     <div id="pharma-catalog-error" class="pharma-catalog__message pharma-catalog__message--error" hidden></div>
@@ -84,5 +90,6 @@
 {% endblock %}
 
 {% block script %}
+<script src="/assets/pharma_erp/js/controlled_cart_checkout.js"></script>
 <script src="/assets/pharma_erp/js/controlled_product_listing.js"></script>
 {% endblock %}

@@ -95,9 +95,23 @@
         footer.appendChild(availability);
         body.appendChild(footer);
 
-        const details = createElement("a", "pharma-product-card__details", "عرض التفاصيل");
+        const actions = createElement("div", "pharma-product-card__cart-actions");
+        const addButton = createElement(
+            "button",
+            "pharma-cart-add-button",
+            product.availability === "Available" ? "أضف للسلة" : "غير متاح للطلب"
+        );
+        addButton.type = "button";
+        addButton.disabled = product.availability !== "Available";
+        addButton.addEventListener("click", () => {
+            if (!window.PharmaControlledCart) return;
+            window.PharmaControlledCart.addProduct(product);
+        });
+
+        const details = createElement("a", "pharma-product-card__details", "التفاصيل");
         details.href = product.product_url;
-        body.appendChild(details);
+        actions.append(addButton, details);
+        body.appendChild(actions);
         card.appendChild(body);
         return card;
     }

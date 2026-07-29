@@ -1,0 +1,126 @@
+{% extends "templates/web.html" %}
+
+{% block title %}تأكيد الطلب الإلكتروني{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_product_listing.css">
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_cart_checkout.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-checkout-page"
+         id="pharma-controlled-checkout-page"
+         data-csrf="{{ csrf_token }}"
+         data-validate-endpoint="/api/method/pharma_erp.controlled_cart_checkout.validate_cart"
+         data-create-endpoint="/api/method/pharma_erp.controlled_cart_checkout.create_online_order">
+    <header class="pharma-checkout-header">
+        <div>
+            <p class="pharma-catalog__eyebrow">CONTROLLED CHECKOUT</p>
+            <h1>تأكيد بيانات الطلب</h1>
+            <p>بعد التأكيد سيتم إنشاء Online Order بحالة Placed للمراجعة الداخلية فقط.</p>
+        </div>
+        <a class="pharma-cart-secondary" href="/pharmacy-cart/">العودة للسلة</a>
+    </header>
+
+    <div id="pharma-checkout-summary-error" class="pharma-cart-message pharma-cart-message--error" hidden></div>
+
+    <div class="pharma-checkout-layout">
+        <form id="pharma-checkout-form" class="pharma-checkout-form-card" novalidate>
+            <section class="pharma-form-section">
+                <h2>بيانات العميل</h2>
+                <div class="pharma-form-grid">
+                    <label class="pharma-form-field">
+                        <span>الاسم *</span>
+                        <input name="customer_name" type="text" maxlength="140" required autocomplete="name">
+                    </label>
+                    <label class="pharma-form-field">
+                        <span>رقم الموبايل *</span>
+                        <input name="mobile_no" type="tel" maxlength="24" required autocomplete="tel">
+                    </label>
+                    <label class="pharma-form-field pharma-form-field--full">
+                        <span>البريد الإلكتروني</span>
+                        <input name="email_id" type="email" maxlength="140" autocomplete="email">
+                    </label>
+                </div>
+            </section>
+
+            <section class="pharma-form-section">
+                <h2>طريقة الاستلام</h2>
+                <div class="pharma-fulfilment-options">
+                    <label class="pharma-fulfilment-option">
+                        <input type="radio" name="fulfilment_method" value="Home Delivery" checked>
+                        <span>توصيل للمنزل</span>
+                    </label>
+                    <label class="pharma-fulfilment-option">
+                        <input type="radio" name="fulfilment_method" value="Pharmacy Pickup">
+                        <span>استلام من الصيدلية</span>
+                    </label>
+                </div>
+                <p id="pharma-checkout-delivery-note" class="pharma-checkout-note"></p>
+            </section>
+
+            <section class="pharma-form-section" data-delivery-fields>
+                <h2>عنوان التوصيل</h2>
+                <div class="pharma-form-grid">
+                    <label class="pharma-form-field pharma-form-field--full">
+                        <span>العنوان الرئيسي *</span>
+                        <input name="address_line1" type="text" maxlength="180" data-delivery-required autocomplete="street-address">
+                    </label>
+                    <label class="pharma-form-field pharma-form-field--full">
+                        <span>تفاصيل إضافية</span>
+                        <input name="address_line2" type="text" maxlength="180">
+                    </label>
+                    <label class="pharma-form-field">
+                        <span>المدينة *</span>
+                        <input name="city" type="text" maxlength="120" data-delivery-required autocomplete="address-level2">
+                    </label>
+                    <label class="pharma-form-field">
+                        <span>المحافظة</span>
+                        <input name="state" type="text" maxlength="120" autocomplete="address-level1">
+                    </label>
+                    <label class="pharma-form-field">
+                        <span>الدولة</span>
+                        <input name="country" type="text" maxlength="120" value="Egypt" autocomplete="country-name">
+                    </label>
+                    <label class="pharma-form-field pharma-form-field--full">
+                        <span>تعليمات التوصيل</span>
+                        <textarea name="delivery_instructions" maxlength="500"></textarea>
+                    </label>
+                </div>
+            </section>
+
+            <div id="pharma-checkout-submit-error" class="pharma-cart-message pharma-cart-message--error" hidden></div>
+            <button id="pharma-checkout-submit" type="submit" class="pharma-cart-primary" disabled>
+                تأكيد وإرسال الطلب للمراجعة
+            </button>
+        </form>
+
+        <aside class="pharma-checkout-summary">
+            <h2>ملخص الطلب</h2>
+            <div id="pharma-checkout-items"></div>
+            <div class="pharma-summary-line">
+                <span>إجمالي المنتجات</span>
+                <strong id="pharma-checkout-subtotal">—</strong>
+            </div>
+            <div class="pharma-summary-line">
+                <span>رسوم التوصيل</span>
+                <span>تُحدد بعد المراجعة</span>
+            </div>
+            <div class="pharma-summary-line pharma-summary-line--total">
+                <span>الإجمالي الحالي</span>
+                <strong id="pharma-checkout-total">—</strong>
+            </div>
+            <p id="pharma-checkout-rx-note" class="pharma-checkout-note pharma-checkout-note--warning" hidden>
+                السلة تحتوي صنفًا يتطلب روشتة. سيظل الطلب تحت المراجعة حتى استكمال واعتماد الروشتة.
+            </p>
+            <p class="pharma-checkout-note">
+                هذه الخطوة لا تنشئ Quotation أو Sales Order أو Sales Invoice أو Payment Entry أو حركة مخزنية.
+            </p>
+        </aside>
+    </div>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/controlled_cart_checkout.js"></script>
+{% endblock %}

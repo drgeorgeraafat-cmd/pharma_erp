@@ -4,6 +4,7 @@
 
 {% block head_include %}
 <link rel="stylesheet" href="/assets/pharma_erp/css/controlled_product_listing.css">
+<link rel="stylesheet" href="/assets/pharma_erp/css/controlled_cart_checkout.css">
 {% endblock %}
 
 {% block page_content %}
@@ -54,13 +55,33 @@
             {% endif %}
 
             <aside class="pharma-product__safety-note">
-                هذه صفحة عرض فقط. إنشاء الطلب والتحصيل سيتم من خلال مسار الطلب الإلكتروني المنضبط.
+                إضافة المنتج للسلة لا تنشئ مستندًا داخل ERP. يتم إنشاء Online Order فقط بعد تأكيد صفحة الدفع.
             </aside>
 
             <div class="pharma-product__actions">
+                <button type="button"
+                        class="pharma-cart-add-button"
+                        data-pharma-add-to-cart
+                        data-item-code="{{ product.item_code }}"
+                        data-item-name="{{ product.item_name }}"
+                        data-image="{{ product.image }}"
+                        data-category="{{ product.category }}"
+                        data-price-formatted="{{ product.price_formatted }}"
+                        data-requires-prescription="{{ product.requires_prescription }}"
+                        data-availability="{{ product.availability }}"
+                        {% if product.availability != "Available" %}disabled{% endif %}>
+                    {% if product.availability == "Available" %}أضف للسلة{% else %}غير متاح للطلب{% endif %}
+                </button>
+                <a class="pharma-cart-secondary" href="/pharmacy-cart/">
+                    السلة (<span data-pharma-cart-count>0</span>)
+                </a>
                 <a class="pharma-catalog__primary-button" href="/pharmacy-shop/">العودة للمنتجات</a>
             </div>
         </article>
     </div>
 </section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/controlled_cart_checkout.js"></script>
 {% endblock %}
