@@ -35,6 +35,8 @@ class ControlledOnlineOrderReviewPage {
                 "Partially Available",
                 "Awaiting Customer Decision",
                 "Ready for Payment",
+                "Payment Verification",
+                "Confirmed",
                 "On Hold",
             ].join("\n"),
             change: () => this.load_orders(),
@@ -54,10 +56,10 @@ class ControlledOnlineOrderReviewPage {
                     <div>
                         <div class="coor-banner-title">مراجعة طلبات الموقع قبل التأكيد</div>
                         <div class="coor-banner-subtitle">
-                            مراجعة الوصفة والمخزون وربط العميل والعنوان ومنطقة التوصيل قبل التأكيد النهائي، بدون إنشاء مستندات مالية أو مخزنية.
+                            مراجعة الدفع وتأكيد الطلب والتحقق من جاهزية التحويل بعد اكتمال مراجعة العميل والمخزون والتوصيل، بدون إنشاء مستندات مالية أو مخزنية.
                         </div>
                     </div>
-                    <span class="indicator-pill blue">Step 3B.5</span>
+                    <span class="indicator-pill blue">Step 3B.6</span>
                 </div>
                 <div class="coor-summary"></div>
                 <div class="coor-loading text-muted">جاري تحميل طلبات الموقع...</div>
@@ -83,7 +85,7 @@ class ControlledOnlineOrderReviewPage {
             .coor-card-label { color:var(--text-muted); font-size:12px; }
             .coor-card-value { font-size:24px; font-weight:700; margin-top:4px; }
             .coor-table-wrap { overflow:auto; border:1px solid var(--border-color); border-radius:12px; background:var(--fg-color); }
-            .coor-table { width:100%; min-width:1080px; border-collapse:collapse; }
+            .coor-table { width:100%; min-width:1320px; border-collapse:collapse; }
             .coor-table th, .coor-table td { padding:11px 10px; border-bottom:1px solid var(--border-color); vertical-align:middle; text-align:right; }
             .coor-table th { background:var(--subtle-fg); font-weight:600; white-space:nowrap; }
             .coor-order-link { font-weight:700; }
@@ -125,6 +127,18 @@ class ControlledOnlineOrderReviewPage {
         this.$main.on("click", ".coor-final-readiness", async (event) => {
             await this.verify_final_readiness($(event.currentTarget).data("order"));
         });
+        this.$main.on("click", ".coor-payment-selection", async (event) => {
+            await this.open_payment_selection_dialog($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-confirmation-readiness", async (event) => {
+            await this.verify_confirmation_readiness($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-confirm-order", async (event) => {
+            await this.confirm_order($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-conversion-readiness", async (event) => {
+            await this.verify_conversion_readiness($(event.currentTarget).data("order"));
+        });
     }
 
     async call(method, args = {}) {
@@ -160,7 +174,8 @@ class ControlledOnlineOrderReviewPage {
             ["مراجعة وصفة", counts["Prescription Review"] || 0],
             ["مراجعة مخزون", counts["Stock Review"] || 0],
             ["قرار العميل", counts["Awaiting Customer Decision"] || 0],
-            ["جاهز للمرحلة التالية", counts["Ready for Payment"] || 0],
+            ["جاهز للدفع/التأكيد", (counts["Ready for Payment"] || 0) + (counts["Payment Verification"] || 0)],
+            ["طلبات مؤكدة", counts["Confirmed"] || 0],
         ];
         this.$main.find(".coor-summary").html(cards.map(([label, value]) => `
             <div class="coor-card">
@@ -184,6 +199,35 @@ class ControlledOnlineOrderReviewPage {
             const prescriptionButton = Number(order.prescription_required || 0)
                 ? `<button class="btn btn-default btn-xs coor-prescription-review" data-order="${this.escape(order.name)}">مراجعة الوصفة</button>`
                 : "";
+            const paymentButton = ["Ready for Payment", "Payment Verification"].includes(order.status)
+                ? `<button class="btn btn-default btn-xs coor-payment-selection" data-order="${this.escape(order.name)}">اختيار الدفع</button>`
+                : "";
+            const readinessButton = ["Ready for Payment", "Payment Verification"].includes(order.status)
+                ? `<button class="btn btn-warning btn-xs coor-confirmation-readiness" data-order="${this.escape(order.name)}">جاهزية التأكيد</button>`
+                : "";
+            const confirmButton = ["Ready for Payment", "Payment Verification"].includes(order.status)
+                && order.custom_order_confirmation_readiness_status === "Ready"
+                ? `<button class="btn btn-success btn-xs coor-confirm-order" data-order="${this.escape(order.name)}">تأكيد الطلب</button>`
+                : "";
+            const conversionButton = ["Confirmed", "Preparing"].includes(order.status)
+                ? `<button class="btn btn-primary btn-xs coor-conversion-readiness" data-order="${this.escape(order.name)}">جاهزية التحويل</button>`
+                : "";
+            const reviewLocked = ["Confirmed", "Preparing"].includes(order.status);
+            const stockButton = reviewLocked
+                ? ""
+                : `<button class="btn btn-primary btn-xs coor-stock-review" data-order="${this.escape(order.name)}">مراجعة المخزون</button>`;
+            const customerButton = reviewLocked
+                ? ""
+                : `<button class="btn btn-default btn-xs coor-customer-resolution" data-order="${this.escape(order.name)}">ربط العميل</button>`;
+            const deliveryButton = reviewLocked
+                ? ""
+                : `<button class="btn btn-default btn-xs coor-delivery-zone" data-order="${this.escape(order.name)}">منطقة التوصيل</button>`;
+            const snapshotButton = reviewLocked
+                ? ""
+                : `<button class="btn btn-default btn-xs coor-view-snapshot" data-order="${this.escape(order.name)}">الجاهزية</button>`;
+            const finalReadinessButton = reviewLocked
+                ? ""
+                : `<button class="btn btn-success btn-xs coor-final-readiness" data-order="${this.escape(order.name)}">تأكيد الجاهزية</button>`;
             return `
                 <tr>
                     <td><a href="#" class="coor-order-link coor-open-order" data-order="${this.escape(order.name)}">${this.escape(order.name)}</a></td>
@@ -192,6 +236,8 @@ class ControlledOnlineOrderReviewPage {
                     <td dir="ltr">${this.escape(order.mobile_no || "-")}</td>
                     <td>${this.escape(order.fulfilment_method || "-")}</td>
                     <td>${this.escape(this.money(order.grand_total, order.currency))}</td>
+                    <td>${this.escape(order.payment_method || "-")}<br><small>${this.escape(order.payment_status || "-")}</small></td>
+                    <td>${this.escape(order.custom_order_confirmation_readiness_status || "Pending")}</td>
                     <td class="coor-rx">${Number(order.prescription_required || 0) ? "نعم" : "لا"}</td>
                     <td>${this.escape(order.prescription_review_status || "-")}</td>
                     <td>${this.escape(frappe.datetime.str_to_user(order.creation))}</td>
@@ -199,11 +245,15 @@ class ControlledOnlineOrderReviewPage {
                         <div class="coor-actions">
                             ${startButton}
                             ${prescriptionButton}
-                            <button class="btn btn-primary btn-xs coor-stock-review" data-order="${this.escape(order.name)}">مراجعة المخزون</button>
-                            <button class="btn btn-default btn-xs coor-customer-resolution" data-order="${this.escape(order.name)}">ربط العميل</button>
-                            <button class="btn btn-default btn-xs coor-delivery-zone" data-order="${this.escape(order.name)}">منطقة التوصيل</button>
-                            <button class="btn btn-default btn-xs coor-view-snapshot" data-order="${this.escape(order.name)}">الجاهزية</button>
-                            <button class="btn btn-success btn-xs coor-final-readiness" data-order="${this.escape(order.name)}">تأكيد الجاهزية</button>
+                            ${stockButton}
+                            ${customerButton}
+                            ${deliveryButton}
+                            ${snapshotButton}
+                            ${finalReadinessButton}
+                            ${paymentButton}
+                            ${readinessButton}
+                            ${confirmButton}
+                            ${conversionButton}
                         </div>
                     </td>
                 </tr>
@@ -215,8 +265,8 @@ class ControlledOnlineOrderReviewPage {
                 <table class="coor-table">
                     <thead><tr>
                         <th>الطلب</th><th>الحالة</th><th>العميل</th><th>الموبايل</th>
-                        <th>الاستلام</th><th>الإجمالي</th><th>وصفة</th><th>قرار الوصفة</th>
-                        <th>وقت الطلب</th><th>الإجراءات</th>
+                        <th>الاستلام</th><th>الإجمالي</th><th>الدفع</th><th>جاهزية التأكيد</th>
+                        <th>وصفة</th><th>قرار الوصفة</th><th>وقت الطلب</th><th>الإجراءات</th>
                     </tr></thead>
                     <tbody>${rows}</tbody>
                 </table>
@@ -262,6 +312,10 @@ class ControlledOnlineOrderReviewPage {
                     <div><b>منطقة التوصيل:</b> ${this.escape(snapshot.delivery_zone || "غير محددة")}</div>
                     <div><b>رسوم التوصيل:</b> ${this.escape(this.money(snapshot.delivery_fee, snapshot.currency))}</div>
                     <div><b>الجاهزية النهائية:</b> ${this.escape(snapshot.final_confirmation_readiness_status || "Pending")}</div>
+                    <div><b>طريقة الدفع:</b> ${this.escape(snapshot.payment_method || "غير محددة")}</div>
+                    <div><b>حالة الدفع:</b> ${this.escape(snapshot.payment_status || "-")}</div>
+                    <div><b>جاهزية التأكيد:</b> ${this.escape(snapshot.order_confirmation_readiness_status || "Pending")}</div>
+                    <div><b>جاهزية التحويل:</b> ${this.escape(snapshot.conversion_readiness_status || "Pending")}</div>
                 </div>
                 <h5>عوائق إكمال المراجعة</h5>
                 ${this.blocker_list(reviewBlockers, "لا توجد عوائق مراجعة حالية.")}
@@ -611,6 +665,239 @@ class ControlledOnlineOrderReviewPage {
         dialog.show();
     }
 
+    async open_payment_selection_dialog(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_payment_selection_context",
+            { online_order: orderName }
+        );
+        const options = context.payment_options || [];
+        if (!options.length) {
+            frappe.msgprint(__("No controlled payment options are available."));
+            return;
+        }
+        const optionMap = Object.fromEntries(options.map((row) => [row.name, row]));
+        const defaultMethod = context.payment_method && optionMap[context.payment_method]
+            ? context.payment_method
+            : options[0].name;
+        const dialog = new frappe.ui.Dialog({
+            title: `اختيار الدفع ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "payment_summary",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-info">الإجمالي النهائي: <b>${this.escape(this.money(context.grand_total, context.currency))}</b> — الاستلام: <b>${this.escape(context.fulfilment_method)}</b></div>`,
+                },
+                {
+                    fieldname: "payment_method",
+                    label: __("Payment Method"),
+                    fieldtype: "Select",
+                    options: options.map((row) => row.name),
+                    default: defaultMethod,
+                    reqd: 1,
+                },
+                {
+                    fieldname: "currency",
+                    fieldtype: "Data",
+                    default: context.currency || "EGP",
+                    hidden: 1,
+                },
+                {
+                    fieldname: "declared_paid_amount",
+                    label: __("Declared Paid Amount"),
+                    fieldtype: "Currency",
+                    options: "currency",
+                    default: Number(context.declared_paid_amount || context.grand_total || 0),
+                },
+                {
+                    fieldname: "transaction_reference",
+                    label: __("Transaction Reference"),
+                    fieldtype: "Data",
+                    default: context.transaction_reference || "",
+                },
+                {
+                    fieldname: "payment_proof",
+                    label: __("Payment Proof"),
+                    fieldtype: "Attach",
+                    default: context.payment_proof || "",
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Payment Review Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Apply Payment Selection"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.apply_payment_selection",
+                    {
+                        online_order: context.online_order,
+                        payment_method: values.payment_method,
+                        declared_paid_amount: values.declared_paid_amount || 0,
+                        transaction_reference: values.transaction_reference || "",
+                        payment_proof: values.payment_proof || "",
+                        notes: values.notes || "",
+                    }
+                );
+                dialog.hide();
+                frappe.show_alert({
+                    message: result.payment_selection_status === "Ready"
+                        ? __("Controlled payment selection is Ready.")
+                        : __("Payment selection is awaiting verification."),
+                    indicator: result.payment_selection_status === "Ready" ? "green" : "orange",
+                });
+                await this.load_orders();
+            },
+        });
+        const refreshPaymentFields = () => {
+            const option = optionMap[dialog.get_value("payment_method")] || {};
+            const prepaid = Number(option.prepaid || 0) === 1;
+            dialog.set_df_property("declared_paid_amount", "read_only", prepaid ? 0 : 1);
+            dialog.set_df_property("declared_paid_amount", "reqd", prepaid ? 1 : 0);
+            dialog.set_df_property("transaction_reference", "reqd", prepaid ? 1 : 0);
+            dialog.set_df_property("transaction_reference", "hidden", prepaid ? 0 : 1);
+            dialog.set_df_property("payment_proof", "hidden", prepaid ? 0 : 1);
+            if (prepaid) {
+                dialog.set_value("declared_paid_amount", Number(context.grand_total || 0));
+            } else {
+                dialog.set_value("declared_paid_amount", 0);
+                dialog.set_value("transaction_reference", "");
+                dialog.set_value("payment_proof", "");
+            }
+        };
+        dialog.fields_dict.payment_method.df.onchange = refreshPaymentFields;
+        dialog.show();
+        refreshPaymentFields();
+    }
+
+    async verify_confirmation_readiness(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_payment_selection_context",
+            { online_order: orderName }
+        );
+        const blockers = context.confirmation_blockers || [];
+        const dialog = new frappe.ui.Dialog({
+            title: `جاهزية تأكيد الطلب ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "readiness_summary",
+                    fieldtype: "HTML",
+                    options: blockers.length
+                        ? `<div class="alert alert-warning"><b>عوائق التأكيد:</b>${this.blocker_list(blockers, "")}</div>`
+                        : `<div class="alert alert-success">الطلب جاهز للتأكيد. لن يتم إنشاء Sales Invoice أو Payment Entry أو حركة مخزون.</div>`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Confirmation Readiness Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Verify Confirmation Readiness"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.verify_order_confirmation_readiness",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                const ready = result.order_confirmation_readiness_status === "Ready";
+                frappe.show_alert({
+                    message: ready ? __("Order confirmation readiness is Ready.") : __("Order confirmation readiness is Blocked."),
+                    indicator: ready ? "green" : "orange",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+    async confirm_order(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_payment_selection_context",
+            { online_order: orderName }
+        );
+        const blockers = context.confirmation_blockers || [];
+        if (context.order_confirmation_readiness_status !== "Ready" || blockers.length) {
+            frappe.msgprint({
+                title: __("Order Confirmation Blocked"),
+                indicator: "orange",
+                message: this.blocker_list(blockers.length ? blockers : ["Verify order confirmation readiness first."], ""),
+            });
+            return;
+        }
+        const dialog = new frappe.ui.Dialog({
+            title: `تأكيد الطلب ${context.online_order}`,
+            fields: [
+                {
+                    fieldname: "confirmation_summary",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-success">سيتم تغيير الحالة إلى Confirmed وقفل بيانات الطلب التجارية. لن يتم إنشاء فاتورة أو قيد أو حركة مخزون.</div>`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Confirmation Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Confirm Online Order"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.confirm_online_order",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                frappe.show_alert({
+                    message: __("Online Order {0} confirmed.", [result.online_order]),
+                    indicator: "green",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+    async verify_conversion_readiness(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_conversion_readiness",
+            { online_order: orderName }
+        );
+        const blockers = context.conversion_blockers || [];
+        const dialog = new frappe.ui.Dialog({
+            title: `جاهزية التحويل ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "conversion_summary",
+                    fieldtype: "HTML",
+                    options: blockers.length
+                        ? `<div class="alert alert-warning"><b>عوائق التحويل:</b>${this.blocker_list(blockers, "")}</div>`
+                        : `<div class="alert alert-success">الطلب جاهز لإنشاء Draft Sales Invoice غير مخزنية في الخطوة التالية. لن يتم إنشاء المستند الآن.</div>`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Conversion Readiness Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Verify Conversion Readiness"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.verify_conversion_readiness",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                const ready = result.conversion_readiness_status === "Ready";
+                frappe.show_alert({
+                    message: ready ? __("Sales Invoice conversion readiness is Ready.") : __("Conversion readiness is Blocked."),
+                    indicator: ready ? "green" : "orange",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
     blocker_list(items, emptyLabel) {
         if (!items || !items.length) {
             return `<div class="text-success">${this.escape(emptyLabel)}</div>`;
@@ -627,6 +914,8 @@ class ControlledOnlineOrderReviewPage {
             "Partially Available": "orange",
             "Awaiting Customer Decision": "purple",
             "Ready for Payment": "green",
+            "Payment Verification": "orange",
+            "Confirmed": "green",
             "On Hold": "red",
         }[status] || "gray";
         return `<span class="indicator-pill ${colour}">${this.escape(status || "-")}</span>`;

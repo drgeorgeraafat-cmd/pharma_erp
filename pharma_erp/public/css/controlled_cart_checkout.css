@@ -483,3 +483,20 @@
 #pharma-checkout-account-panel[hidden] {
     display: none !important;
 }
+
+#pharma-checkout-payment-section {
+    border-top: 4px solid #d8e9df;
+}
+
+#pharma-checkout-prepaid-fields[hidden] {
+    display: none !important;
+}
+
+#pharma-checkout-payment-option {
+    font-weight: 700;
+}
+
+#pharma-checkout-declared-paid[readonly] {
+    background: #f6f8f7;
+    color: #36473d;
+}

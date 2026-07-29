@@ -19,6 +19,8 @@ REVIEW_QUEUE_STATUSES = (
     "Partially Available",
     "Awaiting Customer Decision",
     "Ready for Payment",
+    "Payment Verification",
+    "Confirmed",
     "On Hold",
 )
 
@@ -363,6 +365,27 @@ def _snapshot(order) -> dict[str, Any]:
         "final_confirmation_checked_at": getattr(
             order, "custom_final_confirmation_checked_at", None
         ),
+        "payment_timing": order.payment_timing or "",
+        "payment_method": order.payment_method or "",
+        "mode_of_payment": order.mode_of_payment or "",
+        "payment_status": order.payment_status or "",
+        "declared_paid_amount": flt(order.declared_paid_amount),
+        "verified_paid_amount": flt(order.verified_paid_amount),
+        "transaction_reference": order.transaction_reference or "",
+        "payment_proof": order.payment_proof or "",
+        "payment_entry": order.payment_entry or "",
+        "payment_selection_status": getattr(
+            order, "custom_payment_selection_status", "Pending"
+        ) or "Pending",
+        "order_confirmation_readiness_status": getattr(
+            order, "custom_order_confirmation_readiness_status", "Pending"
+        ) or "Pending",
+        "conversion_readiness_status": getattr(
+            order, "custom_conversion_readiness_status", "Pending"
+        ) or "Pending",
+        "confirmed_at": order.confirmed_at,
+        "sales_order": order.sales_order or "",
+        "sales_invoice": order.sales_invoice or "",
         "items": rows,
         "review_blockers": blockers["review"],
         "confirmation_blockers": blockers["confirmation"],
@@ -439,6 +462,16 @@ def get_review_queue(
             "currency",
             "prescription_required",
             "prescription_review_status",
+            "payment_timing",
+            "payment_method",
+            "payment_status",
+            "custom_final_confirmation_readiness_status",
+            "custom_payment_selection_status",
+            "custom_order_confirmation_readiness_status",
+            "custom_conversion_readiness_status",
+            "confirmed_at",
+            "sales_order",
+            "sales_invoice",
             "creation",
             "modified",
         ],

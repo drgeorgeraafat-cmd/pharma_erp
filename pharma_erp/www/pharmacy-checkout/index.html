@@ -13,6 +13,7 @@
          data-csrf="{{ csrf_token }}"
          data-validate-endpoint="/api/method/pharma_erp.controlled_cart_checkout.validate_cart"
          data-identity-endpoint="/api/method/pharma_erp.controlled_cart_checkout.get_checkout_identity"
+         data-payment-options-endpoint="/api/method/pharma_erp.controlled_online_order_confirmation.get_public_payment_options"
          data-create-endpoint="/api/method/pharma_erp.controlled_cart_checkout.create_online_order">
     <header class="pharma-checkout-header">
         <div>
@@ -59,6 +60,27 @@
                     </label>
                 </div>
                 <p id="pharma-checkout-delivery-note" class="pharma-checkout-note"></p>
+            </section>
+
+            <section class="pharma-form-section" id="pharma-checkout-payment-section">
+                <h2>طريقة الدفع</h2>
+                <div class="pharma-form-grid">
+                    <label class="pharma-form-field pharma-form-field--full">
+                        <span>اختيار طريقة الدفع *</span>
+                        <select id="pharma-checkout-payment-option" name="payment_option" required></select>
+                    </label>
+                </div>
+                <div id="pharma-checkout-prepaid-fields" class="pharma-form-grid" hidden>
+                    <label class="pharma-form-field">
+                        <span>المبلغ المعلن</span>
+                        <input id="pharma-checkout-declared-paid" name="declared_paid_amount" type="number" min="0" step="0.01" readonly>
+                    </label>
+                    <label class="pharma-form-field">
+                        <span>مرجع التحويل *</span>
+                        <input id="pharma-checkout-transaction-reference" name="transaction_reference" type="text" maxlength="140">
+                    </label>
+                </div>
+                <p id="pharma-checkout-payment-note" class="pharma-checkout-note"></p>
             </section>
 
             <section class="pharma-form-section" data-delivery-fields>

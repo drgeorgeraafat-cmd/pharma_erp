@@ -10,6 +10,10 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, now_datetime, strip_html
 
+from pharma_erp.controlled_online_order_confirmation import (
+    PAYMENT_OPTIONS,
+    PUBLIC_PAYMENT_OPTIONS,
+)
 from pharma_erp.controlled_product_listing import _catalog_brand, _format_public_price
 
 MAX_CART_LINES = 25
@@ -496,6 +500,71 @@ def get_checkout_identity() -> dict[str, Any]:
     }
 
 
+def _checkout_payment_values(
+    data: dict[str, Any],
+    fulfilment_method: str,
+    cart: dict[str, Any],
+) -> dict[str, Any]:
+    default_method = (
+        "Cash on Delivery"
+        if fulfilment_method == "Home Delivery"
+        else "Cash at Pharmacy"
+    )
+    method = _clean_text(data.get("payment_option") or default_method, 80)
+    allowed = set(PUBLIC_PAYMENT_OPTIONS.get(fulfilment_method, ()))
+    option = PAYMENT_OPTIONS.get(method)
+    if method not in allowed or not option:
+        frappe.throw(_("Select a valid website checkout payment option."))
+
+    mode_of_payment = str(option.get("mode_of_payment") or "").strip()
+    if mode_of_payment and not frappe.db.exists(
+        "Mode of Payment", {"name": mode_of_payment, "enabled": 1}
+    ):
+        frappe.throw(
+            _("Mode of Payment {0} is not enabled.").format(
+                frappe.bold(mode_of_payment)
+            )
+        )
+
+    if cint(option.get("prepaid")):
+        if fulfilment_method == "Home Delivery":
+            frappe.throw(
+                _(
+                    "Home Delivery prepayment is selected internally after the Delivery Zone "
+                    "and final delivery fee are confirmed."
+                )
+            )
+        declared = flt(data.get("declared_paid_amount"))
+        if abs(declared - flt(cart.get("grand_total"))) > 0.01:
+            frappe.throw(
+                _("Declared prepaid amount must equal the current order total.")
+            )
+        reference = _clean_text(data.get("transaction_reference"), 140)
+        if not reference:
+            frappe.throw(_("Transaction Reference is required for prepaid checkout."))
+        return {
+            "payment_timing": "Prepaid",
+            "payment_method": method,
+            "mode_of_payment": mode_of_payment,
+            "declared_paid_amount": declared,
+            "verified_paid_amount": 0,
+            "transaction_reference": reference,
+            "payment_status": "Awaiting Verification",
+            "payment_selection_status": "Awaiting Verification",
+        }
+
+    return {
+        "payment_timing": "Collect on Delivery",
+        "payment_method": method,
+        "mode_of_payment": mode_of_payment,
+        "declared_paid_amount": 0,
+        "verified_paid_amount": 0,
+        "transaction_reference": "",
+        "payment_status": "Pending Collection",
+        "payment_selection_status": "Ready",
+    }
+
+
 @frappe.whitelist(allow_guest=True)
 def validate_cart(items: str | list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Revalidate a browser cart against the controlled published catalog."""
@@ -600,9 +669,7 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
     if not company:
         frappe.throw(_("Default Company is not configured."))
 
-    payment_method = (
-        "Cash on Delivery" if fulfilment_method == "Home Delivery" else "Cash at Pharmacy"
-    )
+    payment_values = _checkout_payment_values(data, fulfilment_method, cart)
     formatted_address = ", ".join(
         value for value in (address_line1, address_line2, city, state, country) if value
     )
@@ -636,9 +703,13 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
             "delivery_instructions": delivery_instructions,
             "currency": cart["currency"],
             "discount_amount": 0,
-            "payment_timing": "Collect on Delivery",
-            "payment_method": payment_method,
-            "payment_status": "Not Declared",
+            "payment_timing": payment_values["payment_timing"],
+            "payment_method": payment_values["payment_method"],
+            "mode_of_payment": payment_values["mode_of_payment"],
+            "declared_paid_amount": payment_values["declared_paid_amount"],
+            "verified_paid_amount": payment_values["verified_paid_amount"],
+            "transaction_reference": payment_values["transaction_reference"],
+            "payment_status": payment_values["payment_status"],
             "customer": linked_customer or None,
             "customer_address": selected_address or None,
             "customer_resolution_status": "Matched" if linked_customer else "Unresolved",
@@ -652,6 +723,18 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
         order_data["custom_customer_resolved_at"] = now_datetime()
     if linked_customer and online_meta.has_field("custom_customer_resolution_notes"):
         order_data["custom_customer_resolution_notes"] = "Matched from authenticated Website User."
+    if online_meta.has_field("custom_payment_selection_status"):
+        order_data["custom_payment_selection_status"] = payment_values[
+            "payment_selection_status"
+        ]
+    if online_meta.has_field("custom_payment_selection_notes"):
+        order_data["custom_payment_selection_notes"] = (
+            "Selected during controlled website checkout."
+        )
+    if online_meta.has_field("custom_payment_selected_by"):
+        order_data["custom_payment_selected_by"] = frappe.session.user or "Guest"
+    if online_meta.has_field("custom_payment_selected_at"):
+        order_data["custom_payment_selected_at"] = now_datetime()
 
     order = frappe.get_doc(order_data)
 

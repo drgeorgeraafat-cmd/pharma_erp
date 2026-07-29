@@ -354,8 +354,14 @@
         const accountPanel = document.getElementById("pharma-checkout-account-panel");
         const savedAddressWrap = document.getElementById("pharma-saved-address-wrap");
         const savedAddressSelect = document.getElementById("pharma-saved-address");
+        const paymentOption = document.getElementById("pharma-checkout-payment-option");
+        const paymentNote = document.getElementById("pharma-checkout-payment-note");
+        const prepaidFields = document.getElementById("pharma-checkout-prepaid-fields");
+        const declaredPaid = document.getElementById("pharma-checkout-declared-paid");
+        const transactionReference = document.getElementById("pharma-checkout-transaction-reference");
         let validated = null;
         let checkoutIdentity = null;
+        let paymentOptions = [];
 
         const items = loadCart();
         if (!items.length) {
@@ -363,8 +369,52 @@
             return;
         }
 
+        async function loadPaymentOptions() {
+            const fulfilment = root.querySelector("[name='fulfilment_method']:checked")?.value || "Home Delivery";
+            const result = await apiRequest(
+                `${root.dataset.paymentOptionsEndpoint}?fulfilment_method=${encodeURIComponent(fulfilment)}`,
+                { method: "GET" },
+            );
+            paymentOptions = result.options || [];
+            emptyNode(paymentOption);
+            for (const optionRow of paymentOptions) {
+                const option = document.createElement("option");
+                option.value = optionRow.name;
+                option.textContent = optionRow.label_ar || optionRow.name;
+                option.dataset.prepaid = String(Number(optionRow.prepaid || 0));
+                paymentOption.appendChild(option);
+            }
+            refreshPaymentFields();
+            paymentNote.textContent = result.delivery_fee_pending_review
+                ? "الدفع المسبق للتوصيل المنزلي يُختار بعد اعتماد منطقة ورسوم التوصيل. المتاح الآن هو الدفع عند الاستلام."
+                : "الدفع المسبق عند الاستلام من الصيدلية يحتاج مرجع تحويل، ولا ينشئ Payment Entry تلقائيًا.";
+        }
+
+        function refreshPaymentFields() {
+            const selected = paymentOptions.find((row) => row.name === paymentOption.value) || {};
+            const prepaid = Number(selected.prepaid || 0) === 1;
+            prepaidFields.hidden = !prepaid;
+            transactionReference.required = prepaid;
+            if (prepaid && validated) {
+                declaredPaid.value = Number(validated.grand_total || 0).toFixed(2);
+            } else if (!prepaid) {
+                declaredPaid.value = "0.00";
+                transactionReference.value = "";
+            }
+        }
+
+        paymentOption.addEventListener("change", refreshPaymentFields);
         root.querySelectorAll("[name='fulfilment_method']").forEach((input) => {
-            input.addEventListener("change", () => toggleDeliveryFields(root));
+            input.addEventListener("change", async () => {
+                toggleDeliveryFields(root);
+                try {
+                    await loadPaymentOptions();
+                } catch (paymentError) {
+                    submitError.textContent = paymentError.message || "تعذر تحميل طرق الدفع.";
+                    submitError.hidden = false;
+                    submit.disabled = true;
+                }
+            });
         });
         toggleDeliveryFields(root);
 
@@ -440,6 +490,8 @@
             }
             subtotal.textContent = validated.products_subtotal_formatted;
             total.textContent = validated.grand_total_formatted;
+            await loadPaymentOptions();
+            refreshPaymentFields();
             if (validated.prescription_required) {
                 document.getElementById("pharma-checkout-rx-note").hidden = false;
             }
@@ -471,6 +523,9 @@
                 state: data.get("state"),
                 country: data.get("country"),
                 delivery_instructions: data.get("delivery_instructions"),
+                payment_option: data.get("payment_option"),
+                declared_paid_amount: data.get("declared_paid_amount"),
+                transaction_reference: data.get("transaction_reference"),
             };
 
             try {
