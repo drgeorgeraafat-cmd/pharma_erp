@@ -37,6 +37,9 @@ class ControlledOnlineOrderReviewPage {
                 "Ready for Payment",
                 "Payment Verification",
                 "Confirmed",
+                "Preparing",
+                "Ready for Pickup",
+                "Ready for Delivery",
                 "On Hold",
             ].join("\n"),
             change: () => this.load_orders(),
@@ -56,10 +59,10 @@ class ControlledOnlineOrderReviewPage {
                     <div>
                         <div class="coor-banner-title">مراجعة طلبات الموقع قبل التأكيد</div>
                         <div class="coor-banner-subtitle">
-                            إنشاء Sales Invoice Draft غير مخزنية بعد جاهزية التحويل، ثم فحص سلامة الربط والإجمالي ومنع التكرار قبل السماح بالـSubmit في المرحلة التالية.
+                            فحص جاهزية Submit ثم اعتماد Sales Invoice بشكل منضبط، مع إنشاء GL فقط ومنع أي حركة مخزون أو Payment Entry تلقائي.
                         </div>
                     </div>
-                    <span class="indicator-pill blue">Step 3B.7</span>
+                    <span class="indicator-pill blue">Step 3B.8</span>
                 </div>
                 <div class="coor-summary"></div>
                 <div class="coor-loading text-muted">جاري تحميل طلبات الموقع...</div>
@@ -145,6 +148,12 @@ class ControlledOnlineOrderReviewPage {
         this.$main.on("click", ".coor-post-conversion-integrity", async (event) => {
             await this.verify_post_conversion_integrity($(event.currentTarget).data("order"));
         });
+        this.$main.on("click", ".coor-submit-readiness", async (event) => {
+            await this.verify_sales_invoice_submit_readiness($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-submit-invoice", async (event) => {
+            await this.submit_controlled_sales_invoice($(event.currentTarget).data("order"));
+        });
         this.$main.on("click", ".coor-open-sales-invoice", (event) => {
             frappe.set_route("Form", "Sales Invoice", $(event.currentTarget).data("invoice"));
         });
@@ -185,7 +194,8 @@ class ControlledOnlineOrderReviewPage {
             ["قرار العميل", counts["Awaiting Customer Decision"] || 0],
             ["جاهز للدفع/التأكيد", (counts["Ready for Payment"] || 0) + (counts["Payment Verification"] || 0)],
             ["طلبات مؤكدة", counts["Confirmed"] || 0],
-            ["مسودات فواتير", this.orders.filter((row) => row.sales_invoice).length],
+            ["مسودات فواتير", this.orders.filter((row) => row.sales_invoice && row.custom_submit_execution_status !== "Submitted").length],
+            ["فواتير معتمدة", this.orders.filter((row) => row.custom_submit_execution_status === "Submitted").length],
         ];
         this.$main.find(".coor-summary").html(cards.map(([label, value]) => `
             <div class="coor-card">
@@ -229,7 +239,18 @@ class ControlledOnlineOrderReviewPage {
                 ? `<button class="btn btn-success btn-xs coor-create-invoice-draft" data-order="${this.escape(order.name)}">إنشاء مسودة الفاتورة</button>`
                 : "";
             const integrityButton = order.sales_invoice
+                && order.custom_submit_execution_status !== "Submitted"
                 ? `<button class="btn btn-warning btn-xs coor-post-conversion-integrity" data-order="${this.escape(order.name)}">فحص ما بعد التحويل</button>`
+                : "";
+            const submitReadinessButton = order.sales_invoice
+                && order.custom_post_conversion_integrity_status === "Ready"
+                && order.custom_submit_execution_status !== "Submitted"
+                ? `<button class="btn btn-primary btn-xs coor-submit-readiness" data-order="${this.escape(order.name)}">جاهزية اعتماد الفاتورة</button>`
+                : "";
+            const submitInvoiceButton = order.sales_invoice
+                && order.custom_submit_readiness_status === "Ready"
+                && order.custom_submit_execution_status !== "Submitted"
+                ? `<button class="btn btn-danger btn-xs coor-submit-invoice" data-order="${this.escape(order.name)}">اعتماد الفاتورة</button>`
                 : "";
             const openInvoiceButton = order.sales_invoice
                 ? `<button class="btn btn-default btn-xs coor-open-sales-invoice" data-invoice="${this.escape(order.sales_invoice)}">فتح الفاتورة</button>`
@@ -264,7 +285,7 @@ class ControlledOnlineOrderReviewPage {
                         ${order.sales_invoice
                             ? `<a href="#" class="coor-open-sales-invoice" data-invoice="${this.escape(order.sales_invoice)}">${this.escape(order.sales_invoice)}</a>`
                             : this.escape(order.custom_conversion_execution_status || "Pending")}
-                        <br><small>${this.escape(order.custom_post_conversion_integrity_status || "Pending")}</small>
+                        <br><small>${this.escape(order.custom_post_conversion_integrity_status || "Pending")} / ${this.escape(order.custom_submit_readiness_status || "Pending")} / ${this.escape(order.custom_submit_execution_status || "Pending")}</small>
                     </td>
                     <td class="coor-rx">${Number(order.prescription_required || 0) ? "نعم" : "لا"}</td>
                     <td>${this.escape(order.prescription_review_status || "-")}</td>
@@ -284,6 +305,8 @@ class ControlledOnlineOrderReviewPage {
                             ${conversionButton}
                             ${createDraftButton}
                             ${integrityButton}
+                            ${submitReadinessButton}
+                            ${submitInvoiceButton}
                             ${openInvoiceButton}
                         </div>
                     </td>
@@ -1031,6 +1054,110 @@ class ControlledOnlineOrderReviewPage {
         dialog.show();
     }
 
+    async verify_sales_invoice_submit_readiness(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_sales_invoice_submit_context",
+            { online_order: orderName }
+        );
+        const invoice = context.invoice || {};
+        const blockers = context.submit_blockers || [];
+        const summary = invoice.name
+            ? `<div class="coor-dialog-summary">
+                <div><b>الفاتورة:</b> ${this.escape(invoice.name)}</div>
+                <div><b>Docstatus:</b> ${this.escape(invoice.docstatus)}</div>
+                <div><b>Update Stock:</b> ${this.escape(invoice.update_stock)}</div>
+                <div><b>الإجمالي:</b> ${this.escape(this.money(invoice.grand_total, context.currency))}</div>
+                <div><b>الوردية النشطة:</b> ${this.escape(context.active_pharmacy_shift || "-")}</div>
+                <div><b>جاهزية Submit:</b> ${this.escape(context.submit_readiness_status || "Pending")}</div>
+            </div>`
+            : `<div class="alert alert-warning">لا توجد Sales Invoice مرتبطة.</div>`;
+        const dialog = new frappe.ui.Dialog({
+            title: `جاهزية اعتماد الفاتورة ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "submit_summary",
+                    fieldtype: "HTML",
+                    options: `${summary}${blockers.length
+                        ? `<div class="alert alert-warning"><b>عوائق الاعتماد:</b>${this.blocker_list(blockers, "")}</div>`
+                        : `<div class="alert alert-success">الفاتورة جاهزة للاعتماد. سيُنشأ GL عند Submit، مع Update Stock = 0 وبدون Payment Entry تلقائي.</div>`}`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Submit Readiness Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Verify Submit Readiness"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.verify_sales_invoice_submit_readiness",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                const ready = result.submit_readiness_status === "Ready";
+                frappe.show_alert({
+                    message: ready
+                        ? __("Sales Invoice submit readiness is Ready.")
+                        : __("Sales Invoice submit readiness is Blocked."),
+                    indicator: ready ? "green" : "orange",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+    async submit_controlled_sales_invoice(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_sales_invoice_submit_context",
+            { online_order: orderName }
+        );
+        const invoice = context.invoice || {};
+        const blockers = context.submit_blockers || [];
+        if (!Number(context.can_submit || 0) || blockers.length) {
+            frappe.msgprint({
+                title: __("Controlled Sales Invoice Submit Blocked"),
+                indicator: "orange",
+                message: this.blocker_list(blockers.length ? blockers : ["Verify submit readiness first."], ""),
+            });
+            return;
+        }
+        const dialog = new frappe.ui.Dialog({
+            title: `اعتماد الفاتورة ${invoice.name}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "submit_confirmation",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-warning"><b>إجراء مالي فعلي:</b> سيتم Submit للفاتورة <b>${this.escape(invoice.name)}</b> بقيمة <b>${this.escape(this.money(invoice.grand_total, context.currency))}</b>. سيتم إنشاء GL Entries، وسيظل <b>Update Stock = 0</b>، ولن يُنشأ Payment Entry تلقائي.</div>`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Controlled Submit Notes"),
+                    fieldtype: "Small Text",
+                    reqd: 1,
+                },
+            ],
+            primary_action_label: __("Submit Controlled Invoice"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.submit_controlled_sales_invoice",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                frappe.show_alert({
+                    message: result.submitted
+                        ? __("Sales Invoice {0} submitted and Online Order synchronized.", [result.sales_invoice])
+                        : __("Sales Invoice {0} was already submitted.", [result.sales_invoice]),
+                    indicator: "green",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
     blocker_list(items, emptyLabel) {
         if (!items || !items.length) {
             return `<div class="text-success">${this.escape(emptyLabel)}</div>`;
@@ -1049,6 +1176,9 @@ class ControlledOnlineOrderReviewPage {
             "Ready for Payment": "green",
             "Payment Verification": "orange",
             "Confirmed": "green",
+            "Preparing": "blue",
+            "Ready for Pickup": "green",
+            "Ready for Delivery": "green",
             "On Hold": "red",
         }[status] || "gray";
         return `<span class="indicator-pill ${colour}">${this.escape(status || "-")}</span>`;

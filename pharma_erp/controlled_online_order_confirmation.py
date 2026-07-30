@@ -9,6 +9,10 @@ from frappe import _
 from frappe.utils import cint, flt, now_datetime, strip_html
 
 from pharma_erp.controlled_online_order_review import _snapshot as _review_snapshot
+from pharma_erp.online_order_sales_invoice_events import (
+    validate_linked_online_order_invoice,
+)
+from pharma_erp.pharma_erp import payment_card_management as shift_finance
 
 PAYMENT_TOLERANCE = 0.01
 POST_CONVERSION_TOLERANCE = 0.01
@@ -292,6 +296,14 @@ def _state_snapshot(order) -> dict[str, Any]:
             order, "custom_post_conversion_integrity_status", "Pending"
         )
         or "Pending",
+        "submit_readiness_status": getattr(
+            order, "custom_submit_readiness_status", "Pending"
+        )
+        or "Pending",
+        "submit_execution_status": getattr(
+            order, "custom_submit_execution_status", "Pending"
+        )
+        or "Pending",
         "confirmed_at": order.confirmed_at,
         "sales_order": order.sales_order or "",
         "sales_invoice": order.sales_invoice or "",
@@ -438,6 +450,14 @@ def apply_payment_selection(
     _set_if_has(order, "custom_post_conversion_integrity_notes", "")
     _set_if_has(order, "custom_post_conversion_checked_by", None)
     _set_if_has(order, "custom_post_conversion_checked_at", None)
+    _set_if_has(order, "custom_submit_readiness_status", "Pending")
+    _set_if_has(order, "custom_submit_readiness_notes", "")
+    _set_if_has(order, "custom_submit_readiness_checked_by", None)
+    _set_if_has(order, "custom_submit_readiness_checked_at", None)
+    _set_if_has(order, "custom_submit_execution_status", "Pending")
+    _set_if_has(order, "custom_submit_execution_notes", "")
+    _set_if_has(order, "custom_submitted_by", None)
+    _set_if_has(order, "custom_submitted_at", None)
     order.save(ignore_permissions=True)
 
     _audit_comment(
@@ -854,6 +874,14 @@ def create_controlled_sales_invoice_draft(
     _set_if_has(order, "custom_post_conversion_integrity_notes", "")
     _set_if_has(order, "custom_post_conversion_checked_by", None)
     _set_if_has(order, "custom_post_conversion_checked_at", None)
+    _set_if_has(order, "custom_submit_readiness_status", "Pending")
+    _set_if_has(order, "custom_submit_readiness_notes", "")
+    _set_if_has(order, "custom_submit_readiness_checked_by", None)
+    _set_if_has(order, "custom_submit_readiness_checked_at", None)
+    _set_if_has(order, "custom_submit_execution_status", "Pending")
+    _set_if_has(order, "custom_submit_execution_notes", "")
+    _set_if_has(order, "custom_submitted_by", None)
+    _set_if_has(order, "custom_submitted_at", None)
     order.save(ignore_permissions=True)
 
     _audit_comment(
@@ -906,6 +934,14 @@ def verify_post_conversion_integrity(
     )
     _set_if_has(order, "custom_post_conversion_checked_by", frappe.session.user)
     _set_if_has(order, "custom_post_conversion_checked_at", now_datetime())
+    _set_if_has(order, "custom_submit_readiness_status", "Pending")
+    _set_if_has(order, "custom_submit_readiness_notes", "")
+    _set_if_has(order, "custom_submit_readiness_checked_by", None)
+    _set_if_has(order, "custom_submit_readiness_checked_at", None)
+    _set_if_has(order, "custom_submit_execution_status", "Pending")
+    _set_if_has(order, "custom_submit_execution_notes", "")
+    _set_if_has(order, "custom_submitted_by", None)
+    _set_if_has(order, "custom_submitted_at", None)
     order.save(ignore_permissions=True)
 
     _audit_comment(
@@ -928,3 +964,259 @@ def verify_post_conversion_integrity(
         },
     )
     return _sales_invoice_draft_context(order)
+
+
+def _submit_invoice_state(invoice) -> dict[str, Any]:
+    if not invoice:
+        return {}
+    return {
+        "name": invoice.name,
+        "docstatus": cint(invoice.docstatus),
+        "update_stock": cint(invoice.update_stock),
+        "is_pos": cint(invoice.is_pos),
+        "customer": invoice.customer or "",
+        "company": invoice.company or "",
+        "currency": invoice.currency or "",
+        "grand_total": flt(invoice.grand_total),
+        "outstanding_amount": flt(invoice.outstanding_amount),
+        "custom_online_order": invoice.get("custom_online_order") or "",
+        "custom_delivery_shift": invoice.get("custom_delivery_shift") or "",
+        "custom_pharmacy_shift": invoice.get("custom_pharmacy_shift") or "",
+        "gl_entry_count": frappe.db.count(
+            "GL Entry",
+            {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+        ),
+        "stock_ledger_entry_count": frappe.db.count(
+            "Stock Ledger Entry",
+            {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+        ),
+    }
+
+
+def _sales_invoice_submit_blockers(order, invoice=None) -> list[str]:
+    blockers: list[str] = []
+    invoice = invoice or _active_sales_invoice(order)
+    if not invoice:
+        return [_('An active linked Sales Invoice is required before submit.')]
+    if order.sales_invoice != invoice.name:
+        blockers.append(_('The Online Order active Sales Invoice link is inconsistent.'))
+    if cint(invoice.docstatus) == 1:
+        return blockers
+    if cint(invoice.docstatus) != 0:
+        blockers.append(_('The linked Sales Invoice must be Draft before controlled submit.'))
+        return list(dict.fromkeys(blockers))
+    if getattr(order, "custom_post_conversion_integrity_status", "Pending") != "Ready":
+        blockers.append(_('Post-Conversion Integrity must be Ready before submit.'))
+    if getattr(order, "custom_conversion_execution_status", "Pending") != "Draft Created":
+        blockers.append(_('Controlled Conversion Execution must be Draft Created.'))
+    try:
+        validate_linked_online_order_invoice(invoice, method="submit_readiness")
+    except frappe.ValidationError as exc:
+        blockers.append(_clean_text(exc, 1000))
+
+    if order.fulfilment_method == "Home Delivery":
+        active_shift = shift_finance._current_open_shift(invoice.company)
+        if not active_shift:
+            blockers.append(
+                _('An open Pharmacy Shift is required before Home Delivery invoice submit.')
+            )
+        else:
+            active_shift_name = str(active_shift.name or "")
+            current_shift = str(
+                invoice.get("custom_delivery_shift")
+                or invoice.get("custom_pharmacy_shift")
+                or ""
+            ).strip()
+            if current_shift and current_shift != active_shift_name:
+                blockers.append(
+                    _(
+                        'Sales Invoice is linked to delivery shift {0}, but the active shift is {1}.'
+                    ).format(current_shift, active_shift_name)
+                )
+    return list(dict.fromkeys(blockers))
+
+
+def _sales_invoice_submit_context(order) -> dict[str, Any]:
+    invoice = _active_sales_invoice(order)
+    blockers = _sales_invoice_submit_blockers(order, invoice)
+    invoice_state = _submit_invoice_state(invoice)
+    submitted = bool(invoice and cint(invoice.docstatus) == 1)
+    active_shift = ""
+    if invoice and order.fulfilment_method == "Home Delivery":
+        shift = shift_finance._current_open_shift(invoice.company)
+        active_shift = str(shift.name or "") if shift else ""
+    readiness = getattr(order, "custom_submit_readiness_status", "Pending") or "Pending"
+    execution = getattr(order, "custom_submit_execution_status", "Pending") or "Pending"
+    return {
+        **_state_snapshot(order),
+        "invoice": invoice_state,
+        "submit_blockers": blockers,
+        "submit_readiness_status": readiness,
+        "submit_execution_status": execution,
+        "active_pharmacy_shift": active_shift,
+        "can_verify_submit_readiness": cint(bool(invoice) and not submitted),
+        "can_submit": cint(
+            bool(invoice)
+            and not submitted
+            and not blockers
+            and readiness == "Ready"
+        ),
+        "already_submitted": cint(submitted),
+        "controlled_sales_invoice_submit": 1,
+        "submits_sales_invoice": 1,
+        "creates_payment_entry": 0,
+        "creates_gl_entries": 1,
+        "creates_stock_entries": 0,
+    }
+
+
+@frappe.whitelist()
+def get_sales_invoice_submit_context(
+    online_order: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "read")
+    return _sales_invoice_submit_context(order)
+
+
+@frappe.whitelist(methods=["POST"])
+def verify_sales_invoice_submit_readiness(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+    invoice = _active_sales_invoice(order)
+    blockers = _sales_invoice_submit_blockers(order, invoice)
+    readiness = "Ready" if invoice and cint(invoice.docstatus) == 0 and not blockers else "Blocked"
+
+    _set_if_has(order, "custom_submit_readiness_status", readiness)
+    _set_if_has(order, "custom_submit_readiness_notes", _clean_text(notes, 1000))
+    _set_if_has(order, "custom_submit_readiness_checked_by", frappe.session.user)
+    _set_if_has(order, "custom_submit_readiness_checked_at", now_datetime())
+    _set_if_has(order, "custom_submit_execution_status", "Pending")
+    _set_if_has(order, "custom_submit_execution_notes", "")
+    _set_if_has(order, "custom_submitted_by", None)
+    _set_if_has(order, "custom_submitted_at", None)
+    order.save(ignore_permissions=True)
+
+    _audit_comment(
+        order,
+        _("Controlled Sales Invoice Submit Readiness"),
+        {
+            "readiness_status": readiness,
+            "blockers": blockers,
+            "sales_invoice": invoice.name if invoice else "",
+            "docstatus": cint(invoice.docstatus) if invoice else None,
+            "update_stock": cint(invoice.update_stock) if invoice else None,
+            "active_pharmacy_shift": (
+                _sales_invoice_submit_context(order).get("active_pharmacy_shift") or ""
+            ),
+            "checked_by": frappe.session.user,
+            "checked_at": now_datetime(),
+            "notes": _clean_text(notes, 1000),
+            "submits_sales_invoice": 0,
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 0,
+            "creates_stock_entries": 0,
+        },
+    )
+    return _sales_invoice_submit_context(order)
+
+
+@frappe.whitelist(methods=["POST"])
+def submit_controlled_sales_invoice(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+    invoice = _active_sales_invoice(order)
+    if invoice and cint(invoice.docstatus) == 1:
+        result = _sales_invoice_submit_context(order)
+        result["submitted"] = 0
+        result["idempotent_replay"] = 1
+        return result
+    if not invoice:
+        frappe.throw(_('An active linked Sales Invoice Draft is required.'))
+    if getattr(order, "custom_submit_readiness_status", "Pending") != "Ready":
+        frappe.throw(_('Verify Controlled Sales Invoice Submit Readiness first.'))
+
+    blockers = _sales_invoice_submit_blockers(order, invoice)
+    if blockers:
+        _set_if_has(order, "custom_submit_execution_status", "Blocked")
+        _set_if_has(order, "custom_submit_execution_notes", _clean_text(notes, 1000))
+        order.save(ignore_permissions=True)
+        frappe.throw(
+            _('Controlled Sales Invoice submit is blocked: {0}').format(
+                " | ".join(blockers)
+            )
+        )
+
+    payment_entry_count_before = frappe.db.count("Payment Entry")
+    _set_if_has(order, "custom_submit_execution_notes", _clean_text(notes, 1000))
+    order.save(ignore_permissions=True)
+
+    invoice.flags.controlled_online_order_submit = True
+    invoice.submit()
+    invoice.reload()
+    order.reload()
+
+    invoice_gl_entries = frappe.db.count(
+        "GL Entry",
+        {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+    )
+    invoice_stock_entries = frappe.db.count(
+        "Stock Ledger Entry",
+        {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+    )
+    payment_entry_count_after = frappe.db.count("Payment Entry")
+
+    if cint(invoice.docstatus) != 1:
+        frappe.throw(_('Controlled Sales Invoice submit did not complete.'))
+    if cint(invoice.update_stock):
+        frappe.throw(_('Submitted Online Order Sales Invoice changed Update Stock.'))
+    if invoice_stock_entries:
+        frappe.throw(_('Controlled Sales Invoice submit created unexpected Stock Ledger Entries.'))
+    if flt(invoice.grand_total) > POST_CONVERSION_TOLERANCE and not invoice_gl_entries:
+        frappe.throw(_('Submitted Sales Invoice did not create the expected GL Entries.'))
+    if payment_entry_count_before != payment_entry_count_after:
+        frappe.throw(_('Controlled Sales Invoice submit created an unexpected Payment Entry.'))
+
+    _set_if_has(order, "custom_submit_execution_status", "Submitted")
+    _set_if_has(order, "custom_submit_execution_notes", _clean_text(notes, 1000))
+    _set_if_has(order, "custom_submitted_by", frappe.session.user)
+    _set_if_has(order, "custom_submitted_at", now_datetime())
+    order.save(ignore_permissions=True)
+
+    _audit_comment(
+        order,
+        _("Controlled Sales Invoice Submit"),
+        {
+            "sales_invoice": invoice.name,
+            "docstatus": cint(invoice.docstatus),
+            "update_stock": cint(invoice.update_stock),
+            "online_order_status": order.status,
+            "invoice_gl_entries": invoice_gl_entries,
+            "invoice_stock_entries": invoice_stock_entries,
+            "payment_entries_created": payment_entry_count_after - payment_entry_count_before,
+            "submitted_by": frappe.session.user,
+            "submitted_at": now_datetime(),
+            "notes": _clean_text(notes, 1000),
+            "submits_sales_invoice": 1,
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 1,
+            "creates_stock_entries": 0,
+        },
+    )
+    result = _sales_invoice_submit_context(order)
+    result["submitted"] = 1
+    result["idempotent_replay"] = 0
+    return result

@@ -21,6 +21,9 @@ REVIEW_QUEUE_STATUSES = (
     "Ready for Payment",
     "Payment Verification",
     "Confirmed",
+    "Preparing",
+    "Ready for Pickup",
+    "Ready for Delivery",
     "On Hold",
 )
 
@@ -389,6 +392,12 @@ def _snapshot(order) -> dict[str, Any]:
         "post_conversion_integrity_status": getattr(
             order, "custom_post_conversion_integrity_status", "Pending"
         ) or "Pending",
+        "submit_readiness_status": getattr(
+            order, "custom_submit_readiness_status", "Pending"
+        ) or "Pending",
+        "submit_execution_status": getattr(
+            order, "custom_submit_execution_status", "Pending"
+        ) or "Pending",
         "confirmed_at": order.confirmed_at,
         "sales_order": order.sales_order or "",
         "sales_invoice": order.sales_invoice or "",
@@ -477,6 +486,9 @@ def get_review_queue(
             "custom_conversion_readiness_status",
             "custom_conversion_execution_status",
             "custom_post_conversion_integrity_status",
+            "custom_submit_readiness_status",
+            "custom_submit_execution_status",
+            "custom_submitted_at",
             "confirmed_at",
             "sales_order",
             "sales_invoice",
@@ -494,7 +506,13 @@ def get_review_queue(
         "total": len(rows),
         "statuses": list(REVIEW_QUEUE_STATUSES),
         "controlled_review": 1,
-        "financial_stock_documents_created": 0,
+        "controlled_submit_sync": 1,
+        "financial_stock_documents_created": cint(
+            any(
+                str(row.get("custom_submit_execution_status") or "") == "Submitted"
+                for row in rows
+            )
+        ),
     }
 
 

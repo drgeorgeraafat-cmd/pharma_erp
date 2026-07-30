@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, now_datetime
 
 from pharma_erp.pharma_erp import payment_card_management as shift_finance
 
@@ -163,6 +163,31 @@ def validate_linked_online_order_invoice(doc, method=None):
     )
     _assert_close(_("Invoice Discount Amount"), doc.discount_amount, order.discount_amount)
 
+    if (
+        method == "validate"
+        and cint(doc.docstatus) == 0
+        and not doc.flags.get("controlled_online_order_submit")
+    ):
+        changed = False
+        for fieldname, value in (
+            ("custom_post_conversion_integrity_status", "Pending"),
+            ("custom_post_conversion_integrity_notes", ""),
+            ("custom_post_conversion_checked_by", None),
+            ("custom_post_conversion_checked_at", None),
+            ("custom_submit_readiness_status", "Pending"),
+            ("custom_submit_readiness_notes", ""),
+            ("custom_submit_readiness_checked_by", None),
+            ("custom_submit_readiness_checked_at", None),
+            ("custom_submit_execution_status", "Pending"),
+            ("custom_submit_execution_notes", ""),
+            ("custom_submitted_by", None),
+            ("custom_submitted_at", None),
+        ):
+            if order.meta.has_field(fieldname) and order.get(fieldname) != value:
+                order.set(fieldname, value)
+                changed = True
+        if changed:
+            order.save(ignore_permissions=True)
 
 
 def _bind_home_delivery_invoice_to_active_shift(doc, order):
@@ -239,6 +264,13 @@ def before_submit_linked_online_order_invoice(doc, method=None):
                 "the linked Sales Invoice."
             )
         )
+    if (
+        order.meta.has_field("custom_submit_readiness_status")
+        and order.custom_submit_readiness_status != "Ready"
+    ):
+        frappe.throw(
+            _("Verify Controlled Sales Invoice Submit Readiness before submit.")
+        )
 
     _bind_home_delivery_invoice_to_active_shift(doc, order)
 
@@ -275,6 +307,15 @@ def on_submit_linked_online_order_invoice(doc, method=None):
     else:
         target = "Ready for Pickup"
         _save_order_status(order, target, "")
+
+    for fieldname, value in (
+        ("custom_submit_execution_status", "Submitted"),
+        ("custom_submitted_by", frappe.session.user),
+        ("custom_submitted_at", now_datetime()),
+    ):
+        if order.meta.has_field(fieldname):
+            order.set(fieldname, value)
+    order.save(ignore_permissions=True)
 
     order.add_comment(
         "Info",
@@ -348,6 +389,14 @@ def on_cancel_linked_online_order_invoice(doc, method=None):
         ("custom_post_conversion_integrity_notes", ""),
         ("custom_post_conversion_checked_by", None),
         ("custom_post_conversion_checked_at", None),
+        ("custom_submit_readiness_status", "Pending"),
+        ("custom_submit_readiness_notes", ""),
+        ("custom_submit_readiness_checked_by", None),
+        ("custom_submit_readiness_checked_at", None),
+        ("custom_submit_execution_status", "Pending"),
+        ("custom_submit_execution_notes", ""),
+        ("custom_submitted_by", None),
+        ("custom_submitted_at", None),
     ):
         if order.meta.has_field(fieldname):
             order.set(fieldname, value)
