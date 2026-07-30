@@ -40,6 +40,10 @@ class ControlledOnlineOrderReviewPage {
                 "Preparing",
                 "Ready for Pickup",
                 "Ready for Delivery",
+                "Out for Delivery",
+                "Delivered",
+                "Returned",
+                "Completed",
                 "On Hold",
             ].join("\n"),
             change: () => this.load_orders(),
@@ -59,10 +63,10 @@ class ControlledOnlineOrderReviewPage {
                     <div>
                         <div class="coor-banner-title">مراجعة طلبات الموقع قبل التأكيد</div>
                         <div class="coor-banner-subtitle">
-                            فحص جاهزية Submit ثم اعتماد Sales Invoice بشكل منضبط، مع إنشاء GL فقط ومنع أي حركة مخزون أو Payment Entry تلقائي.
+                            مزامنة تنفيذ التوصيل والتحصيل من Delivery Management، وفحص جاهزية الإكمال ثم إغلاق الطلب بشكل منضبط دون إنشاء مستند مالي أو حركة مخزون جديدة.
                         </div>
                     </div>
-                    <span class="indicator-pill blue">Step 3B.8</span>
+                    <span class="indicator-pill blue">Step 3B.9</span>
                 </div>
                 <div class="coor-summary"></div>
                 <div class="coor-loading text-muted">جاري تحميل طلبات الموقع...</div>
@@ -154,6 +158,18 @@ class ControlledOnlineOrderReviewPage {
         this.$main.on("click", ".coor-submit-invoice", async (event) => {
             await this.submit_controlled_sales_invoice($(event.currentTarget).data("order"));
         });
+        this.$main.on("click", ".coor-delivery-sync", async (event) => {
+            await this.sync_controlled_delivery_execution($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-delivery-completion-readiness", async (event) => {
+            await this.verify_delivery_completion_readiness($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-complete-delivery", async (event) => {
+            await this.complete_controlled_home_delivery($(event.currentTarget).data("order"));
+        });
+        this.$main.on("click", ".coor-open-delivery-management", () => {
+            frappe.set_route("delivery-management");
+        });
         this.$main.on("click", ".coor-open-sales-invoice", (event) => {
             frappe.set_route("Form", "Sales Invoice", $(event.currentTarget).data("invoice"));
         });
@@ -196,6 +212,10 @@ class ControlledOnlineOrderReviewPage {
             ["طلبات مؤكدة", counts["Confirmed"] || 0],
             ["مسودات فواتير", this.orders.filter((row) => row.sales_invoice && row.custom_submit_execution_status !== "Submitted").length],
             ["فواتير معتمدة", this.orders.filter((row) => row.custom_submit_execution_status === "Submitted").length],
+            ["جاهز للتوصيل", counts["Ready for Delivery"] || 0],
+            ["خرج للتوصيل", counts["Out for Delivery"] || 0],
+            ["تم التسليم", counts["Delivered"] || 0],
+            ["مكتمل", counts["Completed"] || 0],
         ];
         this.$main.find(".coor-summary").html(cards.map(([label, value]) => `
             <div class="coor-card">
@@ -255,6 +275,25 @@ class ControlledOnlineOrderReviewPage {
             const openInvoiceButton = order.sales_invoice
                 ? `<button class="btn btn-default btn-xs coor-open-sales-invoice" data-invoice="${this.escape(order.sales_invoice)}">فتح الفاتورة</button>`
                 : "";
+            const deliveryOperational = order.fulfilment_method === "Home Delivery"
+                && order.custom_submit_execution_status === "Submitted";
+            const deliveryManagementButton = deliveryOperational
+                && order.status !== "Completed"
+                ? `<button class="btn btn-default btn-xs coor-open-delivery-management">إدارة التوصيل</button>`
+                : "";
+            const deliverySyncButton = deliveryOperational
+                && order.status !== "Completed"
+                ? `<button class="btn btn-primary btn-xs coor-delivery-sync" data-order="${this.escape(order.name)}">مزامنة التوصيل والتحصيل</button>`
+                : "";
+            const deliveryCompletionReadinessButton = deliveryOperational
+                && order.status === "Delivered"
+                ? `<button class="btn btn-warning btn-xs coor-delivery-completion-readiness" data-order="${this.escape(order.name)}">جاهزية إكمال التوصيل</button>`
+                : "";
+            const completeDeliveryButton = deliveryOperational
+                && order.status === "Delivered"
+                && order.custom_delivery_completion_readiness_status === "Ready"
+                ? `<button class="btn btn-success btn-xs coor-complete-delivery" data-order="${this.escape(order.name)}">إكمال الطلب</button>`
+                : "";
             const reviewLocked = ["Confirmed", "Preparing"].includes(order.status);
             const stockButton = reviewLocked
                 ? ""
@@ -287,6 +326,11 @@ class ControlledOnlineOrderReviewPage {
                             : this.escape(order.custom_conversion_execution_status || "Pending")}
                         <br><small>${this.escape(order.custom_post_conversion_integrity_status || "Pending")} / ${this.escape(order.custom_submit_readiness_status || "Pending")} / ${this.escape(order.custom_submit_execution_status || "Pending")}</small>
                     </td>
+                    <td>
+                        ${this.escape(order.delivery_status_snapshot || order.status || "-")}
+                        <br><small>${this.escape(order.payment_status || "-")} / ${this.escape(order.custom_delivery_sync_status || "Pending")} / ${this.escape(order.custom_delivery_completion_readiness_status || "Pending")}</small>
+                        ${order.delivery_boy ? `<br><small>${this.escape(order.delivery_boy)} ${order.delivery_trip ? `/ ${this.escape(order.delivery_trip)}` : ""}</small>` : ""}
+                    </td>
                     <td class="coor-rx">${Number(order.prescription_required || 0) ? "نعم" : "لا"}</td>
                     <td>${this.escape(order.prescription_review_status || "-")}</td>
                     <td>${this.escape(frappe.datetime.str_to_user(order.creation))}</td>
@@ -307,6 +351,10 @@ class ControlledOnlineOrderReviewPage {
                             ${integrityButton}
                             ${submitReadinessButton}
                             ${submitInvoiceButton}
+                            ${deliveryManagementButton}
+                            ${deliverySyncButton}
+                            ${deliveryCompletionReadinessButton}
+                            ${completeDeliveryButton}
                             ${openInvoiceButton}
                         </div>
                     </td>
@@ -320,7 +368,7 @@ class ControlledOnlineOrderReviewPage {
                     <thead><tr>
                         <th>الطلب</th><th>الحالة</th><th>العميل</th><th>الموبايل</th>
                         <th>الاستلام</th><th>الإجمالي</th><th>الدفع</th><th>جاهزية التأكيد</th>
-                        <th>التحويل</th><th>وصفة</th><th>قرار الوصفة</th><th>وقت الطلب</th><th>الإجراءات</th>
+                        <th>التحويل</th><th>التوصيل/التحصيل</th><th>وصفة</th><th>قرار الوصفة</th><th>وقت الطلب</th><th>الإجراءات</th>
                     </tr></thead>
                     <tbody>${rows}</tbody>
                 </table>
@@ -1158,6 +1206,163 @@ class ControlledOnlineOrderReviewPage {
         dialog.show();
     }
 
+    async sync_controlled_delivery_execution(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_delivery_execution_context",
+            { online_order: orderName }
+        );
+        const invoice = context.invoice || {};
+        const collection = context.collection || {};
+        const blockers = context.delivery_sync_blockers || [];
+        const dialog = new frappe.ui.Dialog({
+            title: `مزامنة التوصيل والتحصيل ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "delivery_sync_summary",
+                    fieldtype: "HTML",
+                    options: `<div class="coor-dialog-summary">
+                        <div><b>الطلب:</b> ${this.escape(context.status || "-")}</div>
+                        <div><b>الفاتورة:</b> ${this.escape(invoice.name || "-")}</div>
+                        <div><b>حالة التوصيل:</b> ${this.escape(invoice.custom_delivery_status || "-")}</div>
+                        <div><b>حالة التحصيل:</b> ${this.escape(collection.collection_status || context.payment_status || "-")}</div>
+                        <div><b>المتبقي:</b> ${this.escape(this.money(collection.outstanding, context.currency))}</div>
+                        <div><b>Payment Entry:</b> ${this.escape(collection.payment_entry || "-")}</div>
+                        <div><b>الطيار:</b> ${this.escape(invoice.custom_delivery_boy || "-")}</div>
+                        <div><b>Delivery Trip:</b> ${this.escape(invoice.custom_delivery_trip || "-")}</div>
+                    </div>${blockers.length
+                        ? `<div class="alert alert-warning"><b>عوائق المزامنة:</b>${this.blocker_list(blockers, "")}</div>`
+                        : `<div class="alert alert-success">سيتم تحديث Online Order من حالة Sales Invoice وDelivery Management فقط، بدون إنشاء Payment Entry أوGL أوStock Ledger.</div>`}`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Delivery Synchronization Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Sync Delivery & Collection"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.sync_controlled_delivery_execution",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                frappe.show_alert({
+                    message: result.idempotent_replay
+                        ? __("Delivery and collection were already synchronized.")
+                        : __("Delivery and collection synchronized successfully."),
+                    indicator: "green",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+    async verify_delivery_completion_readiness(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_delivery_execution_context",
+            { online_order: orderName }
+        );
+        const invoice = context.invoice || {};
+        const collection = context.collection || {};
+        const blockers = context.delivery_completion_blockers || [];
+        const dialog = new frappe.ui.Dialog({
+            title: `جاهزية إكمال التوصيل ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "completion_summary",
+                    fieldtype: "HTML",
+                    options: `<div class="coor-dialog-summary">
+                        <div><b>حالة الطلب:</b> ${this.escape(context.status || "-")}</div>
+                        <div><b>حالة الفاتورة:</b> ${this.escape(invoice.custom_delivery_status || "-")}</div>
+                        <div><b>حالة الدفع:</b> ${this.escape(context.payment_status || "-")}</div>
+                        <div><b>حالة التحصيل:</b> ${this.escape(collection.collection_status || "-")}</div>
+                        <div><b>المتبقي:</b> ${this.escape(this.money(collection.outstanding, context.currency))}</div>
+                        <div><b>جاهزية التحصيل:</b> ${Number(collection.collection_ready || 0) ? "Ready" : "Not Ready"}</div>
+                    </div>${blockers.length
+                        ? `<div class="alert alert-warning"><b>عوائق الإكمال:</b>${this.blocker_list(blockers, "")}</div>`
+                        : `<div class="alert alert-success">التسليم والتحصيل مكتملان، ويمكن إغلاق Online Order دون إنشاء مستند مالي أو حركة مخزون جديدة.</div>`}`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Delivery Completion Readiness Notes"),
+                    fieldtype: "Small Text",
+                },
+            ],
+            primary_action_label: __("Verify Delivery Completion Readiness"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.verify_delivery_completion_readiness",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                const ready = result.delivery_completion_readiness_status === "Ready";
+                frappe.show_alert({
+                    message: ready
+                        ? __("Delivery completion readiness is Ready.")
+                        : __("Delivery completion readiness is Blocked."),
+                    indicator: ready ? "green" : "orange",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
+    async complete_controlled_home_delivery(orderName) {
+        const context = await this.call(
+            "pharma_erp.controlled_online_order_confirmation.get_delivery_execution_context",
+            { online_order: orderName }
+        );
+        const blockers = context.delivery_completion_blockers || [];
+        if (!Number(context.can_complete_delivery || 0) || blockers.length) {
+            frappe.msgprint({
+                title: __("Controlled Delivery Completion Blocked"),
+                indicator: "orange",
+                message: this.blocker_list(
+                    blockers.length ? blockers : ["Verify delivery completion readiness first."],
+                    ""
+                ),
+            });
+            return;
+        }
+        const dialog = new frappe.ui.Dialog({
+            title: `إكمال طلب التوصيل ${context.online_order}`,
+            size: "large",
+            fields: [
+                {
+                    fieldname: "completion_confirmation",
+                    fieldtype: "HTML",
+                    options: `<div class="alert alert-warning"><b>إجراء تشغيلي نهائي:</b> سيتم تحويل Online Order إلى <b>Completed</b>. لن يتم إنشاء Payment Entry أوGL Entry أوStock Ledger Entry جديد في هذه الخطوة.</div>`,
+                },
+                {
+                    fieldname: "notes",
+                    label: __("Controlled Delivery Completion Notes"),
+                    fieldtype: "Small Text",
+                    reqd: 1,
+                },
+            ],
+            primary_action_label: __("Complete Controlled Home Delivery"),
+            primary_action: async (values) => {
+                const result = await this.call(
+                    "pharma_erp.controlled_online_order_confirmation.complete_controlled_home_delivery",
+                    { online_order: context.online_order, notes: values.notes || "" }
+                );
+                dialog.hide();
+                frappe.show_alert({
+                    message: result.idempotent_replay
+                        ? __("Online Order was already completed.")
+                        : __("Online Order completed successfully."),
+                    indicator: "green",
+                });
+                await this.load_orders();
+            },
+        });
+        dialog.show();
+    }
+
     blocker_list(items, emptyLabel) {
         if (!items || !items.length) {
             return `<div class="text-success">${this.escape(emptyLabel)}</div>`;
@@ -1179,6 +1384,10 @@ class ControlledOnlineOrderReviewPage {
             "Preparing": "blue",
             "Ready for Pickup": "green",
             "Ready for Delivery": "green",
+            "Out for Delivery": "blue",
+            "Delivered": "green",
+            "Returned": "orange",
+            "Completed": "green",
             "On Hold": "red",
         }[status] || "gray";
         return `<span class="indicator-pill ${colour}">${this.escape(status || "-")}</span>`;

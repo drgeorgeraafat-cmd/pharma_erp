@@ -24,6 +24,10 @@ REVIEW_QUEUE_STATUSES = (
     "Preparing",
     "Ready for Pickup",
     "Ready for Delivery",
+    "Out for Delivery",
+    "Delivered",
+    "Returned",
+    "Completed",
     "On Hold",
 )
 
@@ -398,6 +402,20 @@ def _snapshot(order) -> dict[str, Any]:
         "submit_execution_status": getattr(
             order, "custom_submit_execution_status", "Pending"
         ) or "Pending",
+        "delivery_sync_status": getattr(
+            order, "custom_delivery_sync_status", "Pending"
+        ) or "Pending",
+        "delivery_completion_readiness_status": getattr(
+            order, "custom_delivery_completion_readiness_status", "Pending"
+        ) or "Pending",
+        "delivery_status_snapshot": getattr(order, "delivery_status_snapshot", "") or "",
+        "delivery_boy": getattr(order, "delivery_boy", "") or "",
+        "delivery_trip": getattr(order, "delivery_trip", "") or "",
+        "delivery_attempt": getattr(order, "delivery_attempt", "") or "",
+        "delivery_departure_at": getattr(order, "delivery_departure_at", None),
+        "delivery_delivered_at": getattr(order, "delivery_delivered_at", None),
+        "delivery_completed_by": getattr(order, "delivery_completed_by", "") or "",
+        "delivery_completed_at": getattr(order, "delivery_completed_at", None),
         "confirmed_at": order.confirmed_at,
         "sales_order": order.sales_order or "",
         "sales_invoice": order.sales_invoice or "",
@@ -489,6 +507,18 @@ def get_review_queue(
             "custom_submit_readiness_status",
             "custom_submit_execution_status",
             "custom_submitted_at",
+            "custom_delivery_sync_status",
+            "custom_delivery_synced_at",
+            "custom_delivery_completion_readiness_status",
+            "custom_delivery_completion_checked_at",
+            "delivery_status_snapshot",
+            "delivery_boy",
+            "delivery_trip",
+            "delivery_attempt",
+            "delivery_departure_at",
+            "delivery_delivered_at",
+            "delivery_completed_by",
+            "delivery_completed_at",
             "confirmed_at",
             "sales_order",
             "sales_invoice",
@@ -507,6 +537,7 @@ def get_review_queue(
         "statuses": list(REVIEW_QUEUE_STATUSES),
         "controlled_review": 1,
         "controlled_submit_sync": 1,
+        "controlled_delivery_completion": 1,
         "financial_stock_documents_created": cint(
             any(
                 str(row.get("custom_submit_execution_status") or "") == "Submitted"

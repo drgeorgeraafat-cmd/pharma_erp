@@ -16,6 +16,21 @@ from pharma_erp.pharma_erp.doctype.online_order.online_order import (
 MONEY_TOLERANCE = 0.01
 QTY_TOLERANCE = 0.000001
 LATE_EXECUTION_STATUSES = {"Out for Delivery", "Delivered", "Returned", "Completed"}
+def _reset_delivery_completion_control(order, sync_status="Pending"):
+    for fieldname, value in (
+        ("custom_delivery_sync_status", sync_status),
+        ("custom_delivery_sync_notes", ""),
+        ("custom_delivery_synced_by", None),
+        ("custom_delivery_synced_at", None),
+        ("custom_delivery_completion_readiness_status", "Pending"),
+        ("custom_delivery_completion_readiness_notes", ""),
+        ("custom_delivery_completion_checked_by", None),
+        ("custom_delivery_completion_checked_at", None),
+    ):
+        if order.meta.has_field(fieldname):
+            order.set(fieldname, value)
+
+
 def _online_order_name(doc) -> str:
     return str(doc.get("custom_online_order") or "").strip()
 
@@ -312,6 +327,14 @@ def on_submit_linked_online_order_invoice(doc, method=None):
         ("custom_submit_execution_status", "Submitted"),
         ("custom_submitted_by", frappe.session.user),
         ("custom_submitted_at", now_datetime()),
+        ("custom_delivery_sync_status", "Synchronized"),
+        ("custom_delivery_sync_notes", "Initial synchronization after controlled submit."),
+        ("custom_delivery_synced_by", frappe.session.user),
+        ("custom_delivery_synced_at", now_datetime()),
+        ("custom_delivery_completion_readiness_status", "Pending"),
+        ("custom_delivery_completion_readiness_notes", ""),
+        ("custom_delivery_completion_checked_by", None),
+        ("custom_delivery_completion_checked_at", None),
     ):
         if order.meta.has_field(fieldname):
             order.set(fieldname, value)
@@ -332,7 +355,13 @@ def sync_online_order_after_invoice_update(doc, method=None):
     if order.fulfilment_method != "Home Delivery":
         return
 
-    _sync_home_delivery_order_from_invoice(order, doc, save=True)
+    _sync_home_delivery_order_from_invoice(order, doc, save=False)
+    _reset_delivery_completion_control(order, sync_status="Synchronized")
+    if order.meta.has_field("custom_delivery_synced_by"):
+        order.custom_delivery_synced_by = frappe.session.user
+    if order.meta.has_field("custom_delivery_synced_at"):
+        order.custom_delivery_synced_at = now_datetime()
+    order.save(ignore_permissions=True)
 
 
 def before_cancel_linked_online_order_invoice(doc, method=None):
@@ -397,6 +426,14 @@ def on_cancel_linked_online_order_invoice(doc, method=None):
         ("custom_submit_execution_notes", ""),
         ("custom_submitted_by", None),
         ("custom_submitted_at", None),
+        ("custom_delivery_sync_status", "Pending"),
+        ("custom_delivery_sync_notes", ""),
+        ("custom_delivery_synced_by", None),
+        ("custom_delivery_synced_at", None),
+        ("custom_delivery_completion_readiness_status", "Pending"),
+        ("custom_delivery_completion_readiness_notes", ""),
+        ("custom_delivery_completion_checked_by", None),
+        ("custom_delivery_completion_checked_at", None),
     ):
         if order.meta.has_field(fieldname):
             order.set(fieldname, value)

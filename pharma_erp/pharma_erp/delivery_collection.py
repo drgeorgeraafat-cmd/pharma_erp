@@ -145,9 +145,9 @@ def create_collection_payment_entry(
     Confirmed non-cash payments are posted to the Mode of Payment default account.
 
     The calling page validates the current delivery user and the assigned order
-    before reaching this helper. Account and Payment Entry operations are then
-    executed with system permissions so the Delivery role does not need direct
-    access to accounting masters.
+    before reaching this helper. Account and Payment Entry writes use explicit
+    ignore_permissions so the Delivery role does not need direct access to
+    accounting masters, without changing the live request user.
     """
     existing = _submitted_linked_payment(parent_invoice)
     if existing:
@@ -190,12 +190,11 @@ def create_collection_payment_entry(
             )
         )
 
-    original_user = frappe.session.user
+    original_user = frappe.session.user or "Guest"
 
     try:
-        # Do not grant Account/Payment Entry permissions to the Delivery role.
-        # The endpoint already validated the assigned driver and invoice.
-        frappe.set_user("Administrator")
+        # Keep the authenticated delivery user's request session intact.
+        # Accounting writes below already use explicit ignore_permissions.
 
         mode_of_payment = resolve_collection_mode_of_payment(customer_method)
 
@@ -282,4 +281,7 @@ def create_collection_payment_entry(
         return payment_entry
 
     finally:
-        frappe.set_user(original_user)
+        # Never mutate frappe.session.user inside a live delivery web request.
+        # frappe.set_user() can replace the request session object and break
+        # the client reload after an otherwise successful collection.
+        pass

@@ -13,6 +13,11 @@ from pharma_erp.online_order_sales_invoice_events import (
     validate_linked_online_order_invoice,
 )
 from pharma_erp.pharma_erp import payment_card_management as shift_finance
+from pharma_erp.pharma_erp.doctype.online_order.online_order import (
+    _home_delivery_collection_state,
+    _sync_home_delivery_order_from_invoice,
+    complete_home_delivery,
+)
 
 PAYMENT_TOLERANCE = 0.01
 POST_CONVERSION_TOLERANCE = 0.01
@@ -304,6 +309,22 @@ def _state_snapshot(order) -> dict[str, Any]:
             order, "custom_submit_execution_status", "Pending"
         )
         or "Pending",
+        "delivery_sync_status": getattr(
+            order, "custom_delivery_sync_status", "Pending"
+        )
+        or "Pending",
+        "delivery_completion_readiness_status": getattr(
+            order, "custom_delivery_completion_readiness_status", "Pending"
+        )
+        or "Pending",
+        "delivery_status_snapshot": getattr(order, "delivery_status_snapshot", "") or "",
+        "delivery_boy": getattr(order, "delivery_boy", "") or "",
+        "delivery_trip": getattr(order, "delivery_trip", "") or "",
+        "delivery_attempt": getattr(order, "delivery_attempt", "") or "",
+        "delivery_departure_at": getattr(order, "delivery_departure_at", None),
+        "delivery_delivered_at": getattr(order, "delivery_delivered_at", None),
+        "delivery_completed_by": getattr(order, "delivery_completed_by", "") or "",
+        "delivery_completed_at": getattr(order, "delivery_completed_at", None),
         "confirmed_at": order.confirmed_at,
         "sales_order": order.sales_order or "",
         "sales_invoice": order.sales_invoice or "",
@@ -1219,4 +1240,401 @@ def submit_controlled_sales_invoice(
     result = _sales_invoice_submit_context(order)
     result["submitted"] = 1
     result["idempotent_replay"] = 0
+    return result
+
+
+def _delivery_invoice_state(invoice) -> dict[str, Any]:
+    if not invoice:
+        return {}
+    return {
+        "name": invoice.name,
+        "docstatus": cint(invoice.docstatus),
+        "status": invoice.status or "",
+        "update_stock": cint(invoice.update_stock),
+        "is_pos": cint(invoice.is_pos),
+        "company": invoice.company or "",
+        "currency": invoice.currency or "",
+        "grand_total": flt(invoice.grand_total),
+        "outstanding_amount": max(0, flt(invoice.outstanding_amount)),
+        "custom_online_order": invoice.get("custom_online_order") or "",
+        "custom_delivery_status": invoice.get("custom_delivery_status") or "",
+        "custom_delivery_boy": invoice.get("custom_delivery_boy") or "",
+        "custom_delivery_trip": invoice.get("custom_delivery_trip") or "",
+        "custom_current_delivery_attempt": invoice.get("custom_current_delivery_attempt") or "",
+        "custom_departure_time": invoice.get("custom_departure_time"),
+        "custom_delivery_time": invoice.get("custom_delivery_time"),
+        "custom_collection_verification_status": (
+            invoice.get("custom_collection_verification_status") or ""
+        ),
+        "custom_confirmed_customer_payment_method": (
+            invoice.get("custom_confirmed_customer_payment_method") or ""
+        ),
+        "custom_collection_payment_entry": (
+            invoice.get("custom_collection_payment_entry") or ""
+        ),
+        "custom_prepaid_payment_entry": (
+            invoice.get("custom_prepaid_payment_entry") or ""
+        ),
+        "custom_pharmacy_shift": invoice.get("custom_pharmacy_shift") or "",
+        "custom_delivery_shift": invoice.get("custom_delivery_shift") or "",
+        "gl_entry_count": frappe.db.count(
+            "GL Entry",
+            {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+        ),
+        "stock_ledger_entry_count": frappe.db.count(
+            "Stock Ledger Entry",
+            {"voucher_type": "Sales Invoice", "voucher_no": invoice.name},
+        ),
+    }
+
+
+def _delivery_sync_blockers(order, invoice=None) -> list[str]:
+    blockers: list[str] = []
+    if order.fulfilment_method != "Home Delivery":
+        blockers.append(_("Controlled delivery sync is only valid for Home Delivery orders."))
+        return blockers
+    invoice = invoice or _active_sales_invoice(order)
+    if not invoice:
+        blockers.append(_("A linked active Sales Invoice is required for delivery sync."))
+        return blockers
+    if order.sales_invoice != invoice.name:
+        blockers.append(_("The Online Order Sales Invoice link is inconsistent."))
+    if cint(invoice.docstatus) != 1:
+        blockers.append(_("The linked Sales Invoice must be submitted before delivery sync."))
+    if getattr(order, "custom_submit_execution_status", "Pending") != "Submitted":
+        blockers.append(_("Controlled Sales Invoice Submit must be Submitted before delivery sync."))
+    if invoice.get("custom_online_order") != order.name:
+        blockers.append(_("The linked Sales Invoice does not point back to this Online Order."))
+    return list(dict.fromkeys(blockers))
+
+
+def _delivery_completion_blockers(order, invoice=None) -> list[str]:
+    blockers = _delivery_sync_blockers(order, invoice)
+    invoice = invoice or _active_sales_invoice(order)
+    if blockers or not invoice:
+        return blockers
+    if order.status == "Completed":
+        return []
+    if order.status == "Returned":
+        blockers.append(_("Returned deliveries require the controlled return workflow, not completion."))
+        return list(dict.fromkeys(blockers))
+    if order.status != "Delivered":
+        blockers.append(_("Online Order must be Delivered before final completion."))
+    invoice_delivery_status = str(invoice.get("custom_delivery_status") or "").strip()
+    if invoice_delivery_status != "Delivered":
+        blockers.append(_("The linked Sales Invoice delivery status must be Delivered."))
+    collection = _home_delivery_collection_state(order, invoice)
+    if not collection["collection_ready"]:
+        if collection["outstanding"] > PAYMENT_TOLERANCE:
+            blockers.append(
+                _("Delivery collection is incomplete. Remaining outstanding: {0}.").format(
+                    collection["outstanding"]
+                )
+            )
+        else:
+            blockers.append(_("Delivery collection verification must be Confirmed before completion."))
+    return list(dict.fromkeys(blockers))
+
+
+def _delivery_execution_context(order) -> dict[str, Any]:
+    invoice = _active_sales_invoice(order)
+    sync_blockers = _delivery_sync_blockers(order, invoice)
+    completion_blockers = _delivery_completion_blockers(order, invoice)
+    collection = (
+        _home_delivery_collection_state(order, invoice)
+        if invoice and cint(invoice.docstatus) == 1 and order.fulfilment_method == "Home Delivery"
+        else {
+            "outstanding": 0.0,
+            "grand_total": flt(order.grand_total),
+            "collection_status": "",
+            "confirmed_method": "",
+            "payment_entry": "",
+            "payment_entry_submitted": False,
+            "payment_status": order.payment_status or "",
+            "verified_amount": flt(order.verified_paid_amount),
+            "no_collection": False,
+            "collection_ready": False,
+        }
+    )
+    completed = order.status == "Completed"
+    completion_readiness = getattr(
+        order,
+        "custom_delivery_completion_readiness_status",
+        "Pending",
+    ) or "Pending"
+    return {
+        **_state_snapshot(order),
+        "invoice": _delivery_invoice_state(invoice),
+        "delivery_sync_blockers": sync_blockers,
+        "delivery_completion_blockers": completion_blockers,
+        "delivery_sync_status": getattr(order, "custom_delivery_sync_status", "Pending") or "Pending",
+        "delivery_sync_notes": getattr(order, "custom_delivery_sync_notes", "") or "",
+        "delivery_synced_by": getattr(order, "custom_delivery_synced_by", "") or "",
+        "delivery_synced_at": getattr(order, "custom_delivery_synced_at", None),
+        "delivery_completion_readiness_status": completion_readiness,
+        "delivery_completion_readiness_notes": getattr(
+            order,
+            "custom_delivery_completion_readiness_notes",
+            "",
+        ) or "",
+        "delivery_completion_checked_by": getattr(
+            order,
+            "custom_delivery_completion_checked_by",
+            "",
+        ) or "",
+        "delivery_completion_checked_at": getattr(
+            order,
+            "custom_delivery_completion_checked_at",
+            None,
+        ),
+        "collection": collection,
+        "can_sync_delivery": cint(bool(invoice) and not sync_blockers and not completed),
+        "can_verify_delivery_completion": cint(bool(invoice) and not completed),
+        "can_complete_delivery": cint(
+            bool(invoice)
+            and not completed
+            and not completion_blockers
+            and completion_readiness == "Ready"
+        ),
+        "already_completed": cint(completed),
+        "uses_delivery_management": 1,
+        "creates_payment_entry": 0,
+        "creates_gl_entries": 0,
+        "creates_stock_entries": 0,
+        "submits_sales_invoice": 0,
+    }
+
+
+@frappe.whitelist()
+def get_delivery_execution_context(
+    online_order: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "read")
+    return _delivery_execution_context(order)
+
+
+@frappe.whitelist(methods=["POST"])
+def sync_controlled_delivery_execution(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+    invoice = _active_sales_invoice(order)
+    blockers = _delivery_sync_blockers(order, invoice)
+    if blockers:
+        _set_if_has(order, "custom_delivery_sync_status", "Blocked")
+        _set_if_has(order, "custom_delivery_sync_notes", _clean_text(notes, 1000))
+        _set_if_has(order, "custom_delivery_synced_by", frappe.session.user)
+        _set_if_has(order, "custom_delivery_synced_at", now_datetime())
+        order.save(ignore_permissions=True)
+        _audit_comment(
+            order,
+            _("Controlled Delivery & Collection Synchronization"),
+            {
+                "sync_status": "Blocked",
+                "blockers": blockers,
+                "sales_invoice": invoice.name if invoice else "",
+                "notes": _clean_text(notes, 1000),
+                "creates_payment_entry": 0,
+                "creates_gl_entries": 0,
+                "creates_stock_entries": 0,
+            },
+        )
+        return _delivery_execution_context(order)
+
+    before = (
+        order.status,
+        order.payment_status,
+        flt(order.verified_paid_amount),
+        str(order.payment_entry or ""),
+        str(getattr(order, "delivery_status_snapshot", "") or ""),
+        str(getattr(order, "delivery_boy", "") or ""),
+        str(getattr(order, "delivery_trip", "") or ""),
+        str(getattr(order, "delivery_attempt", "") or ""),
+    )
+    _sync_home_delivery_order_from_invoice(order, invoice, save=False)
+    after = (
+        order.status,
+        order.payment_status,
+        flt(order.verified_paid_amount),
+        str(order.payment_entry or ""),
+        str(getattr(order, "delivery_status_snapshot", "") or ""),
+        str(getattr(order, "delivery_boy", "") or ""),
+        str(getattr(order, "delivery_trip", "") or ""),
+        str(getattr(order, "delivery_attempt", "") or ""),
+    )
+    already_synchronized = (
+        before == after
+        and getattr(order, "custom_delivery_sync_status", "Pending") == "Synchronized"
+    )
+    if already_synchronized:
+        result = _delivery_execution_context(order)
+        result["synchronized"] = 0
+        result["idempotent_replay"] = 1
+        return result
+
+    _set_if_has(order, "custom_delivery_sync_status", "Synchronized")
+    _set_if_has(order, "custom_delivery_sync_notes", _clean_text(notes, 1000))
+    _set_if_has(order, "custom_delivery_synced_by", frappe.session.user)
+    _set_if_has(order, "custom_delivery_synced_at", now_datetime())
+    _set_if_has(order, "custom_delivery_completion_readiness_status", "Pending")
+    _set_if_has(order, "custom_delivery_completion_readiness_notes", "")
+    _set_if_has(order, "custom_delivery_completion_checked_by", None)
+    _set_if_has(order, "custom_delivery_completion_checked_at", None)
+    order.save(ignore_permissions=True)
+
+    collection = _home_delivery_collection_state(order, invoice)
+    _audit_comment(
+        order,
+        _("Controlled Delivery & Collection Synchronization"),
+        {
+            "sync_status": "Synchronized",
+            "before_order_status": before[0],
+            "online_order_status": order.status,
+            "invoice_delivery_status": invoice.get("custom_delivery_status") or "",
+            "payment_status": order.payment_status,
+            "collection_status": collection["collection_status"],
+            "collection_ready": cint(collection["collection_ready"]),
+            "outstanding": flt(collection["outstanding"]),
+            "sales_invoice": invoice.name,
+            "delivery_shift": invoice.get("custom_delivery_shift") or "",
+            "delivery_trip": invoice.get("custom_delivery_trip") or "",
+            "delivery_boy": invoice.get("custom_delivery_boy") or "",
+            "notes": _clean_text(notes, 1000),
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 0,
+            "creates_stock_entries": 0,
+        },
+    )
+    result = _delivery_execution_context(order)
+    result["synchronized"] = 1
+    result["idempotent_replay"] = 0
+    return result
+
+
+@frappe.whitelist(methods=["POST"])
+def verify_delivery_completion_readiness(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+    invoice = _active_sales_invoice(order)
+    sync_blockers = _delivery_sync_blockers(order, invoice)
+    if not sync_blockers and invoice:
+        _sync_home_delivery_order_from_invoice(order, invoice, save=False)
+    blockers = _delivery_completion_blockers(order, invoice)
+    readiness = "Ready" if not blockers and order.status == "Delivered" else "Blocked"
+
+    _set_if_has(order, "custom_delivery_sync_status", "Synchronized" if not sync_blockers else "Blocked")
+    _set_if_has(order, "custom_delivery_sync_notes", _clean_text(notes, 1000))
+    _set_if_has(order, "custom_delivery_synced_by", frappe.session.user)
+    _set_if_has(order, "custom_delivery_synced_at", now_datetime())
+    _set_if_has(order, "custom_delivery_completion_readiness_status", readiness)
+    _set_if_has(
+        order,
+        "custom_delivery_completion_readiness_notes",
+        _clean_text(notes, 1000),
+    )
+    _set_if_has(order, "custom_delivery_completion_checked_by", frappe.session.user)
+    _set_if_has(order, "custom_delivery_completion_checked_at", now_datetime())
+    order.save(ignore_permissions=True)
+
+    collection = (
+        _home_delivery_collection_state(order, invoice)
+        if invoice and cint(invoice.docstatus) == 1
+        else {}
+    )
+    _audit_comment(
+        order,
+        _("Controlled Delivery Completion Readiness"),
+        {
+            "readiness_status": readiness,
+            "blockers": blockers,
+            "online_order_status": order.status,
+            "invoice_delivery_status": invoice.get("custom_delivery_status") if invoice else "",
+            "collection_status": collection.get("collection_status", ""),
+            "collection_ready": cint(collection.get("collection_ready", False)),
+            "outstanding": flt(collection.get("outstanding", 0)),
+            "sales_invoice": invoice.name if invoice else "",
+            "checked_by": frappe.session.user,
+            "checked_at": now_datetime(),
+            "notes": _clean_text(notes, 1000),
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 0,
+            "creates_stock_entries": 0,
+        },
+    )
+    return _delivery_execution_context(order)
+
+
+@frappe.whitelist(methods=["POST"])
+def complete_controlled_home_delivery(
+    online_order: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    order = _get_order(online_order, "write")
+    frappe.db.sql(
+        "select name from `tabOnline Order` where name=%s for update",
+        (order.name,),
+    )
+    order.reload()
+    if order.status == "Completed":
+        result = _delivery_execution_context(order)
+        result["completed"] = 0
+        result["idempotent_replay"] = 1
+        return result
+
+    invoice = _active_sales_invoice(order)
+    if getattr(order, "custom_delivery_completion_readiness_status", "Pending") != "Ready":
+        frappe.throw(_("Verify Controlled Delivery Completion Readiness first."))
+    blockers = _delivery_completion_blockers(order, invoice)
+    if blockers:
+        frappe.throw("<br>".join(blockers))
+
+    completion_result = complete_home_delivery(
+        order.name,
+        completion_notes=_clean_text(notes, 1000),
+    )
+    order.reload()
+    _set_if_has(order, "custom_delivery_sync_status", "Synchronized")
+    _set_if_has(order, "custom_delivery_sync_notes", _clean_text(notes, 1000))
+    _set_if_has(order, "custom_delivery_synced_by", frappe.session.user)
+    _set_if_has(order, "custom_delivery_synced_at", now_datetime())
+    order.save(ignore_permissions=True)
+
+    invoice = _active_sales_invoice(order)
+    collection = _home_delivery_collection_state(order, invoice) if invoice else {}
+    _audit_comment(
+        order,
+        _("Controlled Home Delivery Completion"),
+        {
+            "online_order_status": order.status,
+            "sales_invoice": invoice.name if invoice else "",
+            "invoice_delivery_status": invoice.get("custom_delivery_status") if invoice else "",
+            "payment_status": order.payment_status,
+            "collection_status": collection.get("collection_status", ""),
+            "collection_ready": cint(collection.get("collection_ready", False)),
+            "outstanding": flt(collection.get("outstanding", 0)),
+            "completed_by": frappe.session.user,
+            "completed_at": now_datetime(),
+            "notes": _clean_text(notes, 1000),
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 0,
+            "creates_stock_entries": 0,
+        },
+    )
+    result = _delivery_execution_context(order)
+    result["completed"] = 1
+    result["idempotent_replay"] = 0
+    result["underlying_result"] = completion_result
     return result
