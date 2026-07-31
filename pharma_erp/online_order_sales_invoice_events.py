@@ -182,6 +182,7 @@ def validate_linked_online_order_invoice(doc, method=None):
         method == "validate"
         and cint(doc.docstatus) == 0
         and not doc.flags.get("controlled_online_order_submit")
+        and not doc.flags.get("controlled_online_order_conversion")
     ):
         changed = False
         for fieldname, value in (

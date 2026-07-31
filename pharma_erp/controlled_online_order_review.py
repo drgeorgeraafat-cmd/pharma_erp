@@ -8,7 +8,7 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, now_datetime, strip_html
+from frappe.utils import cint, flt, getdate, now_datetime, strip_html
 
 
 REVIEW_QUEUE_STATUSES = (
@@ -28,6 +28,25 @@ REVIEW_QUEUE_STATUSES = (
     "Delivered",
     "Returned",
     "Completed",
+    "On Hold",
+)
+
+# Orders that still need a direct action from the controlled review page.
+# Delivery execution states are intentionally handled in Delivery Management,
+# while Delivered remains actionable here because it still needs final closure.
+ACTIONABLE_REVIEW_STATUSES = (
+    "Placed",
+    "Under Review",
+    "Prescription Review",
+    "Stock Review",
+    "Partially Available",
+    "Awaiting Customer Decision",
+    "Ready for Payment",
+    "Payment Verification",
+    "Confirmed",
+    "Preparing",
+    "Delivered",
+    "Returned",
     "On Hold",
 )
 
@@ -448,21 +467,69 @@ def _audit_comment(order, title: str, details: dict[str, Any]) -> None:
 def get_review_queue(
     status: str | None = None,
     search: str | None = None,
+    actionable_only: int | str = 1,
+    include_completed: int | str = 0,
+    unconverted_only: int | str = 0,
+    enable_date_range: int | str = 0,
+    from_date: str | None = None,
+    to_date: str | None = None,
     page_length: int | str = 50,
 ) -> dict[str, Any]:
     _require_authenticated_user()
     if not frappe.has_permission("Online Order", "read"):
-        frappe.throw(_("You do not have permission to read Online Orders."), frappe.PermissionError)
+        frappe.throw(
+            _("You do not have permission to read Online Orders."),
+            frappe.PermissionError,
+        )
 
     selected_status = _clean_text(status, 60)
     if selected_status and selected_status not in REVIEW_QUEUE_STATUSES:
         frappe.throw(_("Invalid review status filter."))
 
+    actionable = cint(actionable_only) == 1
+    show_completed = cint(include_completed) == 1
+    only_unconverted = cint(unconverted_only) == 1
+    date_range_enabled = cint(enable_date_range) == 1
+
     filters: dict[str, Any] = {"docstatus": ["<", 2]}
     if selected_status:
+        # An explicit status selection always wins over the quick checkboxes.
         filters["status"] = selected_status
-    else:
+    elif actionable:
+        actionable_statuses = list(ACTIONABLE_REVIEW_STATUSES)
+        if show_completed:
+            actionable_statuses.append("Completed")
+        filters["status"] = ["in", tuple(actionable_statuses)]
+    elif show_completed:
         filters["status"] = ["in", REVIEW_QUEUE_STATUSES]
+    else:
+        filters["status"] = ["in", tuple(
+            value for value in REVIEW_QUEUE_STATUSES if value != "Completed"
+        )]
+
+    if only_unconverted:
+        filters["sales_invoice"] = ["is", "not set"]
+
+    normalized_from = ""
+    normalized_to = ""
+    if date_range_enabled:
+        normalized_from = _clean_text(from_date, 20)
+        normalized_to = _clean_text(to_date, 20)
+        if not normalized_from or not normalized_to:
+            frappe.throw(_("From Date and To Date are required when date filtering is enabled."))
+        try:
+            parsed_from = getdate(normalized_from)
+            parsed_to = getdate(normalized_to)
+        except Exception:
+            frappe.throw(_("Invalid review date range."))
+        if parsed_from > parsed_to:
+            frappe.throw(_("From Date cannot be after To Date."))
+        normalized_from = parsed_from.isoformat()
+        normalized_to = parsed_to.isoformat()
+        filters["creation"] = [
+            "between",
+            [f"{normalized_from} 00:00:00", f"{normalized_to} 23:59:59.999999"],
+        ]
 
     search_text = _clean_text(search, 140)
     or_filters = None
@@ -538,6 +605,18 @@ def get_review_queue(
         "controlled_review": 1,
         "controlled_submit_sync": 1,
         "controlled_delivery_completion": 1,
+        "controlled_review_ux": 1,
+        "safe_draft_conversion": 1,
+        "filter_state": {
+            "status": selected_status,
+            "search": search_text,
+            "actionable_only": cint(actionable),
+            "include_completed": cint(show_completed),
+            "unconverted_only": cint(only_unconverted),
+            "enable_date_range": cint(date_range_enabled),
+            "from_date": normalized_from,
+            "to_date": normalized_to,
+        },
         "financial_stock_documents_created": cint(
             any(
                 str(row.get("custom_submit_execution_status") or "") == "Submitted"

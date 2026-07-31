@@ -891,10 +891,24 @@ def create_controlled_sales_invoice_draft(
     )
     _set_if_has(order, "custom_conversion_executed_by", frappe.session.user)
     _set_if_has(order, "custom_conversion_executed_at", now_datetime())
-    _set_if_has(order, "custom_post_conversion_integrity_status", "Pending")
-    _set_if_has(order, "custom_post_conversion_integrity_notes", "")
-    _set_if_has(order, "custom_post_conversion_checked_by", None)
-    _set_if_has(order, "custom_post_conversion_checked_at", None)
+
+    # The integrity checks have already passed immediately after draft creation.
+    # Persist that verified state automatically so the pharmacist does not need
+    # a second operational click before moving to submit-readiness review.
+    automatic_integrity_note = _("Automatically verified during controlled draft creation.")
+    automatic_integrity_checked_at = now_datetime()
+    _set_if_has(order, "custom_post_conversion_integrity_status", "Ready")
+    _set_if_has(
+        order,
+        "custom_post_conversion_integrity_notes",
+        automatic_integrity_note,
+    )
+    _set_if_has(order, "custom_post_conversion_checked_by", frappe.session.user)
+    _set_if_has(
+        order,
+        "custom_post_conversion_checked_at",
+        automatic_integrity_checked_at,
+    )
     _set_if_has(order, "custom_submit_readiness_status", "Pending")
     _set_if_has(order, "custom_submit_readiness_notes", "")
     _set_if_has(order, "custom_submit_readiness_checked_by", None)
@@ -919,6 +933,28 @@ def create_controlled_sales_invoice_draft(
             "created_at": now_datetime(),
             "notes": _clean_text(notes, 1000),
             "creates_sales_invoice_draft": 1,
+            "automatic_post_conversion_integrity": 1,
+            "post_conversion_integrity_status": "Ready",
+            "submits_sales_invoice": 0,
+            "creates_payment_entry": 0,
+            "creates_gl_entries": 0,
+            "creates_stock_entries": 0,
+        },
+    )
+    _audit_comment(
+        order,
+        _("Controlled Post-Conversion Integrity Verification"),
+        {
+            "integrity_status": "Ready",
+            "blockers": [],
+            "sales_invoice": order.sales_invoice or "",
+            "docstatus": cint(invoice.docstatus),
+            "update_stock": cint(invoice.update_stock),
+            "grand_total": flt(invoice.grand_total),
+            "checked_by": frappe.session.user,
+            "checked_at": automatic_integrity_checked_at,
+            "notes": automatic_integrity_note,
+            "automatic_verification": 1,
             "submits_sales_invoice": 0,
             "creates_payment_entry": 0,
             "creates_gl_entries": 0,

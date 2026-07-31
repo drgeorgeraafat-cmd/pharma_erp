@@ -16,6 +16,14 @@ class ControlledOnlineOrderReviewPage {
         this.page = page;
         this.$main = $(wrapper).find(".layout-main-section");
         this.orders = [];
+        this.filterState = {
+            actionable_only: 1,
+            include_completed: 0,
+            unconverted_only: 0,
+            enable_date_range: 0,
+            from_date: "",
+            to_date: "",
+        };
         this.setup_page();
         this.setup_events();
         this.load_orders();
@@ -61,12 +69,39 @@ class ControlledOnlineOrderReviewPage {
             <div class="coor-page" dir="rtl">
                 <div class="coor-banner">
                     <div>
-                        <div class="coor-banner-title">مراجعة طلبات الموقع قبل التأكيد</div>
+                        <div class="coor-banner-title">مراجعة وتشغيل طلبات الموقع</div>
                         <div class="coor-banner-subtitle">
-                            مزامنة تنفيذ التوصيل والتحصيل من Delivery Management، وفحص جاهزية الإكمال ثم إغلاق الطلب بشكل منضبط دون إنشاء مستند مالي أو حركة مخزون جديدة.
+                            عرض تشغيلي مختصر بدون تمرير أفقي، مع فلاتر للطلبات التي تحتاج إجراء، والطلبات غير المحولة، وفترة زمنية اختيارية من–إلى.
                         </div>
                     </div>
-                    <span class="indicator-pill blue">Step 3B.9</span>
+                    <span class="indicator-pill blue">Step 3B.10</span>
+                </div>
+                <div class="coor-filter-panel">
+                    <label class="coor-check">
+                        <input type="checkbox" class="coor-actionable-only coor-quick-filter" checked>
+                        <span>الطلبات التي تحتاج إجراء فقط</span>
+                    </label>
+                    <label class="coor-check">
+                        <input type="checkbox" class="coor-unconverted-only coor-quick-filter">
+                        <span>غير المحولة إلى فاتورة فقط</span>
+                    </label>
+                    <label class="coor-check">
+                        <input type="checkbox" class="coor-include-completed coor-quick-filter">
+                        <span>إظهار الطلبات المكتملة</span>
+                    </label>
+                    <label class="coor-check coor-date-toggle">
+                        <input type="checkbox" class="coor-enable-date-range">
+                        <span>تفعيل الفترة الزمنية</span>
+                    </label>
+                    <div class="coor-date-field">
+                        <label>من تاريخ</label>
+                        <input type="date" class="form-control coor-from-date" disabled>
+                    </div>
+                    <div class="coor-date-field">
+                        <label>إلى تاريخ</label>
+                        <input type="date" class="form-control coor-to-date" disabled>
+                    </div>
+                    <div class="coor-filter-note text-muted">الافتراضي يعرض الطلبات التي ما زالت تحتاج إجراء فقط.</div>
                 </div>
                 <div class="coor-summary"></div>
                 <div class="coor-loading text-muted">جاري تحميل طلبات الموقع...</div>
@@ -77,39 +112,91 @@ class ControlledOnlineOrderReviewPage {
     }
 
     add_styles() {
-        if (document.getElementById("coor-page-styles")) return;
+        $("#coor-page-styles").remove();
         $("<style id='coor-page-styles'>").text(`
-            .coor-page { padding: 4px 0 28px; }
+            .coor-page { padding:4px 0 28px; max-width:100%; overflow:hidden; }
             .coor-banner {
                 display:flex; align-items:center; justify-content:space-between; gap:16px;
                 padding:18px 20px; border:1px solid var(--border-color); border-radius:12px;
-                background:var(--fg-color); margin-bottom:16px;
+                background:var(--fg-color); margin-bottom:12px;
             }
             .coor-banner-title { font-size:18px; font-weight:700; margin-bottom:4px; }
             .coor-banner-subtitle { color:var(--text-muted); line-height:1.7; }
-            .coor-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:16px; }
-            .coor-card { border:1px solid var(--border-color); border-radius:10px; background:var(--fg-color); padding:14px; }
+            .coor-filter-panel {
+                display:grid; grid-template-columns:repeat(4,minmax(175px,1fr)) repeat(2,minmax(150px,190px));
+                gap:10px; align-items:end; padding:14px 16px; margin-bottom:14px;
+                border:1px solid var(--border-color); border-radius:12px; background:var(--fg-color);
+            }
+            .coor-check {
+                min-height:38px; display:flex; align-items:center; gap:8px; margin:0;
+                padding:8px 10px; border-radius:8px; background:var(--subtle-fg); cursor:pointer;
+            }
+            .coor-check input { margin:0; }
+            .coor-date-field label { display:block; margin-bottom:5px; color:var(--text-muted); font-size:12px; }
+            .coor-date-field input:disabled { opacity:.55; cursor:not-allowed; }
+            .coor-filter-note { grid-column:1 / -1; font-size:12px; padding-top:2px; }
+            .coor-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px; margin-bottom:14px; }
+            .coor-card { border:1px solid var(--border-color); border-radius:10px; background:var(--fg-color); padding:12px 14px; }
             .coor-card-label { color:var(--text-muted); font-size:12px; }
-            .coor-card-value { font-size:24px; font-weight:700; margin-top:4px; }
-            .coor-table-wrap { overflow:auto; border:1px solid var(--border-color); border-radius:12px; background:var(--fg-color); }
-            .coor-table { width:100%; min-width:1480px; border-collapse:collapse; }
-            .coor-table th, .coor-table td { padding:11px 10px; border-bottom:1px solid var(--border-color); vertical-align:middle; text-align:right; }
-            .coor-table th { background:var(--subtle-fg); font-weight:600; white-space:nowrap; }
-            .coor-order-link { font-weight:700; }
-            .coor-actions { display:flex; gap:6px; flex-wrap:wrap; }
-            .coor-empty { padding:40px 20px; text-align:center; color:var(--text-muted); }
-            .coor-rx { font-weight:700; }
+            .coor-card-value { font-size:22px; font-weight:700; margin-top:3px; }
+            .coor-order-list { display:grid; gap:10px; }
+            .coor-order-card {
+                border:1px solid var(--border-color); border-radius:12px; background:var(--fg-color);
+                padding:14px 16px; min-width:0;
+            }
+            .coor-order-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+            .coor-order-title { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+            .coor-order-link { font-size:15px; font-weight:700; }
+            .coor-order-time { color:var(--text-muted); font-size:12px; white-space:nowrap; }
+            .coor-order-grid {
+                display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px 12px; margin-bottom:12px;
+            }
+            .coor-meta { padding:8px 10px; border-radius:8px; background:var(--subtle-fg); min-width:0; }
+            .coor-meta-label { color:var(--text-muted); font-size:11px; margin-bottom:3px; }
+            .coor-meta-value { font-size:13px; line-height:1.55; overflow-wrap:anywhere; }
+            .coor-actions { display:flex; gap:6px; flex-wrap:wrap; padding-top:10px; border-top:1px solid var(--border-color); }
+            .coor-empty { padding:40px 20px; text-align:center; color:var(--text-muted); border:1px solid var(--border-color); border-radius:12px; background:var(--fg-color); }
             .coor-dialog-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:12px; }
             .coor-dialog-summary > div { padding:8px 10px; border-radius:8px; background:var(--subtle-fg); }
             .coor-blockers { margin:8px 0 0; padding-right:18px; }
-            @media (max-width: 768px) {
+            @media (max-width:1200px) {
+                .coor-filter-panel { grid-template-columns:repeat(3,minmax(160px,1fr)); }
+                .coor-order-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+            }
+            @media (max-width:768px) {
                 .coor-banner { align-items:flex-start; flex-direction:column; }
+                .coor-filter-panel { grid-template-columns:1fr; }
+                .coor-filter-note { grid-column:auto; }
+                .coor-order-head { flex-direction:column; }
+                .coor-order-grid { grid-template-columns:1fr; }
                 .coor-dialog-summary { grid-template-columns:1fr; }
             }
         `).appendTo("head");
     }
 
     setup_events() {
+        this.$main.on("change", ".coor-quick-filter", async () => {
+            await this.load_orders();
+        });
+        this.$main.on("change", ".coor-enable-date-range", async (event) => {
+            const enabled = $(event.currentTarget).is(":checked");
+            this.toggle_date_fields(enabled);
+            if (enabled) {
+                const today = frappe.datetime.get_today();
+                if (!this.$main.find(".coor-from-date").val()) {
+                    this.$main.find(".coor-from-date").val(frappe.datetime.add_days(today, -30));
+                }
+                if (!this.$main.find(".coor-to-date").val()) {
+                    this.$main.find(".coor-to-date").val(today);
+                }
+            }
+            await this.load_orders();
+        });
+        this.$main.on("change", ".coor-from-date, .coor-to-date", async () => {
+            if (this.$main.find(".coor-enable-date-range").is(":checked")) {
+                await this.load_orders();
+            }
+        });
         this.$main.on("click", ".coor-open-order", (event) => {
             frappe.set_route("Form", "Online Order", $(event.currentTarget).data("order"));
         });
@@ -180,7 +267,34 @@ class ControlledOnlineOrderReviewPage {
         return response.message || {};
     }
 
+    toggle_date_fields(enabled) {
+        this.$main.find(".coor-from-date, .coor-to-date").prop("disabled", !enabled);
+    }
+
+    current_filter_values() {
+        return {
+            actionable_only: this.$main.find(".coor-actionable-only").is(":checked") ? 1 : 0,
+            include_completed: this.$main.find(".coor-include-completed").is(":checked") ? 1 : 0,
+            unconverted_only: this.$main.find(".coor-unconverted-only").is(":checked") ? 1 : 0,
+            enable_date_range: this.$main.find(".coor-enable-date-range").is(":checked") ? 1 : 0,
+            from_date: this.$main.find(".coor-from-date").val() || "",
+            to_date: this.$main.find(".coor-to-date").val() || "",
+        };
+    }
+
     async load_orders() {
+        const quickFilters = this.current_filter_values();
+        if (quickFilters.enable_date_range) {
+            if (!quickFilters.from_date || !quickFilters.to_date) {
+                frappe.msgprint(__("Choose both From Date and To Date."));
+                return;
+            }
+            if (quickFilters.from_date > quickFilters.to_date) {
+                frappe.msgprint(__("From Date cannot be after To Date."));
+                return;
+            }
+        }
+
         this.$main.find(".coor-loading").show();
         this.$main.find(".coor-orders").empty();
         try {
@@ -189,10 +303,13 @@ class ControlledOnlineOrderReviewPage {
                 {
                     status: this.statusField.get_value() || "",
                     search: this.searchField.get_value() || "",
+                    ...quickFilters,
                     page_length: 100,
                 }
             );
             this.orders = result.orders || [];
+            this.filterState = result.filter_state || quickFilters;
+            this.render_filter_note();
             this.render_summary(result);
             this.render_orders();
         } finally {
@@ -200,22 +317,36 @@ class ControlledOnlineOrderReviewPage {
         }
     }
 
+    render_filter_note() {
+        const parts = [];
+        if (Number(this.filterState.actionable_only || 0)) parts.push("تحتاج إجراء");
+        if (Number(this.filterState.unconverted_only || 0)) parts.push("غير محولة لفاتورة");
+        if (!Number(this.filterState.include_completed || 0)) parts.push("المكتملة مخفية");
+        if (Number(this.filterState.enable_date_range || 0)) {
+            parts.push(`الفترة ${this.filterState.from_date} إلى ${this.filterState.to_date}`);
+        }
+        this.$main.find(".coor-filter-note").text(
+            parts.length ? `الفلاتر الحالية: ${parts.join(" — ")}` : "يتم عرض جميع الطلبات المتاحة."
+        );
+    }
+
     render_summary(result) {
         const counts = result.counts || {};
+        const reviewCount = [
+            "Under Review",
+            "Prescription Review",
+            "Stock Review",
+            "Partially Available",
+        ].reduce((total, status) => total + Number(counts[status] || 0), 0);
         const cards = [
-            ["إجمالي قائمة المراجعة", result.total || 0],
+            ["الطلبات المعروضة", result.total || 0],
             ["طلبات جديدة", counts["Placed"] || 0],
-            ["مراجعة وصفة", counts["Prescription Review"] || 0],
-            ["مراجعة مخزون", counts["Stock Review"] || 0],
+            ["قيد المراجعة", reviewCount],
             ["قرار العميل", counts["Awaiting Customer Decision"] || 0],
             ["جاهز للدفع/التأكيد", (counts["Ready for Payment"] || 0) + (counts["Payment Verification"] || 0)],
-            ["طلبات مؤكدة", counts["Confirmed"] || 0],
-            ["مسودات فواتير", this.orders.filter((row) => row.sales_invoice && row.custom_submit_execution_status !== "Submitted").length],
-            ["فواتير معتمدة", this.orders.filter((row) => row.custom_submit_execution_status === "Submitted").length],
-            ["جاهز للتوصيل", counts["Ready for Delivery"] || 0],
-            ["خرج للتوصيل", counts["Out for Delivery"] || 0],
-            ["تم التسليم", counts["Delivered"] || 0],
-            ["مكتمل", counts["Completed"] || 0],
+            ["مؤكد بلا فاتورة", this.orders.filter((row) => ["Confirmed", "Preparing"].includes(row.status) && !row.sales_invoice).length],
+            ["توصيل قيد التنفيذ", (counts["Ready for Delivery"] || 0) + (counts["Out for Delivery"] || 0)],
+            ["تم التسليم ويحتاج إغلاق", counts["Delivered"] || 0],
         ];
         this.$main.find(".coor-summary").html(cards.map(([label, value]) => `
             <div class="coor-card">
@@ -228,16 +359,41 @@ class ControlledOnlineOrderReviewPage {
     render_orders() {
         const $container = this.$main.find(".coor-orders");
         if (!this.orders.length) {
-            $container.html(`<div class="coor-empty">لا توجد طلبات مطابقة لفلتر المراجعة الحالي.</div>`);
+            $container.html(`<div class="coor-empty">لا توجد طلبات مطابقة للفلاتر الحالية.</div>`);
             return;
         }
 
-        const rows = this.orders.map((order) => {
+        const preConfirmationStatuses = [
+            "Placed",
+            "Under Review",
+            "Prescription Review",
+            "Stock Review",
+            "Partially Available",
+            "Awaiting Customer Decision",
+            "Ready for Payment",
+            "Payment Verification",
+            "On Hold",
+        ];
+
+        const cards = this.orders.map((order) => {
+            const reviewActive = preConfirmationStatuses.includes(order.status);
             const startButton = order.status === "Placed"
                 ? `<button class="btn btn-default btn-xs coor-start-review" data-order="${this.escape(order.name)}">بدء المراجعة</button>`
                 : "";
-            const prescriptionButton = Number(order.prescription_required || 0)
+            const prescriptionButton = reviewActive && Number(order.prescription_required || 0)
                 ? `<button class="btn btn-default btn-xs coor-prescription-review" data-order="${this.escape(order.name)}">مراجعة الوصفة</button>`
+                : "";
+            const stockButton = reviewActive && order.status !== "Placed"
+                ? `<button class="btn btn-primary btn-xs coor-stock-review" data-order="${this.escape(order.name)}">مراجعة المخزون</button>`
+                : "";
+            const customerButton = reviewActive && order.status !== "Placed"
+                ? `<button class="btn btn-default btn-xs coor-customer-resolution" data-order="${this.escape(order.name)}">ربط العميل</button>`
+                : "";
+            const deliveryButton = reviewActive && order.status !== "Placed"
+                ? `<button class="btn btn-default btn-xs coor-delivery-zone" data-order="${this.escape(order.name)}">منطقة التوصيل</button>`
+                : "";
+            const finalReadinessButton = reviewActive && order.status !== "Placed"
+                ? `<button class="btn btn-success btn-xs coor-final-readiness" data-order="${this.escape(order.name)}">تأكيد الجاهزية</button>`
                 : "";
             const paymentButton = ["Ready for Payment", "Payment Verification"].includes(order.status)
                 ? `<button class="btn btn-default btn-xs coor-payment-selection" data-order="${this.escape(order.name)}">اختيار الدفع</button>`
@@ -249,8 +405,7 @@ class ControlledOnlineOrderReviewPage {
                 && order.custom_order_confirmation_readiness_status === "Ready"
                 ? `<button class="btn btn-success btn-xs coor-confirm-order" data-order="${this.escape(order.name)}">تأكيد الطلب</button>`
                 : "";
-            const conversionButton = ["Confirmed", "Preparing"].includes(order.status)
-                && !order.sales_invoice
+            const conversionButton = ["Confirmed", "Preparing"].includes(order.status) && !order.sales_invoice
                 ? `<button class="btn btn-primary btn-xs coor-conversion-readiness" data-order="${this.escape(order.name)}">جاهزية التحويل</button>`
                 : "";
             const createDraftButton = ["Confirmed", "Preparing"].includes(order.status)
@@ -259,8 +414,9 @@ class ControlledOnlineOrderReviewPage {
                 ? `<button class="btn btn-success btn-xs coor-create-invoice-draft" data-order="${this.escape(order.name)}">إنشاء مسودة الفاتورة</button>`
                 : "";
             const integrityButton = order.sales_invoice
+                && order.custom_post_conversion_integrity_status !== "Ready"
                 && order.custom_submit_execution_status !== "Submitted"
-                ? `<button class="btn btn-warning btn-xs coor-post-conversion-integrity" data-order="${this.escape(order.name)}">فحص ما بعد التحويل</button>`
+                ? `<button class="btn btn-warning btn-xs coor-post-conversion-integrity" data-order="${this.escape(order.name)}">إعادة فحص سلامة التحويل</button>`
                 : "";
             const submitReadinessButton = order.sales_invoice
                 && order.custom_post_conversion_integrity_status === "Ready"
@@ -277,16 +433,13 @@ class ControlledOnlineOrderReviewPage {
                 : "";
             const deliveryOperational = order.fulfilment_method === "Home Delivery"
                 && order.custom_submit_execution_status === "Submitted";
-            const deliveryManagementButton = deliveryOperational
-                && order.status !== "Completed"
+            const deliveryManagementButton = deliveryOperational && order.status !== "Completed"
                 ? `<button class="btn btn-default btn-xs coor-open-delivery-management">إدارة التوصيل</button>`
                 : "";
-            const deliverySyncButton = deliveryOperational
-                && order.status !== "Completed"
+            const deliverySyncButton = deliveryOperational && order.status !== "Completed"
                 ? `<button class="btn btn-primary btn-xs coor-delivery-sync" data-order="${this.escape(order.name)}">مزامنة التوصيل والتحصيل</button>`
                 : "";
-            const deliveryCompletionReadinessButton = deliveryOperational
-                && order.status === "Delivered"
+            const deliveryCompletionReadinessButton = deliveryOperational && order.status === "Delivered"
                 ? `<button class="btn btn-warning btn-xs coor-delivery-completion-readiness" data-order="${this.escape(order.name)}">جاهزية إكمال التوصيل</button>`
                 : "";
             const completeDeliveryButton = deliveryOperational
@@ -294,86 +447,69 @@ class ControlledOnlineOrderReviewPage {
                 && order.custom_delivery_completion_readiness_status === "Ready"
                 ? `<button class="btn btn-success btn-xs coor-complete-delivery" data-order="${this.escape(order.name)}">إكمال الطلب</button>`
                 : "";
-            const reviewLocked = ["Confirmed", "Preparing"].includes(order.status);
-            const stockButton = reviewLocked
-                ? ""
-                : `<button class="btn btn-primary btn-xs coor-stock-review" data-order="${this.escape(order.name)}">مراجعة المخزون</button>`;
-            const customerButton = reviewLocked
-                ? ""
-                : `<button class="btn btn-default btn-xs coor-customer-resolution" data-order="${this.escape(order.name)}">ربط العميل</button>`;
-            const deliveryButton = reviewLocked
-                ? ""
-                : `<button class="btn btn-default btn-xs coor-delivery-zone" data-order="${this.escape(order.name)}">منطقة التوصيل</button>`;
-            const snapshotButton = reviewLocked
-                ? ""
-                : `<button class="btn btn-default btn-xs coor-view-snapshot" data-order="${this.escape(order.name)}">الجاهزية</button>`;
-            const finalReadinessButton = reviewLocked
-                ? ""
-                : `<button class="btn btn-success btn-xs coor-final-readiness" data-order="${this.escape(order.name)}">تأكيد الجاهزية</button>`;
+            const detailsButton = `<button class="btn btn-default btn-xs coor-view-snapshot" data-order="${this.escape(order.name)}">التفاصيل والجاهزية</button>`;
+
+            const conversionText = order.sales_invoice
+                ? `${this.escape(order.sales_invoice)} — ${this.escape(order.custom_submit_execution_status || "Pending")}`
+                : `${this.escape(order.custom_conversion_readiness_status || "Pending")} / ${this.escape(order.custom_conversion_execution_status || "Pending")}`;
+            const deliveryText = order.fulfilment_method === "Home Delivery"
+                ? `${this.escape(order.delivery_status_snapshot || order.status || "-")} / ${this.escape(order.custom_delivery_sync_status || "Pending")}`
+                : this.escape(order.status || "-");
+
             return `
-                <tr>
-                    <td><a href="#" class="coor-order-link coor-open-order" data-order="${this.escape(order.name)}">${this.escape(order.name)}</a></td>
-                    <td>${this.status_badge(order.status)}</td>
-                    <td>${this.escape(order.customer_name || "-")}<br><small>${this.escape(order.customer || order.customer_resolution_status || "Unresolved")}</small></td>
-                    <td dir="ltr">${this.escape(order.mobile_no || "-")}</td>
-                    <td>${this.escape(order.fulfilment_method || "-")}</td>
-                    <td>${this.escape(this.money(order.grand_total, order.currency))}</td>
-                    <td>${this.escape(order.payment_method || "-")}<br><small>${this.escape(order.payment_status || "-")}</small></td>
-                    <td>${this.escape(order.custom_order_confirmation_readiness_status || "Pending")}</td>
-                    <td>
-                        ${order.sales_invoice
-                            ? `<a href="#" class="coor-open-sales-invoice" data-invoice="${this.escape(order.sales_invoice)}">${this.escape(order.sales_invoice)}</a>`
-                            : this.escape(order.custom_conversion_execution_status || "Pending")}
-                        <br><small>${this.escape(order.custom_post_conversion_integrity_status || "Pending")} / ${this.escape(order.custom_submit_readiness_status || "Pending")} / ${this.escape(order.custom_submit_execution_status || "Pending")}</small>
-                    </td>
-                    <td>
-                        ${this.escape(order.delivery_status_snapshot || order.status || "-")}
-                        <br><small>${this.escape(order.payment_status || "-")} / ${this.escape(order.custom_delivery_sync_status || "Pending")} / ${this.escape(order.custom_delivery_completion_readiness_status || "Pending")}</small>
-                        ${order.delivery_boy ? `<br><small>${this.escape(order.delivery_boy)} ${order.delivery_trip ? `/ ${this.escape(order.delivery_trip)}` : ""}</small>` : ""}
-                    </td>
-                    <td class="coor-rx">${Number(order.prescription_required || 0) ? "نعم" : "لا"}</td>
-                    <td>${this.escape(order.prescription_review_status || "-")}</td>
-                    <td>${this.escape(frappe.datetime.str_to_user(order.creation))}</td>
-                    <td>
-                        <div class="coor-actions">
-                            ${startButton}
-                            ${prescriptionButton}
-                            ${stockButton}
-                            ${customerButton}
-                            ${deliveryButton}
-                            ${snapshotButton}
-                            ${finalReadinessButton}
-                            ${paymentButton}
-                            ${readinessButton}
-                            ${confirmButton}
-                            ${conversionButton}
-                            ${createDraftButton}
-                            ${integrityButton}
-                            ${submitReadinessButton}
-                            ${submitInvoiceButton}
-                            ${deliveryManagementButton}
-                            ${deliverySyncButton}
-                            ${deliveryCompletionReadinessButton}
-                            ${completeDeliveryButton}
-                            ${openInvoiceButton}
+                <div class="coor-order-card">
+                    <div class="coor-order-head">
+                        <div class="coor-order-title">
+                            <a href="#" class="coor-order-link coor-open-order" data-order="${this.escape(order.name)}">${this.escape(order.name)}</a>
+                            ${this.status_badge(order.status)}
                         </div>
-                    </td>
-                </tr>
+                        <div class="coor-order-time">${this.escape(frappe.datetime.str_to_user(order.creation))}</div>
+                    </div>
+                    <div class="coor-order-grid">
+                        <div class="coor-meta">
+                            <div class="coor-meta-label">العميل والموبايل</div>
+                            <div class="coor-meta-value">${this.escape(order.customer_name || order.customer || "غير مربوط")}<br><span dir="ltr">${this.escape(order.mobile_no || "-")}</span></div>
+                        </div>
+                        <div class="coor-meta">
+                            <div class="coor-meta-label">الاستلام والإجمالي</div>
+                            <div class="coor-meta-value">${this.escape(order.fulfilment_method || "-")}<br><b>${this.escape(this.money(order.grand_total, order.currency))}</b></div>
+                        </div>
+                        <div class="coor-meta">
+                            <div class="coor-meta-label">الدفع والتأكيد</div>
+                            <div class="coor-meta-value">${this.escape(order.payment_method || "-")} — ${this.escape(order.payment_status || "-")}<br>جاهزية التأكيد: ${this.escape(order.custom_order_confirmation_readiness_status || "Pending")}</div>
+                        </div>
+                        <div class="coor-meta">
+                            <div class="coor-meta-label">التحويل والتوصيل</div>
+                            <div class="coor-meta-value">${conversionText}<br>${deliveryText}${order.delivery_boy ? `<br>${this.escape(order.delivery_boy)}` : ""}</div>
+                        </div>
+                    </div>
+                    <div class="coor-actions">
+                        ${startButton}
+                        ${prescriptionButton}
+                        ${stockButton}
+                        ${customerButton}
+                        ${deliveryButton}
+                        ${finalReadinessButton}
+                        ${paymentButton}
+                        ${readinessButton}
+                        ${confirmButton}
+                        ${conversionButton}
+                        ${createDraftButton}
+                        ${integrityButton}
+                        ${submitReadinessButton}
+                        ${submitInvoiceButton}
+                        ${deliveryManagementButton}
+                        ${deliverySyncButton}
+                        ${deliveryCompletionReadinessButton}
+                        ${completeDeliveryButton}
+                        ${openInvoiceButton}
+                        ${detailsButton}
+                    </div>
+                </div>
             `;
         }).join("");
 
-        $container.html(`
-            <div class="coor-table-wrap">
-                <table class="coor-table">
-                    <thead><tr>
-                        <th>الطلب</th><th>الحالة</th><th>العميل</th><th>الموبايل</th>
-                        <th>الاستلام</th><th>الإجمالي</th><th>الدفع</th><th>جاهزية التأكيد</th>
-                        <th>التحويل</th><th>التوصيل/التحصيل</th><th>وصفة</th><th>قرار الوصفة</th><th>وقت الطلب</th><th>الإجراءات</th>
-                    </tr></thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            </div>
-        `);
+        $container.html(`<div class="coor-order-list">${cards}</div>`);
     }
 
     async start_review(orderName) {
@@ -1038,7 +1174,7 @@ class ControlledOnlineOrderReviewPage {
                 dialog.hide();
                 frappe.show_alert({
                     message: result.created
-                        ? __("Sales Invoice Draft {0} created.", [result.sales_invoice])
+                        ? __("Sales Invoice Draft {0} created and post-conversion integrity verified automatically.", [result.sales_invoice])
                         : __("Existing Sales Invoice Draft {0} reused.", [result.sales_invoice]),
                     indicator: "green",
                 });

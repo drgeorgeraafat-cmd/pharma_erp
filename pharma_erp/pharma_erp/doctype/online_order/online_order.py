@@ -1251,18 +1251,45 @@ def create_sales_invoice_draft(order_name: str):
 
     order._guard_confirmation_ready()
     invoice, mapped_rows = _build_sales_invoice_draft(order)
+
+    # The Sales Invoice validate hook normally resets downstream readiness when a
+    # user edits an existing draft. Initial controlled conversion is different:
+    # saving the Online Order from that hook would advance its modified timestamp
+    # while this function still holds an older document instance, causing a
+    # TimestampMismatchError immediately after invoice.insert().
+    invoice.flags.controlled_online_order_conversion = True
+    order_row_links = [
+        (order_row.name if order_row else "", invoice_row)
+        for order_row, invoice_row, _gross_rate in mapped_rows
+    ]
     invoice.insert()
 
     if cint(invoice.docstatus) != 0 or cint(invoice.update_stock):
         frappe.throw(_("Controlled conversion must create a non-stock Draft Sales Invoice."))
 
+    # Reload after insert so any legitimate insert-time integration cannot leave
+    # the Online Order instance stale. Reconnect child rows by their stable names.
+    invoice_item_links = [
+        (order_row_name, invoice_row.name)
+        for order_row_name, invoice_row in order_row_links
+        if order_row_name
+    ]
+    order.reload()
+    order_rows_by_name = {row.name: row for row in order.items}
+
     order.sales_invoice = invoice.name
     order.conversion_path = "Direct Sales Invoice"
     order.converted_by = frappe.session.user
     order.converted_at = now_datetime()
-    for order_row, invoice_row, _gross_rate in mapped_rows:
-        if order_row:
-            order_row.sales_invoice_item = invoice_row.name
+    for order_row_name, invoice_row_name in invoice_item_links:
+        order_row = order_rows_by_name.get(order_row_name)
+        if not order_row:
+            frappe.throw(
+                _("Online Order item row changed during controlled conversion: {0}.").format(
+                    order_row_name
+                )
+            )
+        order_row.sales_invoice_item = invoice_row_name
     order.save(ignore_permissions=True)
     order.add_comment(
         "Info",
