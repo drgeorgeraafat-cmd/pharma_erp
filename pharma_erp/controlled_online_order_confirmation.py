@@ -6,7 +6,7 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, now_datetime, strip_html
+from frappe.utils import cint, flt, getdate, now_datetime, nowdate, strip_html
 
 from pharma_erp.controlled_online_order_review import _snapshot as _review_snapshot
 from pharma_erp.online_order_sales_invoice_events import (
@@ -1036,6 +1036,10 @@ def _submit_invoice_state(invoice) -> dict[str, Any]:
         "currency": invoice.currency or "",
         "grand_total": flt(invoice.grand_total),
         "outstanding_amount": flt(invoice.outstanding_amount),
+        "posting_date": str(invoice.posting_date or ""),
+        "posting_time": str(invoice.posting_time or ""),
+        "due_date": str(invoice.due_date or ""),
+        "set_posting_time": cint(invoice.get("set_posting_time")),
         "custom_online_order": invoice.get("custom_online_order") or "",
         "custom_delivery_shift": invoice.get("custom_delivery_shift") or "",
         "custom_pharmacy_shift": invoice.get("custom_pharmacy_shift") or "",
@@ -1071,26 +1075,76 @@ def _sales_invoice_submit_blockers(order, invoice=None) -> list[str]:
     except frappe.ValidationError as exc:
         blockers.append(_clean_text(exc, 1000))
 
-    if order.fulfilment_method == "Home Delivery":
+    if order.fulfilment_method in {"Home Delivery", "Pharmacy Pickup"}:
         active_shift = shift_finance._current_open_shift(invoice.company)
         if not active_shift:
             blockers.append(
-                _('An open Pharmacy Shift is required before Home Delivery invoice submit.')
+                _(
+                    'An open Pharmacy Shift is required before {0} invoice submit.'
+                ).format(order.fulfilment_method)
             )
         else:
-            active_shift_name = str(active_shift.name or "")
-            current_shift = str(
-                invoice.get("custom_delivery_shift")
-                or invoice.get("custom_pharmacy_shift")
-                or ""
+            active_shift_name = str(active_shift.name or "").strip()
+            current_sales_shift = str(
+                invoice.get("custom_pharmacy_shift") or ""
             ).strip()
-            if current_shift and current_shift != active_shift_name:
+            current_delivery_shift = str(
+                invoice.get("custom_delivery_shift") or ""
+            ).strip()
+
+            if current_sales_shift and current_sales_shift != active_shift_name:
                 blockers.append(
                     _(
-                        'Sales Invoice is linked to delivery shift {0}, but the active shift is {1}.'
-                    ).format(current_shift, active_shift_name)
+                        'Sales Invoice is linked to Pharmacy Shift {0}, but the active shift is {1}.'
+                    ).format(current_sales_shift, active_shift_name)
+                )
+
+            if order.fulfilment_method == "Home Delivery":
+                if current_delivery_shift and current_delivery_shift != active_shift_name:
+                    blockers.append(
+                        _(
+                            'Sales Invoice is linked to delivery shift {0}, but the active shift is {1}.'
+                        ).format(current_delivery_shift, active_shift_name)
+                    )
+            elif current_delivery_shift:
+                blockers.append(
+                    _(
+                        'Pharmacy Pickup Sales Invoice must not use Delivery Shift {0}.'
+                    ).format(current_delivery_shift)
                 )
     return list(dict.fromkeys(blockers))
+
+
+def _prepare_controlled_submit_dates(invoice) -> dict[str, Any]:
+    original_posting_date = str(invoice.posting_date or "")
+    original_due_date = str(invoice.due_date or "")
+    original_set_posting_time = cint(invoice.get("set_posting_time"))
+
+    effective_posting_date = getdate(
+        invoice.posting_date
+        if original_set_posting_time and invoice.posting_date
+        else nowdate()
+    )
+
+    due_date_updated = False
+    if not invoice.due_date or getdate(invoice.due_date) < effective_posting_date:
+        invoice.due_date = effective_posting_date
+        due_date_updated = True
+
+    payment_schedule_rows_updated = 0
+    for row in invoice.get("payment_schedule") or []:
+        if not row.due_date or getdate(row.due_date) < effective_posting_date:
+            row.due_date = effective_posting_date
+            payment_schedule_rows_updated += 1
+
+    return {
+        "original_posting_date": original_posting_date,
+        "original_due_date": original_due_date,
+        "set_posting_time": original_set_posting_time,
+        "effective_posting_date": str(effective_posting_date),
+        "due_date_updated": cint(due_date_updated),
+        "payment_schedule_rows_updated": payment_schedule_rows_updated,
+    }
 
 
 def _sales_invoice_submit_context(order) -> dict[str, Any]:
@@ -1099,7 +1153,7 @@ def _sales_invoice_submit_context(order) -> dict[str, Any]:
     invoice_state = _submit_invoice_state(invoice)
     submitted = bool(invoice and cint(invoice.docstatus) == 1)
     active_shift = ""
-    if invoice and order.fulfilment_method == "Home Delivery":
+    if invoice and order.fulfilment_method in {"Home Delivery", "Pharmacy Pickup"}:
         shift = shift_finance._current_open_shift(invoice.company)
         active_shift = str(shift.name or "") if shift else ""
     readiness = getattr(order, "custom_submit_readiness_status", "Pending") or "Pending"
@@ -1221,6 +1275,7 @@ def submit_controlled_sales_invoice(
     _set_if_has(order, "custom_submit_execution_notes", _clean_text(notes, 1000))
     order.save(ignore_permissions=True)
 
+    submit_date_context = _prepare_controlled_submit_dates(invoice)
     invoice.flags.controlled_online_order_submit = True
     invoice.submit()
     invoice.reload()
@@ -1238,6 +1293,10 @@ def submit_controlled_sales_invoice(
 
     if cint(invoice.docstatus) != 1:
         frappe.throw(_('Controlled Sales Invoice submit did not complete.'))
+    if getdate(invoice.due_date) < getdate(invoice.posting_date):
+        frappe.throw(
+            _('Submitted Sales Invoice Due Date is before its Posting Date.')
+        )
     if cint(invoice.update_stock):
         frappe.throw(_('Submitted Online Order Sales Invoice changed Update Stock.'))
     if invoice_stock_entries:
@@ -1246,6 +1305,29 @@ def submit_controlled_sales_invoice(
         frappe.throw(_('Submitted Sales Invoice did not create the expected GL Entries.'))
     if payment_entry_count_before != payment_entry_count_after:
         frappe.throw(_('Controlled Sales Invoice submit created an unexpected Payment Entry.'))
+
+    if order.fulfilment_method in {"Home Delivery", "Pharmacy Pickup"}:
+        active_shift = shift_finance._current_open_shift(invoice.company)
+        active_shift_name = str(active_shift.name or "").strip() if active_shift else ""
+        invoice_sales_shift = str(
+            invoice.get("custom_pharmacy_shift") or ""
+        ).strip()
+        invoice_delivery_shift = str(
+            invoice.get("custom_delivery_shift") or ""
+        ).strip()
+        if not active_shift_name or invoice_sales_shift != active_shift_name:
+            frappe.throw(
+                _('Submitted Online Order Sales Invoice is not linked to the active Pharmacy Shift.')
+            )
+        if order.fulfilment_method == "Home Delivery":
+            if invoice_delivery_shift != active_shift_name:
+                frappe.throw(
+                    _('Submitted Home Delivery Sales Invoice is not linked to the active Delivery Shift.')
+                )
+        elif invoice_delivery_shift:
+            frappe.throw(
+                _('Submitted Pharmacy Pickup Sales Invoice must not have a Delivery Shift.')
+            )
 
     _set_if_has(order, "custom_submit_execution_status", "Submitted")
     _set_if_has(order, "custom_submit_execution_notes", _clean_text(notes, 1000))
@@ -1264,6 +1346,11 @@ def submit_controlled_sales_invoice(
             "invoice_gl_entries": invoice_gl_entries,
             "invoice_stock_entries": invoice_stock_entries,
             "payment_entries_created": payment_entry_count_after - payment_entry_count_before,
+            "posting_date": str(invoice.posting_date or ""),
+            "due_date": str(invoice.due_date or ""),
+            "submit_date_guard": submit_date_context,
+            "pharmacy_shift": invoice.get("custom_pharmacy_shift") or "",
+            "delivery_shift": invoice.get("custom_delivery_shift") or "",
             "submitted_by": frappe.session.user,
             "submitted_at": now_datetime(),
             "notes": _clean_text(notes, 1000),

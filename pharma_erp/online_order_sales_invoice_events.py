@@ -257,6 +257,51 @@ def _bind_home_delivery_invoice_to_active_shift(doc, order):
 
     return active_shift_name
 
+def _bind_pharmacy_pickup_invoice_to_active_shift(doc, order):
+    """Bind a controlled Pharmacy Pickup invoice to the active sales shift.
+
+    Pickup is represented as Walk In on Sales Invoice, but it is still an
+    Online Order collection that must be posted inside the active Pharmacy
+    Shift. Delivery-shift fields are intentionally left blank because no
+    driver or Delivery Management execution is involved.
+    """
+    if order.fulfilment_method != "Pharmacy Pickup":
+        return ""
+
+    active_shift = shift_finance._current_open_shift(doc.company)
+    if not active_shift:
+        frappe.throw(
+            _(
+                "An open Pharmacy Shift is required before submitting a "
+                "Pharmacy Pickup Sales Invoice. Open the shift first, then retry."
+            )
+        )
+
+    active_shift_name = str(active_shift.name or "").strip()
+    current_sales_shift = str(doc.get("custom_pharmacy_shift") or "").strip()
+    current_delivery_shift = str(doc.get("custom_delivery_shift") or "").strip()
+
+    if current_sales_shift and current_sales_shift != active_shift_name:
+        frappe.throw(
+            _(
+                "Sales Invoice is linked to Pharmacy Shift {0}, but the active "
+                "shift is {1}. Use the controlled shift process."
+            ).format(current_sales_shift, active_shift_name)
+        )
+
+    if current_delivery_shift:
+        frappe.throw(
+            _(
+                "Pharmacy Pickup Sales Invoice must not use Delivery Shift {0}."
+            ).format(current_delivery_shift)
+        )
+
+    if doc.meta.has_field("custom_pharmacy_shift"):
+        doc.custom_pharmacy_shift = active_shift_name
+
+    return active_shift_name
+
+
 def before_submit_linked_online_order_invoice(doc, method=None):
     order = _get_order(doc)
     if not order:
@@ -289,6 +334,7 @@ def before_submit_linked_online_order_invoice(doc, method=None):
         )
 
     _bind_home_delivery_invoice_to_active_shift(doc, order)
+    _bind_pharmacy_pickup_invoice_to_active_shift(doc, order)
 
     if order.status == "Confirmed":
         order.status = "Preparing"

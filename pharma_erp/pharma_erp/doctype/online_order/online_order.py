@@ -1397,6 +1397,37 @@ def create_pickup_payment_draft(
     if invoice.get("custom_online_order") != order.name:
         frappe.throw(_("The linked Sales Invoice does not point back to this Online Order."))
 
+    from pharma_erp.pharma_erp import payment_card_management as shift_finance
+
+    active_shift = shift_finance._current_open_shift(order.company)
+    if not active_shift:
+        frappe.throw(
+            _("An open Pharmacy Shift is required before pickup collection.")
+        )
+    active_shift_name = str(active_shift.name or "").strip()
+    invoice_sales_shift = str(
+        invoice.get("custom_pharmacy_shift") or ""
+    ).strip()
+    invoice_delivery_shift = str(
+        invoice.get("custom_delivery_shift") or ""
+    ).strip()
+    if not invoice_sales_shift:
+        frappe.throw(
+            _("Sales Invoice must be linked to a Pharmacy Shift before pickup collection.")
+        )
+    if not frappe.db.exists("Pharmacy Shift Closing", invoice_sales_shift):
+        frappe.throw(
+            _("Sales Invoice Pharmacy Shift {0} was not found.").format(
+                invoice_sales_shift
+            )
+        )
+    if invoice_delivery_shift:
+        frappe.throw(
+            _(
+                "Pharmacy Pickup Sales Invoice must not use Delivery Shift {0}."
+            ).format(invoice_delivery_shift)
+        )
+
     outstanding = max(0, flt(invoice.outstanding_amount))
     if outstanding <= PAYMENT_TOLERANCE:
         frappe.throw(_("The linked Sales Invoice has no outstanding amount to collect."))
@@ -1445,41 +1476,130 @@ def create_pickup_payment_draft(
         )
 
     bank_account = _mode_of_payment_account(mode_of_payment, order.company)
-    account_type = frappe.db.get_value("Account", bank_account, "account_type")
+    account_values = frappe.db.get_value(
+        "Account",
+        bank_account,
+        ["account_type", "account_currency"],
+        as_dict=True,
+    )
+    account_type = str(account_values.get("account_type") or "")
     reference_no = str(reference_no or "").strip()
     if account_type == "Bank" and not reference_no:
         frappe.throw(_("Reference No is required for bank collection."))
 
-    from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
-
-    payment_entry = get_payment_entry(
-        "Sales Invoice",
-        invoice.name,
-        party_amount=outstanding,
-        bank_account=bank_account,
-        reference_date=reference_date or today(),
-        ignore_permissions=True,
+    receivable_values = frappe.db.get_value(
+        "Account",
+        invoice.debit_to,
+        ["company", "is_group", "disabled", "account_type", "account_currency"],
+        as_dict=True,
     )
-    payment_entry.mode_of_payment = mode_of_payment
-    payment_entry.posting_date = today()
+    if not receivable_values:
+        frappe.throw(_("Sales Invoice receivable account was not found."))
+    if receivable_values.get("company") != order.company:
+        frappe.throw(_("Sales Invoice receivable account belongs to another company."))
+    if cint(receivable_values.get("is_group")) or cint(receivable_values.get("disabled")):
+        frappe.throw(_("Sales Invoice receivable account is not available for posting."))
+    if receivable_values.get("account_type") != "Receivable":
+        frappe.throw(_("Sales Invoice debit account must be a Receivable account."))
+
+    company_currency = frappe.get_cached_value(
+        "Company", order.company, "default_currency"
+    )
+    party_currency = (
+        receivable_values.get("account_currency")
+        or invoice.get("party_account_currency")
+        or company_currency
+    )
+    destination_currency = account_values.get("account_currency") or company_currency
+    received_amount = requested_amount
+    if party_currency != destination_currency:
+        if destination_currency == company_currency:
+            received_amount = flt(requested_amount * flt(invoice.conversion_rate or 1), 6)
+        else:
+            frappe.throw(
+                _("Pickup collection does not support this account currency combination.")
+            )
+
+    from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
+        get_accounting_dimensions,
+    )
+    from pharma_erp.pharma_erp.delivery_collection import (
+        ControlledDeliveryPaymentEntry,
+    )
+
+    posting_date = today()
+    payment_entry = ControlledDeliveryPaymentEntry(
+        {
+            "doctype": "Payment Entry",
+            "payment_type": "Receive",
+            "company": order.company,
+            "company_currency": company_currency,
+            "cost_center": invoice.get("cost_center"),
+            "posting_date": posting_date,
+            "reference_date": reference_date or posting_date,
+            "mode_of_payment": mode_of_payment,
+            "party_type": "Customer",
+            "party": order.customer,
+            "contact_person": invoice.get("contact_person"),
+            "paid_from": invoice.debit_to,
+            "paid_to": bank_account,
+            "paid_from_account_currency": party_currency,
+            "paid_to_account_currency": destination_currency,
+            "paid_from_account_type": receivable_values.get("account_type"),
+            "paid_to_account_type": account_type,
+            "paid_amount": requested_amount,
+            "received_amount": received_amount,
+            "letter_head": invoice.get("letter_head"),
+        }
+    )
+
+    payment_entry.project = invoice.get("project") or next(
+        (
+            row.get("project")
+            for row in invoice.get("items") or []
+            if row.get("project")
+        ),
+        None,
+    )
+    for dimension in get_accounting_dimensions():
+        payment_entry.set(dimension, invoice.get(dimension))
+
     payment_entry.reference_no = reference_no or order.name
-    payment_entry.reference_date = reference_date or today()
+    payment_entry.reference_date = reference_date or posting_date
     payment_entry.remarks = _(
         "Pharmacy pickup collection for Online Order {0} against Sales Invoice {1}."
     ).format(order.name, invoice.name)
     payment_entry.custom_online_order = order.name
+    if payment_entry.meta.has_field("custom_pharmacy_shift"):
+        payment_entry.custom_pharmacy_shift = active_shift_name
+    if payment_entry.meta.has_field("custom_delivery_shift"):
+        payment_entry.custom_delivery_shift = None
 
-    matching_rows = [
-        row
-        for row in payment_entry.references
-        if row.reference_doctype == "Sales Invoice" and row.reference_name == invoice.name
-    ]
-    if len(matching_rows) != 1:
-        frappe.throw(_("Payment Entry did not resolve exactly one Sales Invoice reference."))
-    matching_rows[0].allocated_amount = outstanding
-    payment_entry.set_missing_values()
-    payment_entry.set_amounts()
-    payment_entry.insert(ignore_permissions=True)
+    payment_entry.append(
+        "references",
+        {
+            "reference_doctype": "Sales Invoice",
+            "reference_name": invoice.name,
+            "allocated_amount": outstanding,
+        },
+    )
+
+    previous_ignore_account_permission = bool(
+        getattr(frappe.flags, "ignore_account_permission", False)
+    )
+    frappe.flags.ignore_account_permission = True
+    try:
+        payment_entry.flags.ignore_permissions = True
+        payment_entry.insert(ignore_permissions=True)
+    finally:
+        frappe.flags.ignore_account_permission = previous_ignore_account_permission
+
+    if cint(payment_entry.docstatus) != 0:
+        frappe.throw(_("Pickup collection must create a Draft Payment Entry only."))
+    if payment_entry.get("custom_pharmacy_shift") != active_shift_name:
+        frappe.throw(_("Pickup Payment Entry was not linked to the active Pharmacy Shift."))
+    if payment_entry.get("custom_delivery_shift"):
+        frappe.throw(_("Pickup Payment Entry must not use a Delivery Shift."))
 
     order.payment_entry = payment_entry.name
     order.payment_status = "Collection Draft Created"
@@ -1498,9 +1618,9 @@ def create_pickup_payment_draft(
     )
     order.add_comment(
         "Info",
-        _("Pickup Payment Entry Draft {0} created for {1}.").format(
-            payment_entry.name, outstanding
-        ),
+        _(
+            "Pickup Payment Entry Draft {0} created for {1} in Pharmacy Shift {2}."
+        ).format(payment_entry.name, outstanding, active_shift_name),
     )
 
     return {
@@ -1508,6 +1628,7 @@ def create_pickup_payment_draft(
         "sales_invoice": invoice.name,
         "payment_entry": payment_entry.name,
         "payment_entry_docstatus": cint(payment_entry.docstatus),
+        "pharmacy_shift": active_shift_name,
         "amount": flt(outstanding),
         "payment_status": order.payment_status,
     }

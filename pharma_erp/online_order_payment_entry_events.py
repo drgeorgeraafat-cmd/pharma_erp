@@ -197,6 +197,38 @@ def validate_linked_online_order_payment(doc, method=None):
     _assert_controlled_reference(doc, order)
     _assert_exact_collection_amount(doc, order)
 
+    from pharma_erp.pharma_erp import payment_card_management as shift_finance
+
+    active_shift = shift_finance._current_open_shift(order.company)
+    if not active_shift:
+        frappe.throw(
+            _("An open Pharmacy Shift is required before pickup collection submit.")
+        )
+    active_shift_name = str(active_shift.name or "").strip()
+    payment_shift = str(doc.get("custom_pharmacy_shift") or "").strip()
+    delivery_shift = str(doc.get("custom_delivery_shift") or "").strip()
+    if payment_shift != active_shift_name:
+        frappe.throw(
+            _(
+                "Pickup Payment Entry must be linked to the active Pharmacy Shift {0}."
+            ).format(active_shift_name)
+        )
+
+    # Older Payment Entry shift normalization may mirror the canonical pharmacy
+    # shift into the legacy Delivery Shift field while validate hooks run.
+    # Pharmacy Pickup never owns a delivery shift, so canonicalize the field
+    # back to empty at the final Online Order validation boundary.
+    if delivery_shift and doc.meta.has_field("custom_delivery_shift"):
+        doc.custom_delivery_shift = None
+        delivery_shift = ""
+
+    if delivery_shift:
+        frappe.throw(
+            _(
+                "Pickup Payment Entry must not use Delivery Shift {0}."
+            ).format(delivery_shift)
+        )
+
     if order.payment_entry and order.payment_entry != doc.name:
         linked_status = cint(
             frappe.db.get_value("Payment Entry", order.payment_entry, "docstatus")

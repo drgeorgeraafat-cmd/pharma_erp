@@ -554,36 +554,115 @@ SERVER_SCRIPTS.update(
             "Payment Entry",
             "Before Save",
             """
+sales_shifts = []
+delivery_shifts = []
+received_by_values = []
+order_types = []
+referenced_invoice_count = 0
+
+invoice_meta = frappe.get_meta("Sales Invoice")
+payment_entry_meta = frappe.get_meta("Payment Entry")
+
+for reference in doc.get("references") or []:
+    if reference.reference_doctype != "Sales Invoice":
+        continue
+
+    fields = ["name"]
+    for fieldname in [
+        "custom_pharmacy_shift",
+        "custom_delivery_shift",
+        "custom_collection_received_by",
+        "custom_order_type",
+    ]:
+        if invoice_meta.has_field(fieldname):
+            fields.append(fieldname)
+
+    invoice = frappe.db.get_value(
+        "Sales Invoice",
+        reference.reference_name,
+        fields,
+        as_dict=True,
+    )
+
+    if not invoice:
+        continue
+
+    referenced_invoice_count += 1
+    sales_shift = invoice.get("custom_pharmacy_shift") or ""
+    invoice_delivery_shift = invoice.get("custom_delivery_shift") or ""
+    received_by = invoice.get("custom_collection_received_by") or ""
+    order_type = invoice.get("custom_order_type") or ""
+
+    if sales_shift and sales_shift not in sales_shifts:
+        sales_shifts.append(sales_shift)
+
+    if order_type == "Home Delivery":
+        delivery_shift = invoice_delivery_shift or sales_shift
+        if delivery_shift and delivery_shift not in delivery_shifts:
+            delivery_shifts.append(delivery_shift)
+
+    if received_by and received_by not in received_by_values:
+        received_by_values.append(received_by)
+    if order_type and order_type not in order_types:
+        order_types.append(order_type)
+
+if len(sales_shifts) > 1:
+    frappe.throw("The referenced invoices belong to different sales shifts.")
+
+if len(delivery_shifts) > 1:
+    frappe.throw("The referenced Home Delivery invoices belong to different delivery shifts.")
+
+sales_shift = sales_shifts[0] if sales_shifts else ""
+delivery_shift = delivery_shifts[0] if delivery_shifts else ""
+has_home_delivery = "Home Delivery" in order_types
+
+if payment_entry_meta.has_field("custom_pharmacy_shift") and sales_shift:
+    if has_home_delivery or not doc.get("custom_pharmacy_shift"):
+        doc.custom_pharmacy_shift = sales_shift
+
+if payment_entry_meta.has_field("custom_sales_shift") and sales_shift:
+    doc.custom_sales_shift = sales_shift
+
+if payment_entry_meta.has_field("custom_delivery_shift"):
+    if has_home_delivery and delivery_shift:
+        doc.custom_delivery_shift = delivery_shift
+    elif referenced_invoice_count and not has_home_delivery:
+        doc.custom_delivery_shift = None
+
+is_driver_cash = (
+    doc.mode_of_payment == "Cash"
+    and has_home_delivery
+    and "Delivery Boy" in received_by_values
+)
+
 if (
-    frappe.get_meta("Payment Entry").has_field("custom_pharmacy_shift")
-    and not doc.get("custom_pharmacy_shift")
+    payment_entry_meta.has_field("custom_collection_shift")
+    and not doc.get("custom_collection_shift")
+    and not is_driver_cash
 ):
-    referenced_shifts = []
+    shift_rows = frappe.get_all(
+        "Pharmacy Shift Closing",
+        filters={
+            "company": doc.company,
+            "docstatus": 0,
+            "custom_shift_operational_status": "Active",
+        },
+        fields=["name", "cashier", "owner", "creation"],
+        order_by="creation desc",
+        limit_page_length=100,
+    )
 
-    if frappe.get_meta("Sales Invoice").has_field("custom_pharmacy_shift"):
-        for reference in doc.get("references") or []:
-            if reference.reference_doctype != "Sales Invoice":
-                continue
+    selected = None
+    for row in shift_rows:
+        if row.cashier == frappe.session.user or row.owner == frappe.session.user:
+            selected = row
+            break
 
-            shift_reference = frappe.db.get_value(
-                "Sales Invoice",
-                reference.reference_name,
-                "custom_pharmacy_shift",
-            )
+    if not selected and shift_rows:
+        selected = shift_rows[0]
 
-            if (
-                shift_reference
-                and shift_reference not in referenced_shifts
-            ):
-                referenced_shifts.append(shift_reference)
-
-    if len(referenced_shifts) > 1:
-        frappe.throw(
-            "The referenced invoices belong to different pharmacy shifts."
-        )
-
-    if referenced_shifts:
-        doc.custom_pharmacy_shift = referenced_shifts[0]
+    if selected:
+        doc.custom_collection_shift = selected.name
 """,
         ),
     }
