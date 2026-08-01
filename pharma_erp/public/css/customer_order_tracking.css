@@ -1,0 +1,273 @@
+.pharma-tracking {
+    --tracking-border: #e7e9ee;
+    --tracking-muted: #667085;
+    --tracking-ink: #182230;
+    --tracking-soft: #f7f8fa;
+    --tracking-success: #177245;
+    max-width: 760px;
+    margin: 1.5rem auto 3rem;
+    padding: 0 1rem;
+    color: var(--tracking-ink);
+    font-family: "Tajawal", "Cairo", system-ui, -apple-system, sans-serif;
+}
+
+.pharma-tracking__brand {
+    display: flex;
+    align-items: center;
+    gap: .9rem;
+    margin-bottom: 1.1rem;
+}
+
+.pharma-tracking__brand img {
+    width: 58px;
+    height: 58px;
+    border-radius: 14px;
+    object-fit: contain;
+    border: 1px solid var(--tracking-border);
+    background: #fff;
+}
+
+.pharma-tracking__brand p,
+.pharma-tracking__brand h1 {
+    margin: 0;
+}
+
+.pharma-tracking__brand p {
+    color: var(--tracking-muted);
+    font-size: .86rem;
+}
+
+.pharma-tracking__brand h1 {
+    margin-top: .15rem;
+    font-size: 1.25rem;
+}
+
+.pharma-tracking__message,
+.pharma-tracking__card,
+.pharma-tracking__status-card {
+    border: 1px solid var(--tracking-border);
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: 0 8px 28px rgba(16, 24, 40, .05);
+}
+
+.pharma-tracking__message {
+    padding: 1rem;
+    text-align: center;
+}
+
+.pharma-tracking__message--error {
+    color: #9f1c1c;
+    background: #fff5f5;
+    border-color: #fecaca;
+}
+
+.pharma-tracking__status-card {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    background: linear-gradient(135deg, #f0fff7, #fff);
+    border-color: #ccebdc;
+}
+
+.pharma-tracking__status-icon {
+    display: grid;
+    place-items: center;
+    width: 50px;
+    height: 50px;
+    flex: 0 0 50px;
+    border-radius: 50%;
+    color: #fff;
+    background: var(--tracking-success);
+    font-weight: 800;
+    font-size: 1.4rem;
+}
+
+.pharma-tracking__eyebrow {
+    margin: 0 0 .15rem;
+    color: var(--tracking-muted);
+    font-size: .8rem;
+}
+
+.pharma-tracking__status-card h2 {
+    margin: 0;
+    font-size: 1.35rem;
+}
+
+.pharma-tracking__status-card p:last-child {
+    margin: .35rem 0 0;
+    color: var(--tracking-muted);
+    line-height: 1.7;
+}
+
+.pharma-tracking__card {
+    padding: 1.15rem;
+    margin-bottom: 1rem;
+}
+
+.pharma-tracking__card h3 {
+    margin: 0 0 1rem;
+    font-size: 1.05rem;
+}
+
+.pharma-tracking__details {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .75rem;
+    margin: 0;
+}
+
+.pharma-tracking__details > div {
+    padding: .85rem;
+    border-radius: 12px;
+    background: var(--tracking-soft);
+}
+
+.pharma-tracking__details dt {
+    color: var(--tracking-muted);
+    font-size: .78rem;
+    margin-bottom: .25rem;
+}
+
+.pharma-tracking__details dd {
+    margin: 0;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.pharma-tracking__timeline {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.pharma-tracking__timeline li {
+    position: relative;
+    min-height: 58px;
+    padding: 0 42px 1rem 0;
+}
+
+.pharma-tracking__timeline li::before {
+    content: "";
+    position: absolute;
+    right: 10px;
+    top: 24px;
+    bottom: -2px;
+    width: 2px;
+    background: #dde1e7;
+}
+
+.pharma-tracking__timeline li:last-child::before {
+    display: none;
+}
+
+.pharma-tracking__timeline-marker {
+    position: absolute;
+    right: 0;
+    top: 2px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 3px solid #cbd1da;
+    background: #fff;
+}
+
+.pharma-tracking__timeline li.is-done .pharma-tracking__timeline-marker,
+.pharma-tracking__timeline li.is-current .pharma-tracking__timeline-marker {
+    border-color: var(--tracking-success);
+    background: var(--tracking-success);
+}
+
+.pharma-tracking__timeline li.is-current .pharma-tracking__timeline-marker {
+    box-shadow: 0 0 0 5px rgba(23, 114, 69, .12);
+}
+
+.pharma-tracking__timeline-title {
+    font-weight: 700;
+}
+
+.pharma-tracking__timeline-time {
+    display: block;
+    color: var(--tracking-muted);
+    font-size: .78rem;
+    margin-top: .2rem;
+}
+
+.pharma-tracking__timeline li.is-upcoming {
+    color: #98a2b3;
+}
+
+.pharma-tracking__items {
+    display: grid;
+    gap: .65rem;
+}
+
+.pharma-tracking__item {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .8rem .9rem;
+    border-radius: 12px;
+    background: var(--tracking-soft);
+}
+
+.pharma-tracking__item strong {
+    overflow-wrap: anywhere;
+}
+
+.pharma-tracking__item span {
+    white-space: nowrap;
+    color: var(--tracking-muted);
+}
+
+.pharma-tracking__rx {
+    display: inline-block;
+    margin-right: .4rem;
+    color: #9a6700;
+    font-size: .75rem;
+}
+
+.pharma-tracking__privacy {
+    padding: .9rem 1rem;
+    color: var(--tracking-muted);
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    border-radius: 14px;
+    line-height: 1.7;
+    font-size: .82rem;
+}
+
+.pharma-tracking__actions {
+    margin-top: 1rem;
+    text-align: center;
+}
+
+.pharma-tracking__actions a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: .7rem 1.2rem;
+    border-radius: 12px;
+    color: #fff;
+    background: var(--tracking-success);
+    text-decoration: none;
+    font-weight: 700;
+}
+
+@media (max-width: 640px) {
+    .pharma-tracking {
+        margin-top: .75rem;
+        padding: 0 .7rem;
+    }
+
+    .pharma-tracking__details {
+        grid-template-columns: 1fr;
+    }
+
+    .pharma-tracking__status-card {
+        align-items: flex-start;
+    }
+}

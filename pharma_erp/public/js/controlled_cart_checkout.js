@@ -575,6 +575,13 @@
             document.getElementById("pharma-success-fulfilment").textContent = receipt.fulfilment_method;
             document.getElementById("pharma-success-total").textContent = receipt.grand_total_formatted;
             document.getElementById("pharma-success-payment").textContent = receipt.payment_status;
+            const trackingLink = document.getElementById("pharma-success-track");
+            const trackingNote = document.getElementById("pharma-success-tracking-note");
+            if (trackingLink && receipt.tracking_url) {
+                trackingLink.href = receipt.tracking_url;
+                trackingLink.hidden = false;
+                if (trackingNote) trackingNote.hidden = false;
+            }
             if (receipt.delivery_fee_pending_review) {
                 document.getElementById("pharma-success-delivery-note").hidden = false;
             }

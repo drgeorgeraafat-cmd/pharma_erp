@@ -15,6 +15,7 @@ from pharma_erp.controlled_online_order_confirmation import (
     PUBLIC_PAYMENT_OPTIONS,
 )
 from pharma_erp.controlled_product_listing import _catalog_brand, _format_public_price
+from pharma_erp.customer_order_tracking import tracking_url_for_order_name
 
 MAX_CART_LINES = 25
 MAX_LINE_QTY = 99
@@ -268,6 +269,7 @@ def _safe_order_receipt(order_name: str, checkout_token: str) -> dict[str, Any]:
         order_by="idx asc",
     )
     currency = row.get("currency") or "EGP"
+    tracking_url = tracking_url_for_order_name(order_name)
     return {
         "online_order": row.get("name"),
         "status": row.get("status"),
@@ -307,6 +309,8 @@ def _safe_order_receipt(order_name: str, checkout_token: str) -> dict[str, Any]:
         "sales_invoice_created": 0,
         "sales_order_created": 0,
         "quotation_created": 0,
+        "tracking_available": cint(bool(tracking_url)),
+        "tracking_url": tracking_url,
     }
 
 

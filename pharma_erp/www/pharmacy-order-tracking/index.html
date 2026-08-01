@@ -1,0 +1,84 @@
+{% extends "templates/web.html" %}
+
+{% block title %}تتبع الطلب{% endblock %}
+
+{% block head_include %}
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<link rel="stylesheet" href="/assets/pharma_erp/css/customer_order_tracking.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-tracking" dir="rtl"
+         id="pharma-customer-order-tracking"
+         data-endpoint="/api/method/pharma_erp.customer_order_tracking.get_public_order_tracking">
+    <header class="pharma-tracking__brand">
+        {% if brand and brand.company_logo %}
+        <img src="{{ brand.company_logo }}" alt="{{ brand.company_name or 'الصيدلية' }}">
+        {% endif %}
+        <div>
+            <p>تتبع طلبك</p>
+            <h1>{{ brand.company_name or "الصيدلية" }}</h1>
+        </div>
+    </header>
+
+    <div id="pharma-tracking-loading" class="pharma-tracking__message">
+        جارٍ تحميل حالة الطلب…
+    </div>
+    <div id="pharma-tracking-error" class="pharma-tracking__message pharma-tracking__message--error" hidden>
+    </div>
+
+    <main id="pharma-tracking-content" hidden>
+        <article class="pharma-tracking__status-card">
+            <div class="pharma-tracking__status-icon" aria-hidden="true">✓</div>
+            <div>
+                <p class="pharma-tracking__eyebrow">الحالة الحالية</p>
+                <h2 id="pharma-tracking-status"></h2>
+                <p id="pharma-tracking-status-message"></p>
+            </div>
+        </article>
+
+        <article class="pharma-tracking__card">
+            <h3>بيانات الطلب</h3>
+            <dl class="pharma-tracking__details">
+                <div><dt>رقم الطلب</dt><dd id="pharma-tracking-order"></dd></div>
+                <div><dt>تاريخ الطلب</dt><dd id="pharma-tracking-date"></dd></div>
+                <div><dt>طريقة الاستلام</dt><dd id="pharma-tracking-fulfilment"></dd></div>
+                <div><dt>إجمالي الطلب</dt><dd id="pharma-tracking-total"></dd></div>
+                <div><dt>حالة الدفع</dt><dd id="pharma-tracking-payment"></dd></div>
+                <div id="pharma-tracking-payment-method-row"><dt>طريقة الدفع</dt><dd id="pharma-tracking-payment-method"></dd></div>
+            </dl>
+        </article>
+
+        <article id="pharma-tracking-driver-card" class="pharma-tracking__card" hidden>
+            <h3>التوصيل</h3>
+            <dl class="pharma-tracking__details">
+                <div><dt>المندوب</dt><dd id="pharma-tracking-driver"></dd></div>
+                <div id="pharma-tracking-estimate-row" hidden><dt>الوقت التقديري</dt><dd id="pharma-tracking-estimate"></dd></div>
+            </dl>
+        </article>
+
+        <article class="pharma-tracking__card">
+            <h3>مراحل الطلب</h3>
+            <ol id="pharma-tracking-timeline" class="pharma-tracking__timeline"></ol>
+        </article>
+
+        <article class="pharma-tracking__card">
+            <h3>الأصناف</h3>
+            <div id="pharma-tracking-items" class="pharma-tracking__items"></div>
+        </article>
+
+        <aside class="pharma-tracking__privacy">
+            صفحة التتبع للعرض فقط. لا تعرض الحسابات الداخلية أو بيانات الوردية أو ملاحظات الموظفين.
+        </aside>
+
+        <div class="pharma-tracking__actions">
+            <a href="/pharmacy-shop/">العودة إلى المتجر</a>
+        </div>
+    </main>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/customer_order_tracking.js"></script>
+{% endblock %}

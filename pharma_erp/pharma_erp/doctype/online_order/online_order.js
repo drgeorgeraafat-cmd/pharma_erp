@@ -41,6 +41,8 @@ frappe.ui.form.on("Online Order", {
 
         if (frm.is_new()) return;
 
+        addCustomerTrackingActions(frm);
+
         for (const target of statusTransitions(frm)) {
             frm.add_custom_button(__(target), () => changeStatus(frm, target), __("Status"));
         }
@@ -485,5 +487,122 @@ async function completeHomeDelivery(frm) {
             result.payment_status,
         ]),
         indicator: "green",
+    });
+}
+
+function addCustomerTrackingActions(frm) {
+    if (!frm.fields_dict.custom_tracking_enabled) return;
+
+    const enabled = Number(frm.doc.custom_tracking_enabled || 0) === 1;
+
+    if (enabled) {
+        frm.add_custom_button(
+            __("Open Customer Tracking"),
+            async () => {
+                const result = await getCustomerTrackingLink(frm);
+                if (result.tracking_url) {
+                    window.open(result.tracking_url, "_blank", "noopener,noreferrer");
+                }
+            },
+            __("Customer Tracking"),
+        );
+
+        frm.add_custom_button(
+            __("Copy Customer Tracking Link"),
+            async () => {
+                const result = await getCustomerTrackingLink(frm);
+                if (!result.tracking_url) return;
+                await copyText(result.tracking_url);
+                frappe.show_alert({
+                    message: __("Customer tracking link copied."),
+                    indicator: "green",
+                });
+            },
+            __("Customer Tracking"),
+        );
+    }
+
+    frm.add_custom_button(
+        __("Rotate Customer Tracking Link"),
+        async () => {
+            const confirmed = await confirmAction(
+                __("Rotate the customer tracking link? The previous link will stop working immediately."),
+            );
+            if (!confirmed) return;
+            const response = await frappe.call({
+                method: "pharma_erp.customer_order_tracking.rotate_staff_tracking_link",
+                args: { online_order: frm.doc.name },
+                freeze: true,
+                freeze_message: __("Rotating customer tracking link..."),
+            });
+            await frm.reload_doc();
+            const result = response.message || {};
+            if (result.tracking_url) await copyText(result.tracking_url);
+            frappe.show_alert({
+                message: __("New customer tracking link created and copied."),
+                indicator: "green",
+            });
+        },
+        __("Customer Tracking"),
+    );
+
+    if (enabled) {
+        frm.add_custom_button(
+            __("Revoke Customer Tracking Link"),
+            async () => {
+                const confirmed = await confirmAction(
+                    __("Revoke the customer tracking link? The customer will no longer be able to open it."),
+                );
+                if (!confirmed) return;
+                await frappe.call({
+                    method: "pharma_erp.customer_order_tracking.revoke_staff_tracking_link",
+                    args: { online_order: frm.doc.name },
+                    freeze: true,
+                    freeze_message: __("Revoking customer tracking link..."),
+                });
+                await frm.reload_doc();
+                frappe.show_alert({
+                    message: __("Customer tracking link revoked."),
+                    indicator: "orange",
+                });
+            },
+            __("Customer Tracking"),
+        );
+    }
+}
+
+async function getCustomerTrackingLink(frm) {
+    const response = await frappe.call({
+        method: "pharma_erp.customer_order_tracking.get_staff_tracking_link",
+        args: { online_order: frm.doc.name },
+        freeze: true,
+        freeze_message: __("Preparing customer tracking link..."),
+    });
+    const result = response.message || {};
+    if (!result.tracking_url) {
+        frappe.throw(__("Customer tracking link is not active."));
+    }
+    return result;
+}
+
+async function copyText(value) {
+    if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return;
+    }
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.setAttribute("readonly", "readonly");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+}
+
+function confirmAction(message) {
+    return new Promise((resolve) => {
+        frappe.confirm(message, () => resolve(true), () => resolve(false));
     });
 }

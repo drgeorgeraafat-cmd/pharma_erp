@@ -200,6 +200,10 @@ app_license = "mit"
 # before_request = ["pharma_erp.utils.before_request"]
 # after_request = ["pharma_erp.utils.after_request"]
 
+after_request = [
+    "pharma_erp.customer_order_tracking.apply_customer_tracking_response_headers"
+]
+
 # Job Events
 # ----------
 # before_job = ["pharma_erp.utils.before_job"]
@@ -266,6 +270,12 @@ doc_events = {
     },
     "Customer": {
         "before_insert": "pharma_erp.customer_events.set_customer_code"
+    },
+    "Online Order": {
+        "before_insert": (
+            "pharma_erp.customer_order_tracking."
+            "prepare_online_order_tracking_identity"
+        ),
     },
     "Purchase Invoice": {
         "validate": "pharma_erp.purchase_management.validate_purchase_invoice",
