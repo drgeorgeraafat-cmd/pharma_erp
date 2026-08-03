@@ -203,6 +203,7 @@ app_license = "mit"
 after_request = [
     "pharma_erp.customer_order_tracking.apply_customer_tracking_response_headers",
     "pharma_erp.customer_account.apply_customer_account_response_headers",
+    "pharma_erp.customer_order_notifications.apply_customer_notification_response_headers",
 ]
 
 # Job Events
@@ -449,3 +450,23 @@ for _step4b_event in ("before_save", "before_update_after_submit"):
     elif _step4b_status_hook not in _step4b_current:
         _step4b_current.append(_step4b_status_hook)
 # END PHARMA STEP 4B LIVE STATUS TIMELINE
+
+
+# BEGIN PHARMA STEP 4C CONTROLLED CUSTOMER NOTIFICATION FOUNDATION
+_step4c_online_order_events = doc_events.setdefault("Online Order", {})
+_step4c_notification_hook = (
+    "pharma_erp.customer_order_notifications.capture_order_notification_intents"
+)
+for _step4c_event in ("on_update", "on_update_after_submit"):
+    _step4c_current = _step4c_online_order_events.get(_step4c_event)
+    if not _step4c_current:
+        _step4c_online_order_events[_step4c_event] = _step4c_notification_hook
+    elif isinstance(_step4c_current, str):
+        if _step4c_current != _step4c_notification_hook:
+            _step4c_online_order_events[_step4c_event] = [
+                _step4c_current,
+                _step4c_notification_hook,
+            ]
+    elif _step4c_notification_hook not in _step4c_current:
+        _step4c_current.append(_step4c_notification_hook)
+# END PHARMA STEP 4C CONTROLLED CUSTOMER NOTIFICATION FOUNDATION

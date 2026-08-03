@@ -412,3 +412,118 @@
         loadAccount();
     });
 })();
+
+
+// Step 4C — controlled customer notification preferences.
+(() => {
+    "use strict";
+
+    async function notificationRequest(endpoint, options = {}) {
+        const response = await fetch(endpoint, {
+            credentials: "same-origin",
+            method: options.method || "GET",
+            headers: {
+                Accept: "application/json",
+                ...(options.body ? { "Content-Type": "application/json" } : {}),
+                ...(options.csrf ? { "X-Frappe-CSRF-Token": options.csrf } : {}),
+            },
+            body: options.body ? JSON.stringify(options.body) : undefined,
+        });
+        let payload = {};
+        try {
+            payload = await response.json();
+        } catch (error) {
+            payload = {};
+        }
+        if (!response.ok) {
+            throw new Error(payload?.message || "تعذر تنفيذ طلب تفضيلات الإشعارات.");
+        }
+        return payload?.message ?? payload;
+    }
+
+    function initNotificationPreferences() {
+        const root = document.getElementById("pharma-customer-account");
+        const form = document.getElementById("pharma-account-notification-form");
+        const status = document.getElementById("pharma-account-notification-status");
+        if (!root || !form || root.dataset.isGuest === "1") return;
+
+        const loadEndpoint = root.dataset.notificationPreferencesEndpoint;
+        const saveEndpoint = root.dataset.notificationPreferencesUpdateEndpoint;
+        const csrf = root.dataset.csrf || "";
+        if (!loadEndpoint || !saveEndpoint) return;
+
+        const setStatus = (message, kind = "") => {
+            status.textContent = message || "";
+            status.dataset.kind = kind;
+        };
+
+        const applyPreferences = (preferences) => {
+            form.elements.order_updates_enabled.checked = Boolean(
+                preferences?.order_updates_enabled
+            );
+            form.elements.email_enabled.checked = Boolean(preferences?.email_enabled);
+            form.elements.whatsapp_enabled.checked = false;
+            form.elements.sms_enabled.checked = false;
+        };
+
+        const setBusy = (busy) => {
+            for (const element of form.elements) {
+                if (element.name === "whatsapp_enabled" || element.name === "sms_enabled") {
+                    continue;
+                }
+                element.disabled = busy;
+            }
+        };
+
+        async function loadPreferences() {
+            setStatus("جارٍ تحميل التفضيلات…");
+            try {
+                const preferences = await notificationRequest(loadEndpoint);
+                applyPreferences(preferences);
+                setStatus(
+                    preferences?.outbound_delivery_enabled
+                        ? "الإرسال الخارجي مفعّل."
+                        : "تم تحميل التفضيلات — الإرسال الخارجي مؤجل حاليًا.",
+                    "success"
+                );
+            } catch (error) {
+                setStatus(error.message || "تعذر تحميل تفضيلات الإشعارات.", "error");
+            }
+        }
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            setBusy(true);
+            setStatus("جارٍ حفظ التفضيلات…");
+            try {
+                const preferences = await notificationRequest(saveEndpoint, {
+                    method: "POST",
+                    csrf,
+                    body: {
+                        payload: {
+                            order_updates_enabled:
+                                form.elements.order_updates_enabled.checked ? 1 : 0,
+                            email_enabled: form.elements.email_enabled.checked ? 1 : 0,
+                            whatsapp_enabled: 0,
+                            sms_enabled: 0,
+                        },
+                    },
+                });
+                applyPreferences(preferences);
+                setStatus("تم حفظ تفضيلات الإشعارات.", "success");
+            } catch (error) {
+                setStatus(error.message || "تعذر حفظ تفضيلات الإشعارات.", "error");
+            } finally {
+                setBusy(false);
+            }
+        });
+
+        loadPreferences();
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initNotificationPreferences);
+    } else {
+        initNotificationPreferences();
+    }
+})();

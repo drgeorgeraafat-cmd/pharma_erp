@@ -1,0 +1,197 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-08-03 13:40:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "online_order",
+  "website_user",
+  "status_event_hash",
+  "event_key",
+  "source_status",
+  "event_at",
+  "channel",
+  "notification_status",
+  "idempotency_key",
+  "recipient_masked",
+  "recipient_hash",
+  "template_key",
+  "subject",
+  "message_preview",
+  "defer_reason",
+  "attempt_count",
+  "last_attempt_at",
+  "provider_reference",
+  "sent_at",
+  "created_at",
+  "is_transactional"
+ ],
+ "fields": [
+  {
+   "fieldname": "online_order",
+   "fieldtype": "Link",
+   "label": "Online Order",
+   "options": "Online Order",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "website_user",
+   "fieldtype": "Link",
+   "label": "Website User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "status_event_hash",
+   "fieldtype": "Data",
+   "label": "Status Event Hash",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "event_key",
+   "fieldtype": "Data",
+   "label": "Customer Status Key",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_status",
+   "fieldtype": "Data",
+   "label": "Source Status",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "event_at",
+   "fieldtype": "Datetime",
+   "label": "Event At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "channel",
+   "fieldtype": "Select",
+   "label": "Channel",
+   "options": "Email\nWhatsApp\nSMS",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "notification_status",
+   "fieldtype": "Select",
+   "label": "Notification Status",
+   "options": "Deferred\nPending\nSent\nFailed\nSkipped",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "idempotency_key",
+   "fieldtype": "Data",
+   "label": "Idempotency Key",
+   "reqd": 1,
+   "unique": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "recipient_masked",
+   "fieldtype": "Data",
+   "label": "Recipient Masked",
+   "read_only": 1
+  },
+  {
+   "fieldname": "recipient_hash",
+   "fieldtype": "Data",
+   "label": "Recipient Hash",
+   "read_only": 1
+  },
+  {
+   "fieldname": "template_key",
+   "fieldtype": "Data",
+   "label": "Template Key",
+   "read_only": 1
+  },
+  {
+   "fieldname": "subject",
+   "fieldtype": "Data",
+   "label": "Subject",
+   "read_only": 1
+  },
+  {
+   "fieldname": "message_preview",
+   "fieldtype": "Small Text",
+   "label": "Message Preview",
+   "read_only": 1
+  },
+  {
+   "fieldname": "defer_reason",
+   "fieldtype": "Small Text",
+   "label": "Defer Reason",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "attempt_count",
+   "fieldtype": "Int",
+   "label": "Attempt Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_attempt_at",
+   "fieldtype": "Datetime",
+   "label": "Last Attempt At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "provider_reference",
+   "fieldtype": "Data",
+   "label": "Provider Reference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sent_at",
+   "fieldtype": "Datetime",
+   "label": "Sent At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "created_at",
+   "fieldtype": "Datetime",
+   "label": "Created At",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_transactional",
+   "fieldtype": "Check",
+   "label": "Transactional",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "modified": "2026-08-03 13:40:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Online Order Customer Notification",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Sales Manager",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "sort_field": "created_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

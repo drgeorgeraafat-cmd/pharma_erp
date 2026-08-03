@@ -17,7 +17,9 @@
          data-address-save-endpoint="/api/method/pharma_erp.customer_account.save_customer_address"
          data-address-default-endpoint="/api/method/pharma_erp.customer_account.set_default_customer_address"
          data-address-archive-endpoint="/api/method/pharma_erp.customer_account.archive_customer_address"
-         data-guest-claim-endpoint="/api/method/pharma_erp.customer_account.claim_guest_order">
+         data-guest-claim-endpoint="/api/method/pharma_erp.customer_account.claim_guest_order"
+         data-notification-preferences-endpoint="/api/method/pharma_erp.customer_order_notifications.get_notification_preferences"
+         data-notification-preferences-update-endpoint="/api/method/pharma_erp.customer_order_notifications.update_notification_preferences">
     <header class="pharma-account__hero">
         <div>
             <p class="pharma-account__eyebrow">{{ brand.display_name or "Cure Pharmacy" }}</p>
@@ -113,6 +115,60 @@
                 </div>
             </article>
         </section>
+
+
+<section id="pharma-account-notification-preferences"
+         class="pharma-account__panel pharma-account__panel--wide pharma-account__notification-panel">
+    <div class="pharma-account__section-heading">
+        <div>
+            <p class="pharma-account__eyebrow">Order Notifications</p>
+            <h2>إشعارات حالة الطلب</h2>
+        </div>
+        <span class="pharma-account__badge">Step 4C</span>
+    </div>
+    <p class="pharma-account__muted">
+        اختر تفضيلات إشعارات الطلبات. هذه المرحلة تنشئ Outbox آمنًا وتفضيلات قابلة للتدقيق،
+        بينما الإرسال الخارجي ما زال متوقفًا حتى اعتماد مزود البريد أو WhatsApp أو SMS.
+    </p>
+    <form id="pharma-account-notification-form"
+          class="pharma-account__notification-form">
+        <label class="pharma-account__notification-option">
+            <input name="order_updates_enabled" type="checkbox">
+            <span>
+                <strong>تحديثات الطلبات</strong>
+                <small>إنشاء إشعار عند المراحل المهمة مثل التأكيد والتجهيز والتوصيل والإكمال.</small>
+            </span>
+        </label>
+        <label class="pharma-account__notification-option">
+            <input name="email_enabled" type="checkbox">
+            <span>
+                <strong>البريد الإلكتروني</strong>
+                <small>سيتم استخدام البريد المرتبط بحساب الموقع عند تفعيل الإرسال في المرحلة التالية.</small>
+            </span>
+        </label>
+        <label class="pharma-account__notification-option pharma-account__notification-option--disabled">
+            <input name="whatsapp_enabled" type="checkbox" disabled>
+            <span>
+                <strong>WhatsApp</strong>
+                <small>غير مفعّل حاليًا — يحتاج اعتماد مزود رسمي وقالب رسائل.</small>
+            </span>
+        </label>
+        <label class="pharma-account__notification-option pharma-account__notification-option--disabled">
+            <input name="sms_enabled" type="checkbox" disabled>
+            <span>
+                <strong>SMS</strong>
+                <small>غير مفعّل حاليًا — يحتاج اعتماد مزود رسمي وتكلفة إرسال واضحة.</small>
+            </span>
+        </label>
+        <div class="pharma-account__notification-actions">
+            <button class="pharma-account__button pharma-account__button--secondary"
+                    type="submit">حفظ تفضيلات الإشعارات</button>
+            <span id="pharma-account-notification-status"
+                  class="pharma-account__notification-status"
+                  aria-live="polite"></span>
+        </div>
+    </form>
+</section>
 
         <section class="pharma-account__panel pharma-account__panel--wide">
             <div class="pharma-account__section-heading">
@@ -238,5 +294,5 @@
 {% endblock %}
 
 {% block script %}
-<script src="/assets/pharma_erp/js/customer_account.js"></script>
+<script src="/assets/pharma_erp/js/customer_account.js?v=step4c-notification-preferences"></script>
 {% endblock %}
