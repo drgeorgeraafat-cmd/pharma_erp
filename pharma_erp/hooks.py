@@ -430,3 +430,22 @@ web_include_js = [
     "/assets/pharma_erp/js/customer_portal_navigation.js?v=step4a2-r7",
 ]
 # END STEP 4A.2 CUSTOMER PORTAL NAVIGATION
+
+# BEGIN PHARMA STEP 4B LIVE STATUS TIMELINE
+_step4b_online_order_events = doc_events.setdefault("Online Order", {})
+_step4b_status_hook = (
+    "pharma_erp.customer_order_status_timeline.sync_customer_status_event"
+)
+for _step4b_event in ("before_save", "before_update_after_submit"):
+    _step4b_current = _step4b_online_order_events.get(_step4b_event)
+    if not _step4b_current:
+        _step4b_online_order_events[_step4b_event] = _step4b_status_hook
+    elif isinstance(_step4b_current, str):
+        if _step4b_current != _step4b_status_hook:
+            _step4b_online_order_events[_step4b_event] = [
+                _step4b_current,
+                _step4b_status_hook,
+            ]
+    elif _step4b_status_hook not in _step4b_current:
+        _step4b_current.append(_step4b_status_hook)
+# END PHARMA STEP 4B LIVE STATUS TIMELINE

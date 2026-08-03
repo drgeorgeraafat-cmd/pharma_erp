@@ -1,0 +1,89 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-03 12:40:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "event_key",
+  "label_ar",
+  "message_ar",
+  "source_status",
+  "event_at",
+  "event_source",
+  "is_exceptional",
+  "event_hash"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Status Key",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "label_ar",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Arabic Label",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "message_ar",
+   "fieldtype": "Small Text",
+   "label": "Arabic Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_status",
+   "fieldtype": "Data",
+   "label": "Source Status",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "event_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Event At",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "event_source",
+   "fieldtype": "Select",
+   "label": "Event Source",
+   "options": "Online Order\nDelivery\nPayment\nSystem",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_exceptional",
+   "fieldtype": "Check",
+   "label": "Exceptional",
+   "read_only": 1
+  },
+  {
+   "fieldname": "event_hash",
+   "fieldtype": "Data",
+   "label": "Event Hash",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-03 12:40:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Online Order Customer Status Event",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1,7 +1,8 @@
 (() => {
     "use strict";
 
-    const VERSION = "4A.2-R7";
+    const VERSION = "4B";
+    const LIVE_REFRESH_SECONDS = 45;
     window.__pharmaCustomerOrdersVersion = VERSION;
 
     const safeParse = (value, fallback = {}) => {
@@ -31,6 +32,7 @@
     const apiRequest = async (endpoint) => {
         const response = await fetch(endpoint, {
             credentials: "same-origin",
+            cache: "no-store",
             headers: { Accept: "application/json" },
         });
         const text = await response.text();
@@ -159,5 +161,13 @@
         });
 
         loadOrders();
+
+        const liveTimer = window.setInterval(() => {
+            if (!document.hidden && !loadMore.disabled) loadOrders(0, false);
+        }, LIVE_REFRESH_SECONDS * 1000);
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden) loadOrders(0, false);
+        });
+        window.addEventListener("beforeunload", () => window.clearInterval(liveTimer), { once: true });
     });
 })();

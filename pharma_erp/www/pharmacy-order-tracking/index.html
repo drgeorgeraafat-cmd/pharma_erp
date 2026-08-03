@@ -29,6 +29,14 @@
     </div>
 
     <main id="pharma-tracking-content" hidden>
+        <div class="pharma-tracking__live-strip" aria-live="polite">
+            <span class="pharma-tracking__live-dot" aria-hidden="true"></span>
+            <span id="pharma-tracking-live-state">تحديث مباشر مفعل</span>
+            <span class="pharma-tracking__live-separator">•</span>
+            <span>آخر تحديث: <strong id="pharma-tracking-last-update">—</strong></span>
+        </div>
+        <div id="pharma-tracking-live-announcement" class="pharma-tracking__live-announcement" role="status" hidden></div>
+
         <article class="pharma-tracking__status-card">
             <div class="pharma-tracking__status-icon" aria-hidden="true">✓</div>
             <div>
@@ -63,6 +71,11 @@
             <ol id="pharma-tracking-timeline" class="pharma-tracking__timeline"></ol>
         </article>
 
+        <article id="pharma-tracking-activity-card" class="pharma-tracking__card" hidden>
+            <h3>آخر تحديثات الطلب</h3>
+            <ol id="pharma-tracking-activity" class="pharma-tracking__activity"></ol>
+        </article>
+
         <article class="pharma-tracking__card">
             <h3>الأصناف</h3>
             <div id="pharma-tracking-items" class="pharma-tracking__items"></div>
@@ -80,5 +93,5 @@
 {% endblock %}
 
 {% block script %}
-<script src="/assets/pharma_erp/js/customer_order_tracking.js"></script>
+<script src="/assets/pharma_erp/js/customer_order_tracking.js?v=step4b-live"></script>
 {% endblock %}

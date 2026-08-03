@@ -271,3 +271,81 @@
         align-items: flex-start;
     }
 }
+
+/* Step 4B — live status timeline */
+.pharma-tracking__live-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .45rem;
+    margin: 0 0 1rem;
+    padding: .7rem .9rem;
+    border: 1px solid #b7e4c7;
+    border-radius: 14px;
+    background: #f0fff4;
+    color: #176b3a;
+    font-size: .82rem;
+}
+
+.pharma-tracking__live-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #1f9d55;
+    box-shadow: 0 0 0 5px rgba(31, 157, 85, .12);
+    animation: pharma-tracking-live-pulse 1.8s infinite;
+}
+
+.pharma-tracking__live-separator { color: #7eb993; }
+
+.pharma-tracking__live-announcement {
+    margin: 0 0 1rem;
+    padding: .85rem 1rem;
+    border-radius: 12px;
+    background: #e8f5e9;
+    color: #155d32;
+    font-weight: 700;
+}
+
+.pharma-tracking__activity {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: .75rem;
+}
+
+.pharma-tracking__activity-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .85rem .9rem;
+    border-radius: 12px;
+    background: var(--tracking-soft);
+    border-right: 4px solid var(--tracking-success);
+}
+
+.pharma-tracking__activity-item p {
+    margin: .2rem 0 0;
+    color: var(--tracking-muted);
+    line-height: 1.6;
+}
+
+.pharma-tracking__activity-item time {
+    flex: 0 0 auto;
+    color: var(--tracking-muted);
+    font-size: .78rem;
+}
+
+@keyframes pharma-tracking-live-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(.82); opacity: .65; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pharma-tracking__live-dot { animation: none; }
+}
+
+@media (max-width: 640px) {
+    .pharma-tracking__activity-item { flex-direction: column; gap: .35rem; }
+}

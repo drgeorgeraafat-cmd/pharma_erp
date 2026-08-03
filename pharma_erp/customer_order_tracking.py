@@ -316,7 +316,7 @@ def _timeline_definition(fulfilment_method: str) -> list[dict[str, str]]:
     ]
 
 
-def _timeline(order: dict[str, Any], status_view: dict[str, str]) -> list[dict[str, Any]]:
+def _timeline(order: dict[str, Any], status_view: dict[str, str], recorded_events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     steps = _timeline_definition(order.get("fulfilment_method") or "")
     step_keys = [step["key"] for step in steps]
     current_key = status_view["key"]
@@ -342,6 +342,10 @@ def _timeline(order: dict[str, Any], status_view: dict[str, str]) -> list[dict[s
             else order.get("delivery_completed_at")
         ),
     }
+    for event in recorded_events or []:
+        key = str(event.get("key") or "")
+        if key and event.get("at") and not timestamp_by_key.get(key):
+            timestamp_by_key[key] = event.get("at")
 
     timeline = []
     for index, step in enumerate(steps):
@@ -365,10 +369,56 @@ def _timeline(order: dict[str, Any], status_view: dict[str, str]) -> list[dict[s
                 "key": current_key,
                 "label_ar": status_view["label_ar"],
                 "state": "current",
-                "at": order.get("modified"),
+                "at": timestamp_by_key.get(current_key) or order.get("modified"),
             }
         )
     return timeline
+
+
+def _recorded_status_events(order_name: str) -> list[dict[str, Any]]:
+    if not frappe.db.exists("DocType", "Online Order Customer Status Event"):
+        return []
+    if not frappe.get_meta("Online Order").has_field("custom_customer_status_events"):
+        return []
+    rows = frappe.get_all(
+        "Online Order Customer Status Event",
+        filters={
+            "parent": order_name,
+            "parenttype": "Online Order",
+            "parentfield": "custom_customer_status_events",
+        },
+        fields=[
+            "event_key",
+            "label_ar",
+            "message_ar",
+            "source_status",
+            "event_at",
+            "event_source",
+            "is_exceptional",
+        ],
+        order_by="event_at asc, idx asc",
+        limit_page_length=100,
+    )
+    return [
+        {
+            "key": str(row.get("event_key") or "review"),
+            "label_ar": _clean_text(row.get("label_ar"), 120),
+            "message_ar": _clean_text(row.get("message_ar"), 220),
+            "at": row.get("event_at"),
+            "source": str(row.get("event_source") or "Online Order"),
+            "exceptional": cint(row.get("is_exceptional")),
+        }
+        for row in rows
+    ]
+
+
+def _status_activity(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return list(reversed(events[-8:]))
+
+
+def _status_revision(order_name: str, status_key: str, updated_at: Any, count: int) -> str:
+    value = f"{order_name}|{status_key}|{updated_at}|{count}"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _driver_public_name(order: dict[str, Any]) -> str:
@@ -457,6 +507,13 @@ def _tracking_order_by_token_id(token_id: str) -> dict[str, Any]:
         "custom_tracking_issued_at",
         "custom_tracking_revoked_at",
     ]
+    meta = frappe.get_meta("Online Order")
+    for optional_field in (
+        "custom_customer_status_key",
+        "custom_customer_status_updated_at",
+    ):
+        if meta.has_field(optional_field):
+            fields.append(optional_field)
     return frappe.db.get_value(
         "Online Order",
         {"custom_tracking_token_id": token_id},
@@ -489,6 +546,12 @@ def get_public_order_tracking(token: str | None = None) -> dict[str, Any]:
         )
 
     status_view = _public_status(order.get("status") or "")
+    recorded_events = _recorded_status_events(str(order.get("name") or ""))
+    last_status_update_at = (
+        recorded_events[-1].get("at")
+        if recorded_events
+        else order.get("custom_customer_status_updated_at") or order.get("modified")
+    )
     currency = order.get("currency") or _catalog_brand().get("currency") or "EGP"
     payload = {
         "online_order": order.get("name"),
@@ -513,7 +576,18 @@ def get_public_order_tracking(token: str | None = None) -> dict[str, Any]:
         "estimated_delivery_time_mins": cint(
             order.get("estimated_delivery_time_mins")
         ),
-        "timeline": _timeline(order, status_view),
+        "timeline": _timeline(order, status_view, recorded_events),
+        "status_activity": _status_activity(recorded_events),
+        "last_status_update_at": last_status_update_at,
+        "status_revision": _status_revision(
+            str(order.get("name") or ""),
+            str(status_view.get("key") or "review"),
+            last_status_update_at,
+            len(recorded_events),
+        ),
+        "live_updates": 1,
+        "live_refresh_seconds": 20,
+        "timeline_source": "recorded_events" if recorded_events else "derived_fallback",
         "items": _public_items(order.get("name")),
         "read_only": 1,
         "creates_sales_invoice": 0,
