@@ -1,0 +1,136 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-03 14:05:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "delivery_mode",
+  "outbound_email_enabled",
+  "outgoing_email_account",
+  "sender_display_name",
+  "portal_path",
+  "max_batch_size",
+  "max_attempts",
+  "retry_delay_minutes",
+  "require_recipient_hash_match",
+  "last_readiness_status",
+  "last_readiness_checked_at",
+  "last_readiness_checked_by",
+  "readiness_details",
+  "activation_note"
+ ],
+ "fields": [
+  {
+   "default": "Preview Only",
+   "fieldname": "delivery_mode",
+   "fieldtype": "Select",
+   "label": "Delivery Mode",
+   "options": "Disabled\nPreview Only",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "outbound_email_enabled",
+   "fieldtype": "Check",
+   "label": "Outbound Email Enabled",
+   "read_only": 1
+  },
+  {
+   "fieldname": "outgoing_email_account",
+   "fieldtype": "Link",
+   "label": "Outgoing Email Account",
+   "options": "Email Account"
+  },
+  {
+   "default": "Cure Pharmacy",
+   "fieldname": "sender_display_name",
+   "fieldtype": "Data",
+   "label": "Sender Display Name"
+  },
+  {
+   "default": "/pharmacy-orders/",
+   "fieldname": "portal_path",
+   "fieldtype": "Data",
+   "label": "Customer Orders Portal Path"
+  },
+  {
+   "default": "20",
+   "fieldname": "max_batch_size",
+   "fieldtype": "Int",
+   "label": "Maximum Batch Size"
+  },
+  {
+   "default": "3",
+   "fieldname": "max_attempts",
+   "fieldtype": "Int",
+   "label": "Maximum Attempts"
+  },
+  {
+   "default": "15",
+   "fieldname": "retry_delay_minutes",
+   "fieldtype": "Int",
+   "label": "Retry Delay Minutes"
+  },
+  {
+   "default": "1",
+   "fieldname": "require_recipient_hash_match",
+   "fieldtype": "Check",
+   "label": "Require Recipient Hash Match",
+   "read_only": 1
+  },
+  {
+   "default": "Not Checked",
+   "fieldname": "last_readiness_status",
+   "fieldtype": "Select",
+   "label": "Last Readiness Status",
+   "options": "Not Checked\nPreview Ready\nConfiguration Required\nReady for Controlled Activation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_readiness_checked_at",
+   "fieldtype": "Datetime",
+   "label": "Last Readiness Checked At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_readiness_checked_by",
+   "fieldtype": "Link",
+   "label": "Last Readiness Checked By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "readiness_details",
+   "fieldtype": "Small Text",
+   "label": "Readiness Details",
+   "read_only": 1
+  },
+  {
+   "fieldname": "activation_note",
+   "fieldtype": "Small Text",
+   "label": "Activation Note",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "modified": "2026-08-03 14:05:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Online Order Notification Delivery Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

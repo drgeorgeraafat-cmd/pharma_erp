@@ -1,0 +1,153 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-08-03 14:05:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "notification",
+  "online_order",
+  "website_user",
+  "attempt_type",
+  "result_status",
+  "recipient_masked",
+  "recipient_hash",
+  "template_key",
+  "subject",
+  "provider_mode",
+  "provider_reference",
+  "message_digest",
+  "error_summary",
+  "attempted_at",
+  "attempted_by"
+ ],
+ "fields": [
+  {
+   "fieldname": "notification",
+   "fieldtype": "Link",
+   "label": "Notification",
+   "options": "Online Order Customer Notification",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "online_order",
+   "fieldtype": "Link",
+   "label": "Online Order",
+   "options": "Online Order",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "website_user",
+   "fieldtype": "Link",
+   "label": "Website User",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempt_type",
+   "fieldtype": "Select",
+   "label": "Attempt Type",
+   "options": "Template Preview\nDelivery Guard",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "result_status",
+   "fieldtype": "Select",
+   "label": "Result Status",
+   "options": "Previewed\nBlocked",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "recipient_masked",
+   "fieldtype": "Data",
+   "label": "Recipient Masked",
+   "read_only": 1
+  },
+  {
+   "fieldname": "recipient_hash",
+   "fieldtype": "Data",
+   "label": "Recipient Hash",
+   "read_only": 1
+  },
+  {
+   "fieldname": "template_key",
+   "fieldtype": "Data",
+   "label": "Template Key",
+   "read_only": 1
+  },
+  {
+   "fieldname": "subject",
+   "fieldtype": "Data",
+   "label": "Subject",
+   "read_only": 1
+  },
+  {
+   "fieldname": "provider_mode",
+   "fieldtype": "Data",
+   "label": "Provider Mode",
+   "read_only": 1
+  },
+  {
+   "fieldname": "provider_reference",
+   "fieldtype": "Data",
+   "label": "Provider Reference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "message_digest",
+   "fieldtype": "Data",
+   "label": "Message Digest",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error_summary",
+   "fieldtype": "Small Text",
+   "label": "Error Summary",
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempted_at",
+   "fieldtype": "Datetime",
+   "label": "Attempted At",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "attempted_by",
+   "fieldtype": "Link",
+   "label": "Attempted By",
+   "options": "User",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "modified": "2026-08-03 14:05:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Online Order Notification Delivery Attempt",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Sales Manager",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "sort_field": "attempted_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

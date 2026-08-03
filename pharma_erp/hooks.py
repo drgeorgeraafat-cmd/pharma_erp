@@ -204,6 +204,7 @@ after_request = [
     "pharma_erp.customer_order_tracking.apply_customer_tracking_response_headers",
     "pharma_erp.customer_account.apply_customer_account_response_headers",
     "pharma_erp.customer_order_notifications.apply_customer_notification_response_headers",
+    "pharma_erp.customer_notification_delivery.apply_notification_delivery_response_headers",
 ]
 
 # Job Events
@@ -259,6 +260,8 @@ doctype_js = {
     "Purchase Invoice": "public/js/purchase_invoice.js",
     "Batch": "public/js/batch_retail_label.js",
     "Internal Retail Price Lot": "public/js/internal_retail_price_lot.js",
+    "Online Order Customer Notification": "public/js/online_order_customer_notification.js",
+    "Online Order Notification Delivery Settings": "public/js/online_order_notification_delivery_settings.js",
 }
 
 doc_events = {
