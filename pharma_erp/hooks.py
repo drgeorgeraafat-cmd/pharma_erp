@@ -502,3 +502,33 @@ elif isinstance(_step4e_existing_handlers, str):
 elif _step4e_reconcile_handler not in _step4e_existing_handlers:
     _step4e_existing_handlers.append(_step4e_reconcile_handler)
 # END PHARMA STEP 4E CONTROLLED PILOT EMAIL RECONCILIATION
+
+
+# BEGIN PHARMA STEP 4F CONTROLLED CUSTOMER TRANSACTIONAL EMAIL DISPATCH
+try:
+    scheduler_events
+except NameError:
+    scheduler_events = {}
+
+_step4f_cron_events = scheduler_events.setdefault("cron", {})
+_step4f_dispatch_handler = (
+    "pharma_erp.customer_notification_delivery."
+    "dispatch_eligible_customer_notifications"
+)
+_step4f_dispatch_schedule = "*/5 * * * *"
+_step4f_existing_handlers = _step4f_cron_events.get(
+    _step4f_dispatch_schedule
+)
+if not _step4f_existing_handlers:
+    _step4f_cron_events[_step4f_dispatch_schedule] = [
+        _step4f_dispatch_handler
+    ]
+elif isinstance(_step4f_existing_handlers, str):
+    if _step4f_existing_handlers != _step4f_dispatch_handler:
+        _step4f_cron_events[_step4f_dispatch_schedule] = [
+            _step4f_existing_handlers,
+            _step4f_dispatch_handler,
+        ]
+elif _step4f_dispatch_handler not in _step4f_existing_handlers:
+    _step4f_existing_handlers.append(_step4f_dispatch_handler)
+# END PHARMA STEP 4F CONTROLLED CUSTOMER TRANSACTIONAL EMAIL DISPATCH

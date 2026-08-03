@@ -1,4 +1,3 @@
-
 frappe.ui.form.on("Online Order Customer Notification", {
     refresh(frm) {
         if (frm.is_new()) return;
@@ -29,84 +28,151 @@ frappe.ui.form.on("Online Order Customer Notification", {
                 `,
             });
             frm.reload_doc();
-        }, __("Step 4E"));
+        }, __("Step 4F"));
 
-        frm.add_custom_button(__("Queue Pilot Email"), () => {
-            const dialog = new frappe.ui.Dialog({
-                title: __("Queue Controlled Pilot Email"),
-                fields: [
-                    {
-                        fieldname: "confirmation_text",
-                        fieldtype: "Data",
-                        label: __("Type QUEUE STEP 4E PILOT"),
-                        reqd: 1,
-                    },
-                ],
-                primary_action_label: __("Queue Pilot Email"),
-                async primary_action(values) {
-                    dialog.hide();
-                    const response = await frappe.call({
-                        method: "pharma_erp.customer_notification_delivery.queue_pilot_notification",
-                        args: {
-                            notification_name: frm.doc.name,
-                            confirmation_text: values.confirmation_text,
-                        },
-                        freeze: true,
-                        freeze_message: __("Creating controlled pilot Email Queue…"),
-                    });
-                    const result = response.message || {};
-                    frappe.msgprint({
-                        title: __("Pilot Email Queued"),
-                        indicator: "green",
-                        message: `
-                            <p><strong>${__("Email Queue")}:</strong>
-                                ${frappe.utils.escape_html(result.email_queue || "")}</p>
-                            <p><strong>${__("Recipient")}:</strong>
-                                ${frappe.utils.escape_html(result.pilot_recipient_masked || "")}</p>
-                            <p>${__("The actual customer recipient was not used.")}</p>
-                        `,
-                    });
-                    frm.reload_doc();
-                },
-            });
-            dialog.show();
-        }, __("Step 4E"));
-
-        frm.add_custom_button(__("Refresh Dispatch Status"), async () => {
+        frm.add_custom_button(__("Check Customer Eligibility"), async () => {
             const response = await frappe.call({
-                method: "pharma_erp.customer_notification_delivery.refresh_dispatch_status",
+                method: "pharma_erp.customer_notification_delivery.get_customer_dispatch_eligibility",
                 args: { notification_name: frm.doc.name },
                 freeze: true,
-                freeze_message: __("Reading Frappe Email Queue status…"),
-            });
-            const result = response.message?.result || {};
-            frappe.msgprint({
-                title: __("Dispatch Status"),
-                indicator: result.status === "Sent" ? "green" : "orange",
-                message: `
-                    <p><strong>${__("Notification Status")}:</strong>
-                        ${frappe.utils.escape_html(result.status || "")}</p>
-                    <p><strong>${__("Email Queue Status")}:</strong>
-                        ${frappe.utils.escape_html(result.queue_status || "")}</p>
-                `,
-            });
-            frm.reload_doc();
-        }, __("Step 4E"));
-
-        frm.add_custom_button(__("Test Customer Delivery Guard"), async () => {
-            const response = await frappe.call({
-                method: "pharma_erp.customer_notification_delivery.request_controlled_delivery",
-                args: { notification_name: frm.doc.name },
-                freeze: true,
-                freeze_message: __("Checking customer-recipient guard…"),
+                freeze_message: __("Checking customer dispatch safeguards…"),
             });
             const result = response.message || {};
+            const reasons = (result.reasons || [])
+                .map((item) => `<li>${frappe.utils.escape_html(item)}</li>`)
+                .join("");
             frappe.msgprint({
-                title: __("Customer Delivery Blocked"),
-                indicator: "orange",
-                message: frappe.utils.escape_html(result.reason || ""),
+                title: result.eligible
+                    ? __("Customer Dispatch Eligible")
+                    : __("Customer Dispatch Blocked"),
+                indicator: result.eligible ? "green" : "orange",
+                wide: true,
+                message: `
+                    <p><strong>${__("Recipient")}:</strong>
+                        ${frappe.utils.escape_html(result.recipient_masked || "")}</p>
+                    <p><strong>${__("Post-Cutover")}:</strong>
+                        ${result.post_cutover ? __("Yes") : __("No")}</p>
+                    <p><strong>${__("Order Ownership Match")}:</strong>
+                        ${result.order_ownership_matches ? __("Yes") : __("No")}</p>
+                    <p><strong>${__("Recipient Hash Match")}:</strong>
+                        ${result.recipient_hash_matches ? __("Yes") : __("No")}</p>
+                    <p><strong>${__("Preference Allows")}:</strong>
+                        ${result.preference_allows ? __("Yes") : __("No")}</p>
+                    <p><strong>${__("Attempts Remaining")}:</strong>
+                        ${result.attempts_remaining || 0}</p>
+                    ${reasons ? `<ul>${reasons}</ul>` : ""}
+                `,
             });
-            frm.reload_doc();
-        }, __("Step 4E"));
+        }, __("Step 4F"));
+
+        if (["Deferred", "Failed"].includes(frm.doc.notification_status)) {
+            frm.add_custom_button(__("Queue Customer Email"), () => {
+                const dialog = new frappe.ui.Dialog({
+                    title: __("Queue Step 4F Customer Email"),
+                    fields: [
+                        {
+                            fieldname: "confirmation_text",
+                            fieldtype: "Data",
+                            label: __("Type QUEUE STEP 4F CUSTOMER"),
+                            reqd: 1,
+                        },
+                    ],
+                    primary_action_label: __("Queue Customer Email"),
+                    async primary_action(values) {
+                        dialog.hide();
+                        const response = await frappe.call({
+                            method: "pharma_erp.customer_notification_delivery.queue_customer_notification",
+                            args: {
+                                notification_name: frm.doc.name,
+                                confirmation_text: values.confirmation_text,
+                            },
+                            freeze: true,
+                            freeze_message: __("Creating controlled customer Email Queue…"),
+                        });
+                        const result = response.message || {};
+                        frappe.msgprint({
+                            title: __("Customer Email Queued"),
+                            indicator: "green",
+                            message: `
+                                <p><strong>${__("Email Queue")}:</strong>
+                                    ${frappe.utils.escape_html(result.email_queue || "")}</p>
+                                <p><strong>${__("Recipient")}:</strong>
+                                    ${frappe.utils.escape_html(result.customer_recipient_masked || "")}</p>
+                                <p><strong>${__("Dispatch Source")}:</strong>
+                                    ${frappe.utils.escape_html(result.dispatch_source || "")}</p>
+                            `,
+                        });
+                        frm.reload_doc();
+                    },
+                });
+                dialog.show();
+            }, __("Step 4F"));
+        }
+
+        if (frm.doc.provider_reference) {
+            frm.add_custom_button(__("Refresh Dispatch Status"), async () => {
+                const response = await frappe.call({
+                    method: "pharma_erp.customer_notification_delivery.refresh_dispatch_status",
+                    args: { notification_name: frm.doc.name },
+                    freeze: true,
+                    freeze_message: __("Reading Frappe Email Queue status…"),
+                });
+                const result = response.message?.result || {};
+                frappe.msgprint({
+                    title: __("Dispatch Status"),
+                    indicator: result.status === "Sent" ? "green" : "orange",
+                    message: `
+                        <p><strong>${__("Notification Status")}:</strong>
+                            ${frappe.utils.escape_html(result.status || "")}</p>
+                        <p><strong>${__("Email Queue Status")}:</strong>
+                            ${frappe.utils.escape_html(result.queue_status || "")}</p>
+                    `,
+                });
+                frm.reload_doc();
+            }, __("Step 4F"));
+        }
+
+        if (["Deferred", "Failed"].includes(frm.doc.notification_status)) {
+            frm.add_custom_button(__("Queue Pilot Email"), () => {
+                const dialog = new frappe.ui.Dialog({
+                    title: __("Queue Controlled Pilot Email"),
+                    fields: [
+                        {
+                            fieldname: "confirmation_text",
+                            fieldtype: "Data",
+                            label: __("Type QUEUE STEP 4E PILOT"),
+                            reqd: 1,
+                        },
+                    ],
+                    primary_action_label: __("Queue Pilot Email"),
+                    async primary_action(values) {
+                        dialog.hide();
+                        const response = await frappe.call({
+                            method: "pharma_erp.customer_notification_delivery.queue_pilot_notification",
+                            args: {
+                                notification_name: frm.doc.name,
+                                confirmation_text: values.confirmation_text,
+                            },
+                            freeze: true,
+                            freeze_message: __("Creating controlled pilot Email Queue…"),
+                        });
+                        const result = response.message || {};
+                        frappe.msgprint({
+                            title: __("Pilot Email Queued"),
+                            indicator: "green",
+                            message: `
+                                <p><strong>${__("Email Queue")}:</strong>
+                                    ${frappe.utils.escape_html(result.email_queue || "")}</p>
+                                <p><strong>${__("Recipient")}:</strong>
+                                    ${frappe.utils.escape_html(result.pilot_recipient_masked || "")}</p>
+                                <p>${__("The actual customer recipient was not used.")}</p>
+                            `,
+                        });
+                        frm.reload_doc();
+                    },
+                });
+                dialog.show();
+            }, __("Step 4E Pilot"));
+        }
     },
 });

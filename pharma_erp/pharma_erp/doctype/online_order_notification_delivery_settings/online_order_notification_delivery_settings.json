@@ -12,10 +12,16 @@
   "outgoing_email_account",
   "pilot_recipient_email",
   "pilot_recipient_masked",
+  "customer_mode_enabled",
+  "automatic_customer_dispatch_enabled",
+  "customer_dispatch_scope",
+  "customer_dispatch_cutover_at",
+  "customer_dispatch_cutover_by",
   "allow_actual_customer_recipient",
   "sender_display_name",
   "portal_path",
   "daily_dispatch_limit",
+  "daily_customer_dispatch_limit",
   "max_batch_size",
   "max_attempts",
   "retry_delay_minutes",
@@ -29,6 +35,8 @@
   "last_deactivation_at",
   "last_deactivation_by",
   "last_reconciliation_at",
+  "last_customer_dispatch_at",
+  "last_auto_dispatch_at",
   "activation_note"
  ],
  "fields": [
@@ -37,7 +45,7 @@
    "fieldname": "delivery_mode",
    "fieldtype": "Select",
    "label": "Delivery Mode",
-   "options": "Disabled\nPreview Only\nControlled Pilot",
+   "options": "Disabled\nPreview Only\nControlled Pilot\nControlled Customer",
    "reqd": 1,
    "read_only": 1
   },
@@ -83,11 +91,49 @@
   },
   {
    "default": "0",
+   "fieldname": "customer_mode_enabled",
+   "fieldtype": "Check",
+   "label": "Customer Mode Enabled",
+   "read_only": 1,
+   "description": "Enabled only by controlled Step 4F activation."
+  },
+  {
+   "default": "0",
+   "fieldname": "automatic_customer_dispatch_enabled",
+   "fieldtype": "Check",
+   "label": "Automatic Customer Dispatch Enabled",
+   "read_only": 1,
+   "description": "Requires a separate explicit Step 4F activation after customer mode is active."
+  },
+  {
+   "default": "Post-Cutover Events Only",
+   "fieldname": "customer_dispatch_scope",
+   "fieldtype": "Select",
+   "label": "Customer Dispatch Scope",
+   "options": "Post-Cutover Events Only",
+   "read_only": 1
+  },
+  {
+   "fieldname": "customer_dispatch_cutover_at",
+   "fieldtype": "Datetime",
+   "label": "Customer Dispatch Cutover At",
+   "read_only": 1,
+   "description": "Notifications created before this timestamp remain protected and cannot be sent to customers."
+  },
+  {
+   "fieldname": "customer_dispatch_cutover_by",
+   "fieldtype": "Link",
+   "label": "Customer Dispatch Cutover By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "default": "0",
    "fieldname": "allow_actual_customer_recipient",
    "fieldtype": "Check",
    "label": "Allow Actual Customer Recipient",
    "read_only": 1,
-   "description": "Must remain disabled in Step 4E."
+   "description": "Enabled only by the controlled Step 4F customer activation action."
   },
   {
    "default": "Cure Pharmacy",
@@ -109,9 +155,15 @@
   },
   {
    "default": "20",
+   "fieldname": "daily_customer_dispatch_limit",
+   "fieldtype": "Int",
+   "label": "Daily Customer Dispatch Limit"
+  },
+  {
+   "default": "20",
    "fieldname": "max_batch_size",
    "fieldtype": "Int",
-   "label": "Maximum Batch Size"
+   "label": "Maximum Automatic Customer Batch Size"
   },
   {
    "default": "3",
@@ -137,7 +189,7 @@
    "fieldname": "last_readiness_status",
    "fieldtype": "Select",
    "label": "Last Readiness Status",
-   "options": "Not Checked\nPreview Ready\nConfiguration Required\nReady for Controlled Activation\nReady for Pilot Activation\nControlled Pilot Active",
+   "options": "Not Checked\nPreview Ready\nConfiguration Required\nReady for Controlled Activation\nReady for Pilot Activation\nControlled Pilot Active\nReady for Customer Activation\nControlled Customer Active\nCustomer Auto Dispatch Active",
    "read_only": 1
   },
   {
@@ -192,6 +244,18 @@
    "read_only": 1
   },
   {
+   "fieldname": "last_customer_dispatch_at",
+   "fieldtype": "Datetime",
+   "label": "Last Customer Dispatch At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_auto_dispatch_at",
+   "fieldtype": "Datetime",
+   "label": "Last Automatic Dispatch At",
+   "read_only": 1
+  },
+  {
    "fieldname": "activation_note",
    "fieldtype": "Small Text",
    "label": "Activation Note",
@@ -200,7 +264,7 @@
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
- "modified": "2026-08-03 14:56:00.000000",
+ "modified": "2026-08-03 15:55:00.000000",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Online Order Notification Delivery Settings",

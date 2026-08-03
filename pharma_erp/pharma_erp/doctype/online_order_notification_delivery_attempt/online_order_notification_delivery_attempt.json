@@ -16,6 +16,7 @@
   "template_key",
   "subject",
   "provider_mode",
+  "dispatch_source",
   "provider_reference",
   "queue_status",
   "message_digest",
@@ -96,6 +97,13 @@
    "read_only": 1
   },
   {
+   "fieldname": "dispatch_source",
+   "fieldtype": "Select",
+   "label": "Dispatch Source",
+   "options": "Preview\nGuard\nPilot Manual\nCustomer Manual\nCustomer Automatic\nReconciliation",
+   "read_only": 1
+  },
+  {
    "fieldname": "provider_reference",
    "fieldtype": "Data",
    "label": "Provider Reference",
@@ -135,7 +143,7 @@
   }
  ],
  "index_web_pages_for_search": 0,
- "modified": "2026-08-03 14:34:00.000000",
+ "modified": "2026-08-03 15:55:00.000000",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Online Order Notification Delivery Attempt",
