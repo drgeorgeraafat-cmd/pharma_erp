@@ -201,7 +201,8 @@ app_license = "mit"
 # after_request = ["pharma_erp.utils.after_request"]
 
 after_request = [
-    "pharma_erp.customer_order_tracking.apply_customer_tracking_response_headers"
+    "pharma_erp.customer_order_tracking.apply_customer_tracking_response_headers",
+    "pharma_erp.customer_account.apply_customer_account_response_headers",
 ]
 
 # Job Events
@@ -417,3 +418,15 @@ for _online_order_event, _online_order_handler in _online_order_payment_entry_ho
     )
 
 # END ONLINE ORDER PAYMENT ENTRY STEP 2D HOOKS
+
+# BEGIN STEP 4A.2 CUSTOMER PORTAL NAVIGATION
+# Frappe renders its standard /me account entry separately from portal_menu_items.
+# Keep only My Orders here to avoid generating a second account row server-side.
+portal_menu_items = [
+    {"title": "طلباتي", "route": "/pharmacy-orders"},
+]
+
+web_include_js = [
+    "/assets/pharma_erp/js/customer_portal_navigation.js?v=step4a2-r7",
+]
+# END STEP 4A.2 CUSTOMER PORTAL NAVIGATION

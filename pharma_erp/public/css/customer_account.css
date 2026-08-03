@@ -1,0 +1,464 @@
+.pharma-account {
+    --account-bg: #f6f8f7;
+    --account-card: #ffffff;
+    --account-border: #dfe7e3;
+    --account-text: #18352d;
+    --account-muted: #667a73;
+    --account-primary: #0b7b5f;
+    --account-primary-dark: #075f49;
+    --account-soft: #e8f5f0;
+    --account-danger: #a52c35;
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 28px 18px 56px;
+    color: var(--account-text);
+    font-family: inherit;
+}
+
+.pharma-account *,
+.pharma-account *::before,
+.pharma-account *::after {
+    box-sizing: border-box;
+}
+
+.pharma-account__hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 24px;
+    padding: 28px;
+    border: 1px solid var(--account-border);
+    border-radius: 22px;
+    background: linear-gradient(135deg, #ffffff 0%, #eef8f4 100%);
+}
+
+.pharma-account__hero h1,
+.pharma-account__section-heading h2,
+.pharma-account__guest-card h2 {
+    margin: 0;
+    color: var(--account-text);
+}
+
+.pharma-account__hero p {
+    margin: 8px 0 0;
+    color: var(--account-muted);
+}
+
+.pharma-account__eyebrow {
+    margin: 0 0 6px !important;
+    color: var(--account-primary) !important;
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.pharma-account__shop-link {
+    flex: 0 0 auto;
+    color: var(--account-primary);
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.pharma-account__guest-card,
+.pharma-account__panel {
+    border: 1px solid var(--account-border);
+    border-radius: 20px;
+    background: var(--account-card);
+    box-shadow: 0 12px 32px rgba(18, 55, 44, 0.06);
+}
+
+.pharma-account__guest-card {
+    max-width: 680px;
+    margin: 42px auto;
+    padding: 38px;
+    text-align: center;
+}
+
+.pharma-account__guest-icon {
+    display: grid;
+    width: 66px;
+    height: 66px;
+    margin: 0 auto 16px;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--account-soft);
+    font-size: 30px;
+}
+
+.pharma-account__guest-card p {
+    color: var(--account-muted);
+}
+
+.pharma-account__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.pharma-account__panel {
+    padding: 24px;
+}
+
+.pharma-account__panel--wide {
+    margin-top: 18px;
+}
+
+.pharma-account__section-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.pharma-account__form {
+    display: grid;
+    gap: 14px;
+}
+
+.pharma-account__form--address {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pharma-account__form label {
+    display: grid;
+    gap: 7px;
+    color: var(--account-text);
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
+.pharma-account__form input,
+.pharma-account__form select {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid #cddad5;
+    border-radius: 10px;
+    background: #fff;
+    color: var(--account-text);
+    padding: 9px 12px;
+    outline: none;
+}
+
+.pharma-account__form input:focus,
+.pharma-account__form select:focus {
+    border-color: var(--account-primary);
+    box-shadow: 0 0 0 3px rgba(11, 123, 95, 0.12);
+}
+
+.pharma-account__form input[readonly] {
+    background: #f4f7f6;
+    color: #5d7069;
+}
+
+.pharma-account__field--wide {
+    grid-column: 1 / -1;
+}
+
+.pharma-account__checkbox {
+    display: flex !important;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 9px !important;
+}
+
+.pharma-account__checkbox input {
+    width: 18px;
+    min-height: 18px;
+}
+
+.pharma-account__actions,
+.pharma-account__card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.pharma-account__actions--start,
+.pharma-account__card-actions {
+    justify-content: flex-start;
+}
+
+.pharma-account__button,
+.pharma-account__small-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 10px;
+    font-weight: 800;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+}
+
+.pharma-account__button {
+    min-height: 42px;
+    padding: 9px 16px;
+}
+
+.pharma-account__small-button {
+    min-height: 34px;
+    padding: 6px 10px;
+    background: #eef3f1;
+    color: var(--account-text);
+    font-size: 0.82rem;
+}
+
+.pharma-account__button:hover,
+.pharma-account__small-button:hover {
+    transform: translateY(-1px);
+    text-decoration: none;
+}
+
+.pharma-account__button:disabled,
+.pharma-account__small-button:disabled {
+    cursor: wait;
+    opacity: 0.58;
+    transform: none;
+}
+
+.pharma-account__button--primary {
+    background: var(--account-primary);
+    color: #fff;
+}
+
+.pharma-account__button--primary:hover {
+    background: var(--account-primary-dark);
+    color: #fff;
+}
+
+.pharma-account__button--secondary {
+    border: 1px solid #bcd1c9;
+    background: #fff;
+    color: var(--account-primary-dark);
+}
+
+.pharma-account__button--link {
+    background: transparent;
+    color: var(--account-primary);
+}
+
+.pharma-account__button--danger,
+.pharma-account__small-button--danger {
+    background: #fff0f1;
+    color: var(--account-danger);
+}
+
+.pharma-account__message,
+.pharma-account__empty,
+.pharma-account__notice {
+    padding: 18px;
+    border: 1px solid var(--account-border);
+    border-radius: 14px;
+    background: #fff;
+    color: var(--account-muted);
+    text-align: center;
+}
+
+.pharma-account__message--error {
+    border-color: #e8b8bc;
+    background: #fff4f5;
+    color: var(--account-danger);
+}
+
+.pharma-account__notice {
+    margin-top: 18px;
+    border-color: #ead7a9;
+    background: #fff9e8;
+}
+
+.pharma-account__muted {
+    display: block;
+    color: var(--account-muted);
+    font-size: 0.86rem;
+    font-weight: 500;
+}
+
+.pharma-account__badge,
+.pharma-account__status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    background: var(--account-soft);
+    color: var(--account-primary-dark);
+    font-size: 0.78rem;
+    font-weight: 800;
+}
+
+.pharma-account__badge--default {
+    background: #dcf4e9;
+}
+
+.pharma-account__address-grid,
+.pharma-account__orders {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.pharma-account__address-card,
+.pharma-account__order-card {
+    display: grid;
+    gap: 12px;
+    border: 1px solid var(--account-border);
+    border-radius: 16px;
+    background: #fbfdfc;
+    padding: 18px;
+}
+
+.pharma-account__address-top,
+.pharma-account__order-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.pharma-account__address-line {
+    margin: 0;
+    color: #486159;
+    line-height: 1.65;
+}
+
+.pharma-account__order-number {
+    display: block;
+    direction: ltr;
+    text-align: right;
+}
+
+.pharma-account__order-details {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 14px;
+}
+
+.pharma-account__order-details > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    border-bottom: 1px dashed #dbe5e1;
+    padding: 7px 0;
+    font-size: 0.88rem;
+}
+
+.pharma-account__order-details span {
+    color: var(--account-muted);
+}
+
+.pharma-account__status--attention,
+.pharma-account__status--cancelled,
+.pharma-account__status--rejected,
+.pharma-account__status--returned {
+    background: #fff0f1;
+    color: var(--account-danger);
+}
+
+.pharma-account__status--completed,
+.pharma-account__status--delivered {
+    background: #dcf4e9;
+    color: #176f52;
+}
+
+.pharma-account__toast {
+    position: fixed;
+    z-index: 9999;
+    inset-inline-start: 20px;
+    bottom: 20px;
+    max-width: min(420px, calc(100vw - 40px));
+    border-radius: 12px;
+    background: #163f34;
+    color: #fff;
+    padding: 13px 16px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.pharma-account__toast--error {
+    background: #84252d;
+}
+
+@media (max-width: 760px) {
+    .pharma-account {
+        padding: 16px 10px 42px;
+    }
+
+    .pharma-account__hero {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 20px;
+    }
+
+    .pharma-account__grid,
+    .pharma-account__address-grid,
+    .pharma-account__orders,
+    .pharma-account__form--address {
+        grid-template-columns: 1fr;
+    }
+
+    .pharma-account__field--wide,
+    .pharma-account__checkbox {
+        grid-column: auto;
+    }
+
+    .pharma-account__panel,
+    .pharma-account__guest-card {
+        padding: 18px;
+    }
+
+    .pharma-account__section-heading,
+    .pharma-account__address-top,
+    .pharma-account__order-top {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .pharma-account__order-details {
+        grid-template-columns: 1fr;
+    }
+
+    .pharma-account__actions,
+    .pharma-account__card-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .pharma-account__button,
+    .pharma-account__small-button {
+        width: 100%;
+    }
+}
+
+.pharma-account__claim-panel {
+    border-color: rgba(20, 116, 98, 0.24);
+    background: linear-gradient(180deg, rgba(236, 253, 245, 0.7), #ffffff 45%);
+}
+
+.pharma-account__form--claim {
+    align-items: end;
+}
+
+.pharma-account__claim-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.pharma-account__claim-security {
+    color: #52606d;
+    font-size: 0.88rem;
+    line-height: 1.7;
+}
+
+@media (max-width: 640px) {
+    .pharma-account__claim-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+}

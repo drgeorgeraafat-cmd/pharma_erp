@@ -436,9 +436,13 @@
             checkoutIdentity = await apiRequest(root.dataset.identityEndpoint, { method: "GET" });
             if (checkoutIdentity.authenticated && accountPanel) {
                 accountPanel.hidden = false;
+                emptyNode(accountPanel);
+                const accountMessage = createElement("span");
+                const accountLink = createElement("a", "pharma-checkout-account-link", "إدارة الحساب والعناوين");
+                accountLink.href = "/pharmacy-account/";
                 if (checkoutIdentity.customer_linked) {
                     const customer = checkoutIdentity.customer || {};
-                    accountPanel.textContent = `تم ربط حساب الموقع بكود العميل ${customer.customer_code || customer.customer || ""}. يمكنك اختيار عنوان محفوظ.`;
+                    accountMessage.textContent = `تم ربط حساب الموقع بكود العميل ${customer.customer_code || customer.customer || ""}. يمكنك اختيار عنوان محفوظ.`;
                     const nameInput = form.elements.customer_name;
                     const mobileInput = form.elements.mobile_no;
                     const emailInput = form.elements.email_id;
@@ -448,24 +452,32 @@
                     const addresses = checkoutIdentity.addresses || [];
                     if (addresses.length && savedAddressWrap && savedAddressSelect) {
                         savedAddressWrap.hidden = false;
-                        for (const address of addresses) {
+                        const optionStart = savedAddressSelect.options.length;
+                        let defaultIndex = optionStart;
+                        addresses.forEach((address, index) => {
                             const option = document.createElement("option");
                             option.value = address.name;
                             option.textContent = address.label || address.address_title || address.name;
                             option.dataset.address = JSON.stringify(address);
                             savedAddressSelect.appendChild(option);
-                        }
-                        savedAddressSelect.addEventListener("change", () => {
+                            if (Number(address.is_shipping_address || 0) === 1) defaultIndex = optionStart + index;
+                        });
+                        savedAddressSelect.selectedIndex = defaultIndex;
+                        const applySavedAddress = () => {
                             const option = savedAddressSelect.options[savedAddressSelect.selectedIndex];
                             const address = option?.dataset.address ? JSON.parse(option.dataset.address) : null;
                             fillAddress(address);
-                        });
+                        };
+                        savedAddressSelect.addEventListener("change", applySavedAddress);
+                        applySavedAddress();
                     }
                 } else if (checkoutIdentity.ambiguous_customer_links) {
-                    accountPanel.textContent = "حساب الموقع مرتبط بأكثر من كود عميل. سيتم إيقاف الربط التلقائي وإرسال الطلب للمراجعة الداخلية.";
+                    accountMessage.textContent = "حساب الموقع مرتبط بأكثر من كود عميل. سيتم إيقاف الربط التلقائي وإرسال الطلب للمراجعة الداخلية.";
                 } else {
-                    accountPanel.textContent = "حساب الموقع غير مربوط بعد بكود عميل داخل الصيدلية. سيتم اقتراح المطابقة أثناء مراجعة الطلب.";
+                    accountMessage.textContent = "حساب الموقع غير مربوط بعد بكود عميل داخل الصيدلية. فعّل حساب العميل لحفظ العناوين وربط الطلبات تلقائيًا.";
+                    accountLink.textContent = "تفعيل حساب العميل";
                 }
+                accountPanel.append(accountMessage, document.createTextNode(" "), accountLink);
             }
         } catch (identityError) {
             if (accountPanel) {

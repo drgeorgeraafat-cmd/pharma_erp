@@ -1,0 +1,71 @@
+{% extends "templates/web.html" %}
+
+{% block title %}طلباتي{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/pharma_erp/css/customer_account.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-account" dir="rtl"
+         id="pharma-customer-orders"
+         data-is-guest="{{ 1 if is_guest else 0 }}"
+         data-account-endpoint="/api/method/pharma_erp.customer_account.get_customer_account">
+    <header class="pharma-account__hero">
+        <div>
+            <p class="pharma-account__eyebrow">{{ brand.display_name or "Cure Pharmacy" }}</p>
+            <h1>طلباتي</h1>
+            <p>تابع طلباتك الحالية والسابقة وافتح رابط التتبع الآمن لكل طلب.</p>
+        </div>
+        <div class="pharma-account__actions pharma-account__actions--start">
+            <a class="pharma-account__button pharma-account__button--secondary" href="/pharmacy-account/">حساب الصيدلية</a>
+            <a class="pharma-account__button pharma-account__button--link" href="/pharmacy-shop/">العودة للمتجر</a>
+        </div>
+    </header>
+
+    {% if is_guest %}
+    <article class="pharma-account__guest-card">
+        <div class="pharma-account__guest-icon">📦</div>
+        <h2>سجّل الدخول لعرض طلباتك</h2>
+        <p>يتم عرض الطلبات المرتبطة بحساب الموقع الحالي فقط.</p>
+        <div class="pharma-account__actions">
+            <a class="pharma-account__button pharma-account__button--primary"
+               href="/login?redirect-to=%2Fpharmacy-orders%2F">تسجيل الدخول</a>
+            <a class="pharma-account__button pharma-account__button--secondary"
+               href="/pharmacy-account/">حساب الصيدلية</a>
+        </div>
+    </article>
+    {% else %}
+    <div id="pharma-orders-loading" class="pharma-account__message">جارٍ تحميل طلباتك…</div>
+    <div id="pharma-orders-error" class="pharma-account__message pharma-account__message--error" hidden></div>
+
+    <section id="pharma-orders-unlinked" class="pharma-account__panel" hidden>
+        <div class="pharma-account__section-heading">
+            <div>
+                <p class="pharma-account__eyebrow">إعداد الحساب</p>
+                <h2>أكمل حساب العميل أولًا</h2>
+            </div>
+        </div>
+        <p class="pharma-account__muted">يجب تفعيل وربط Customer بحساب الموقع قبل عرض الطلبات.</p>
+        <a class="pharma-account__button pharma-account__button--primary" href="/pharmacy-account/">فتح حساب الصيدلية</a>
+    </section>
+
+    <section id="pharma-orders-content" class="pharma-account__panel pharma-account__panel--wide" hidden>
+        <div class="pharma-account__section-heading">
+            <div>
+                <p class="pharma-account__eyebrow">My Orders</p>
+                <h2>الطلبات الحالية والسابقة</h2>
+            </div>
+            <a class="pharma-account__button pharma-account__button--primary" href="/pharmacy-shop/">تسوق الآن</a>
+        </div>
+        <div id="pharma-orders-list" class="pharma-account__orders"></div>
+        <div id="pharma-orders-empty" class="pharma-account__empty" hidden>لا توجد طلبات أونلاين مرتبطة بهذا الحساب حتى الآن.</div>
+        <button id="pharma-orders-load-more" class="pharma-account__button pharma-account__button--secondary" type="button" hidden>عرض طلبات أقدم</button>
+    </section>
+    {% endif %}
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/customer_orders.js?v=step4a2-r7"></script>
+{% endblock %}

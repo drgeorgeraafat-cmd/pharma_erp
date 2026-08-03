@@ -1,0 +1,242 @@
+{% extends "templates/web.html" %}
+
+{% block title %}حسابي{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/pharma_erp/css/customer_account.css">
+{% endblock %}
+
+{% block page_content %}
+<section class="pharma-account" dir="rtl"
+         id="pharma-customer-account"
+         data-is-guest="{{ 1 if is_guest else 0 }}"
+         data-csrf="{{ csrf_token }}"
+         data-account-endpoint="/api/method/pharma_erp.customer_account.get_customer_account"
+         data-activate-endpoint="/api/method/pharma_erp.customer_account.activate_customer_account"
+         data-profile-endpoint="/api/method/pharma_erp.customer_account.update_customer_profile"
+         data-address-save-endpoint="/api/method/pharma_erp.customer_account.save_customer_address"
+         data-address-default-endpoint="/api/method/pharma_erp.customer_account.set_default_customer_address"
+         data-address-archive-endpoint="/api/method/pharma_erp.customer_account.archive_customer_address"
+         data-guest-claim-endpoint="/api/method/pharma_erp.customer_account.claim_guest_order">
+    <header class="pharma-account__hero">
+        <div>
+            <p class="pharma-account__eyebrow">{{ brand.display_name or "Cure Pharmacy" }}</p>
+            <h1>حساب العميل</h1>
+            <p>احفظ عناوينك، اختر العنوان الافتراضي، وتابع طلباتك الأونلاين من مكان واحد.</p>
+        </div>
+        <a class="pharma-account__shop-link" href="/pharmacy-shop/">العودة للمتجر</a>
+    </header>
+
+    {% if is_guest %}
+    <article class="pharma-account__guest-card">
+        <div class="pharma-account__guest-icon">👤</div>
+        <h2>سجّل الدخول لعرض حسابك</h2>
+        <p>استخدم بريدك الإلكتروني وكلمة المرور. تسجيل الدخول واسترجاع كلمة المرور يتمان من خلال نظام Frappe الآمن.</p>
+        <div class="pharma-account__actions">
+            <a class="pharma-account__button pharma-account__button--primary"
+               href="/login?redirect-to=%2Fpharmacy-account%2F">تسجيل الدخول</a>
+            {% if not disable_signup %}
+            <a class="pharma-account__button pharma-account__button--secondary"
+               href="/login?redirect-to=%2Fpharmacy-account%2F#signup">إنشاء حساب جديد</a>
+            {% endif %}
+            <a class="pharma-account__button pharma-account__button--link"
+               href="/login?redirect-to=%2Fpharmacy-account%2F#forgot">نسيت كلمة المرور</a>
+        </div>
+        {% if disable_signup %}
+        <p class="pharma-account__notice">إنشاء الحسابات الجديدة متوقف حاليًا من إعدادات الموقع. تواصل مع الصيدلية لتفعيل حسابك.</p>
+        {% endif %}
+    </article>
+    {% else %}
+    <div id="pharma-account-loading" class="pharma-account__message">جارٍ تحميل حسابك…</div>
+    <div id="pharma-account-error" class="pharma-account__message pharma-account__message--error" hidden></div>
+
+    <section id="pharma-account-activation" class="pharma-account__panel" hidden>
+        <div class="pharma-account__section-heading">
+            <div>
+                <p class="pharma-account__eyebrow">إعداد الحساب لأول مرة</p>
+                <h2>أكمل بيانات العميل</h2>
+            </div>
+        </div>
+        <p class="pharma-account__muted">سيتم إنشاء وربط سجل Customer واحد بحساب الموقع الحالي. لن يتم إنشاء فاتورة أو قيد أو حركة مخزون.</p>
+        <form id="pharma-account-activation-form" class="pharma-account__form">
+            <label>
+                <span>الاسم الكامل</span>
+                <input name="full_name" type="text" maxlength="140" autocomplete="name" required>
+            </label>
+            <label>
+                <span>رقم الموبايل</span>
+                <input name="mobile_no" type="tel" maxlength="20" autocomplete="tel" required>
+            </label>
+            <button class="pharma-account__button pharma-account__button--primary" type="submit">تفعيل حساب العميل</button>
+        </form>
+    </section>
+
+    <div id="pharma-account-content" hidden>
+        <section class="pharma-account__grid">
+            <article class="pharma-account__panel">
+                <div class="pharma-account__section-heading">
+                    <div>
+                        <p class="pharma-account__eyebrow">بيانات الحساب</p>
+                        <h2>الملف الشخصي</h2>
+                    </div>
+                    <span id="pharma-account-customer-code" class="pharma-account__badge"></span>
+                </div>
+                <form id="pharma-account-profile-form" class="pharma-account__form">
+                    <label>
+                        <span>البريد الإلكتروني</span>
+                        <input id="pharma-account-email" type="email" readonly>
+                    </label>
+                    <label>
+                        <span>الاسم الكامل</span>
+                        <input id="pharma-account-full-name" name="full_name" type="text" maxlength="140" autocomplete="name" required>
+                    </label>
+                    <label>
+                        <span>رقم الموبايل</span>
+                        <input id="pharma-account-mobile" name="mobile_no" type="tel" maxlength="20" autocomplete="tel" required>
+                    </label>
+                    <button class="pharma-account__button pharma-account__button--secondary" type="submit">حفظ بيانات الحساب</button>
+                </form>
+            </article>
+
+            <article class="pharma-account__panel">
+                <div class="pharma-account__section-heading">
+                    <div>
+                        <p class="pharma-account__eyebrow">الدخول والأمان</p>
+                        <h2>إدارة كلمة المرور</h2>
+                    </div>
+                </div>
+                <p class="pharma-account__muted">تغيير أو استرجاع كلمة المرور يتم من خلال صفحات Frappe الرسمية ولا يتم تخزين كلمة المرور داخل Pharma ERP.</p>
+                <div class="pharma-account__actions pharma-account__actions--start">
+                    <a class="pharma-account__button pharma-account__button--secondary" href="/update-password">تغيير كلمة المرور</a>
+                    <a class="pharma-account__button pharma-account__button--link" href="/login#forgot">استرجاع كلمة المرور</a>
+                    <a id="pharma-account-logout" class="pharma-account__button pharma-account__button--danger" href="/api/method/logout">تسجيل الخروج</a>
+                </div>
+            </article>
+        </section>
+
+        <section class="pharma-account__panel pharma-account__panel--wide">
+            <div class="pharma-account__section-heading">
+                <div>
+                    <p class="pharma-account__eyebrow">Saved Addresses</p>
+                    <h2>العناوين المحفوظة</h2>
+                </div>
+                <button id="pharma-account-add-address" class="pharma-account__button pharma-account__button--primary" type="button">إضافة عنوان</button>
+            </div>
+            <div id="pharma-account-addresses" class="pharma-account__address-grid"></div>
+            <div id="pharma-account-no-addresses" class="pharma-account__empty" hidden>لا توجد عناوين محفوظة حتى الآن.</div>
+        </section>
+
+        <section id="pharma-account-address-editor" class="pharma-account__panel pharma-account__panel--wide" hidden>
+            <div class="pharma-account__section-heading">
+                <div>
+                    <p class="pharma-account__eyebrow">عنوان الطلب</p>
+                    <h2 id="pharma-account-address-title">إضافة عنوان جديد</h2>
+                </div>
+                <button id="pharma-account-cancel-address" class="pharma-account__button pharma-account__button--link" type="button">إلغاء</button>
+            </div>
+            <form id="pharma-account-address-form" class="pharma-account__form pharma-account__form--address">
+                <input name="name" type="hidden">
+                <label>
+                    <span>اسم العنوان</span>
+                    <input name="address_title" type="text" maxlength="80" placeholder="المنزل أو العمل" required>
+                </label>
+                <label>
+                    <span>نوع العنوان</span>
+                    <select name="address_type">
+                        <option value="Shipping">منزل / توصيل</option>
+                        <option value="Office">العمل</option>
+                        <option value="Personal">شخصي</option>
+                        <option value="Other">أخرى</option>
+                    </select>
+                </label>
+                <label class="pharma-account__field--wide">
+                    <span>العنوان</span>
+                    <input name="address_line1" type="text" maxlength="180" autocomplete="address-line1" required>
+                </label>
+                <label class="pharma-account__field--wide">
+                    <span>تفاصيل إضافية</span>
+                    <input name="address_line2" type="text" maxlength="180" autocomplete="address-line2">
+                </label>
+                <label>
+                    <span>المدينة</span>
+                    <input name="city" type="text" maxlength="120" autocomplete="address-level2" required>
+                </label>
+                <label>
+                    <span>المحافظة</span>
+                    <input name="state" type="text" maxlength="120" autocomplete="address-level1">
+                </label>
+                <label>
+                    <span>الرمز البريدي</span>
+                    <input name="pincode" type="text" maxlength="20" autocomplete="postal-code">
+                </label>
+                <label>
+                    <span>الدولة</span>
+                    <input name="country" type="text" maxlength="120" value="Egypt" autocomplete="country-name" required>
+                </label>
+                <label>
+                    <span>موبايل العنوان</span>
+                    <input name="phone" type="tel" maxlength="20" autocomplete="tel">
+                </label>
+                <label class="pharma-account__checkbox">
+                    <input name="make_default" type="checkbox" value="1">
+                    <span>استخدامه كعنوان افتراضي للطلبات الأونلاين</span>
+                </label>
+                <div class="pharma-account__field--wide">
+                    <button class="pharma-account__button pharma-account__button--primary" type="submit">حفظ العنوان</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="pharma-account__panel pharma-account__panel--wide pharma-account__claim-panel">
+            <div class="pharma-account__section-heading">
+                <div>
+                    <p class="pharma-account__eyebrow">Secure Guest Order Claim</p>
+                    <h2>ربط طلب ضيف بحسابي</h2>
+                </div>
+            </div>
+            <p class="pharma-account__muted">
+                لو عملت الطلب كضيف، يمكنك ربطه بالحساب بعد التحقق. أدخل رقم الطلب،
+                رابط التتبع الآمن الذي استلمته، وآخر 4 أرقام من موبايل الطلب.
+                لن يتم الربط تلقائيًا بالإيميل أو الموبايل فقط.
+            </p>
+            <form id="pharma-account-guest-claim-form" class="pharma-account__form pharma-account__form--claim">
+                <label>
+                    <span>رقم الطلب</span>
+                    <input name="online_order" type="text" maxlength="140" placeholder="OO-2026-00000" autocomplete="off" required>
+                </label>
+                <label class="pharma-account__field--wide">
+                    <span>رابط التتبع الآمن أو الـToken</span>
+                    <input name="tracking_token" type="text" maxlength="1200" placeholder="الصق رابط التتبع الكامل هنا" autocomplete="off" spellcheck="false" required>
+                </label>
+                <label>
+                    <span>آخر 4 أرقام من موبايل الطلب</span>
+                    <input name="mobile_last4" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="1234" autocomplete="off" required>
+                </label>
+                <div class="pharma-account__field--wide pharma-account__claim-actions">
+                    <button class="pharma-account__button pharma-account__button--primary" type="submit">ربط الطلب بحسابي</button>
+                    <span class="pharma-account__claim-security">يتم التحقق من توقيع الرابط ولا يتم حفظ الـToken الكامل.</span>
+                </div>
+            </form>
+        </section>
+
+        <section id="my-orders" class="pharma-account__panel pharma-account__panel--wide">
+            <div class="pharma-account__section-heading">
+                <div>
+                    <p class="pharma-account__eyebrow">My Orders</p>
+                    <h2>طلباتي</h2>
+                </div>
+            </div>
+            <div id="pharma-account-orders" class="pharma-account__orders"></div>
+            <div id="pharma-account-no-orders" class="pharma-account__empty" hidden>لا توجد طلبات أونلاين مرتبطة بهذا الحساب حتى الآن.</div>
+            <button id="pharma-account-load-more" class="pharma-account__button pharma-account__button--secondary" type="button" hidden>عرض طلبات أقدم</button>
+        </section>
+    </div>
+    {% endif %}
+
+    <div id="pharma-account-toast" class="pharma-account__toast" aria-live="polite" hidden></div>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/assets/pharma_erp/js/customer_account.js"></script>
+{% endblock %}
