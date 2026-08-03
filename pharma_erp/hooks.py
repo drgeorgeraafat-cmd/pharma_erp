@@ -473,3 +473,32 @@ for _step4c_event in ("on_update", "on_update_after_submit"):
     elif _step4c_notification_hook not in _step4c_current:
         _step4c_current.append(_step4c_notification_hook)
 # END PHARMA STEP 4C CONTROLLED CUSTOMER NOTIFICATION FOUNDATION
+
+
+# BEGIN PHARMA STEP 4E CONTROLLED PILOT EMAIL RECONCILIATION
+try:
+    scheduler_events
+except NameError:
+    scheduler_events = {}
+
+_step4e_cron_events = scheduler_events.setdefault("cron", {})
+_step4e_reconcile_handler = (
+    "pharma_erp.customer_notification_delivery.reconcile_pending_dispatches"
+)
+_step4e_reconcile_schedule = "*/5 * * * *"
+_step4e_existing_handlers = _step4e_cron_events.get(
+    _step4e_reconcile_schedule
+)
+if not _step4e_existing_handlers:
+    _step4e_cron_events[_step4e_reconcile_schedule] = [
+        _step4e_reconcile_handler
+    ]
+elif isinstance(_step4e_existing_handlers, str):
+    if _step4e_existing_handlers != _step4e_reconcile_handler:
+        _step4e_cron_events[_step4e_reconcile_schedule] = [
+            _step4e_existing_handlers,
+            _step4e_reconcile_handler,
+        ]
+elif _step4e_reconcile_handler not in _step4e_existing_handlers:
+    _step4e_existing_handlers.append(_step4e_reconcile_handler)
+# END PHARMA STEP 4E CONTROLLED PILOT EMAIL RECONCILIATION

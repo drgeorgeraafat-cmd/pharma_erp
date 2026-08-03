@@ -7,9 +7,15 @@
  "field_order": [
   "delivery_mode",
   "outbound_email_enabled",
+  "activation_status",
+  "pilot_mode_enabled",
   "outgoing_email_account",
+  "pilot_recipient_email",
+  "pilot_recipient_masked",
+  "allow_actual_customer_recipient",
   "sender_display_name",
   "portal_path",
+  "daily_dispatch_limit",
   "max_batch_size",
   "max_attempts",
   "retry_delay_minutes",
@@ -18,6 +24,11 @@
   "last_readiness_checked_at",
   "last_readiness_checked_by",
   "readiness_details",
+  "last_activation_at",
+  "last_activation_by",
+  "last_deactivation_at",
+  "last_deactivation_by",
+  "last_reconciliation_at",
   "activation_note"
  ],
  "fields": [
@@ -26,8 +37,9 @@
    "fieldname": "delivery_mode",
    "fieldtype": "Select",
    "label": "Delivery Mode",
-   "options": "Disabled\nPreview Only",
-   "reqd": 1
+   "options": "Disabled\nPreview Only\nControlled Pilot",
+   "reqd": 1,
+   "read_only": 1
   },
   {
    "default": "0",
@@ -37,10 +49,45 @@
    "read_only": 1
   },
   {
+   "default": "Inactive",
+   "fieldname": "activation_status",
+   "fieldtype": "Select",
+   "label": "Activation Status",
+   "options": "Inactive\nReady\nActive\nSuspended",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "pilot_mode_enabled",
+   "fieldtype": "Check",
+   "label": "Pilot Mode Enabled",
+   "read_only": 1
+  },
+  {
    "fieldname": "outgoing_email_account",
    "fieldtype": "Link",
    "label": "Outgoing Email Account",
    "options": "Email Account"
+  },
+  {
+   "fieldname": "pilot_recipient_email",
+   "fieldtype": "Password",
+   "label": "Encrypted Pilot Recipient",
+   "description": "Used only for controlled Step 4E pilot dispatch."
+  },
+  {
+   "fieldname": "pilot_recipient_masked",
+   "fieldtype": "Data",
+   "label": "Pilot Recipient Masked",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_actual_customer_recipient",
+   "fieldtype": "Check",
+   "label": "Allow Actual Customer Recipient",
+   "read_only": 1,
+   "description": "Must remain disabled in Step 4E."
   },
   {
    "default": "Cure Pharmacy",
@@ -53,6 +100,12 @@
    "fieldname": "portal_path",
    "fieldtype": "Data",
    "label": "Customer Orders Portal Path"
+  },
+  {
+   "default": "5",
+   "fieldname": "daily_dispatch_limit",
+   "fieldtype": "Int",
+   "label": "Daily Pilot Dispatch Limit"
   },
   {
    "default": "20",
@@ -84,7 +137,7 @@
    "fieldname": "last_readiness_status",
    "fieldtype": "Select",
    "label": "Last Readiness Status",
-   "options": "Not Checked\nPreview Ready\nConfiguration Required\nReady for Controlled Activation",
+   "options": "Not Checked\nPreview Ready\nConfiguration Required\nReady for Controlled Activation\nReady for Pilot Activation\nControlled Pilot Active",
    "read_only": 1
   },
   {
@@ -107,6 +160,38 @@
    "read_only": 1
   },
   {
+   "fieldname": "last_activation_at",
+   "fieldtype": "Datetime",
+   "label": "Last Activation At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_activation_by",
+   "fieldtype": "Link",
+   "label": "Last Activation By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_deactivation_at",
+   "fieldtype": "Datetime",
+   "label": "Last Deactivation At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_deactivation_by",
+   "fieldtype": "Link",
+   "label": "Last Deactivation By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_reconciliation_at",
+   "fieldtype": "Datetime",
+   "label": "Last Reconciliation At",
+   "read_only": 1
+  },
+  {
    "fieldname": "activation_note",
    "fieldtype": "Small Text",
    "label": "Activation Note",
@@ -115,7 +200,7 @@
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
- "modified": "2026-08-03 14:05:00.000000",
+ "modified": "2026-08-03 14:56:00.000000",
  "modified_by": "Administrator",
  "module": "Pharma Erp",
  "name": "Online Order Notification Delivery Settings",
