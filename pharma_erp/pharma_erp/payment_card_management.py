@@ -1474,6 +1474,26 @@ def _full_cashflow_report(shift):
     }
     details = []
     cash_refunds_from_sales = 0.0
+    cash_sales_outside_till = 0.0
+    payment_entry_names = sorted({
+        row.payment_source_name
+        for row in sales_rows
+        if (
+            row.payment_source_type == "Payment Entry"
+            and row.payment_source_name
+        )
+    })
+    payment_destinations = {}
+    if payment_entry_names:
+        payment_destinations = {
+            row.name: row.paid_to
+            for row in frappe.get_all(
+                "Payment Entry",
+                filters={"name": ["in", payment_entry_names]},
+                fields=["name", "paid_to"],
+                limit_page_length=len(payment_entry_names),
+            )
+        }
     for row in sales_rows:
         amount = _money(row.amount)
         mode = str(row.mode_of_payment or "").strip().lower()
@@ -1483,6 +1503,11 @@ def _full_cashflow_report(shift):
         if mode == "cash":
             if amount >= 0:
                 sales["cash"] += amount
+                paid_to = payment_destinations.get(
+                    row.payment_source_name
+                )
+                if paid_to and paid_to != account:
+                    cash_sales_outside_till += amount
             else:
                 cash_refunds_from_sales += abs(amount)
         elif mode in ("credit card", "card"):
@@ -1642,6 +1667,7 @@ def _full_cashflow_report(shift):
             )
         )
 
+    unposted_driver_cash_deposits = 0.0
     handovers = frappe.get_all(
         "Delivery Handover",
         filters={"shift_reference": shift.name, "handover_method": "Cash", "docstatus": 1},
@@ -1652,6 +1678,10 @@ def _full_cashflow_report(shift):
         if row.get("journal_entry"):
             linked_journal_entries.add(row.journal_entry)
         receipts["driver_cash_deposits"] = _money(receipts["driver_cash_deposits"] + row.amount)
+        if not row.get("journal_entry"):
+            unposted_driver_cash_deposits = _money(
+                unposted_driver_cash_deposits + row.amount
+            )
         details.append(
             _cashflow_row(
                 "Driver Cash Deposit",
@@ -1791,13 +1821,29 @@ def _full_cashflow_report(shift):
     sales = {key: _money(value) for key, value in sales.items()}
     receipts = {key: _money(value) for key, value in receipts.items()}
     payments = {key: _money(value) for key, value in payments.items()}
+    cash_sales_outside_till = _money(cash_sales_outside_till)
+    cash_sales_in_till = _money(
+        sales["cash"] - cash_sales_outside_till
+    )
     non_sales_receipts = _money(sum(receipts.values()))
     total_payments = _money(sum(payments.values()))
-    expected_cash = _money(sales["cash"] + non_sales_receipts - total_payments)
+    expected_cash = _money(
+        cash_sales_in_till + non_sales_receipts - total_payments
+    )
     gl = _shift_gl_control(shift, account)
+    gl["ledger_closing_balance"] = _money(gl["closing_balance"])
+    gl["pending_driver_cash_deposits"] = _money(
+        unposted_driver_cash_deposits
+    )
+    gl["closing_balance"] = _money(
+        gl["ledger_closing_balance"]
+        + gl["pending_driver_cash_deposits"]
+    )
     return {
         "account": account,
         "sales": sales,
+        "cash_sales_in_till": cash_sales_in_till,
+        "cash_sales_outside_till": cash_sales_outside_till,
         "receipts": receipts,
         "payments": payments,
         "non_sales_receipts": non_sales_receipts,
@@ -1839,8 +1885,11 @@ def _orphan_till_gl_rows(shift):
                 linked = frappe.db.get_value("Shift Cash Movement", {"journal_entry": row.voucher_no, "docstatus": ["!=", 2]}, "shift_reference") or ""
             if not linked:
                 linked = frappe.db.get_value("Employee Cash Advance", {"journal_entry": row.voucher_no, "docstatus": ["!=", 2]}, "shift_reference") or ""
-        if linked != shift.name:
-            row["detected_shift"] = linked
+        # A Cash Drawer GL row explicitly linked to another shift belongs
+        # to that shift and is not orphaned for the current shift window.
+        # Only rows with no operational shift link are true orphan rows.
+        if not linked:
+            row["detected_shift"] = ""
             orphan.append(row)
     return orphan
 
@@ -2362,7 +2411,7 @@ def _delivery_driver_summaries(shift):
             and settlement.docstatus == 1
             and settlement.settlement_status in ("Settled", "Disputed")
         )
-        active_orders = _active_delivery_orders(None, delivery_boy)
+        active_orders = _active_delivery_orders(shift, delivery_boy)
         # Global outside state prevents receiving this driver's cash in any
         # collection shift.  Shift-local outside rows also ensure prepaid or
         # zero-cash trips still appear and block their delivery shift.
@@ -2638,7 +2687,7 @@ def submit_delivery_handover(shift_name, delivery_boy, handover_type, amount, no
                 order_list
             )
         )
-    active_orders = _active_delivery_orders(None, delivery_boy)
+    active_orders = _active_delivery_orders(shift, delivery_boy)
     forced_partial = bool(handover_type == "Final Settlement" and active_orders)
     if forced_partial:
         handover_type = "Partial Handover"
