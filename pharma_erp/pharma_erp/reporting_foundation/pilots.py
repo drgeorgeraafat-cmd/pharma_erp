@@ -16,6 +16,7 @@ from .contracts import (
     ReportDefinition,
     RunnerResult,
     ValidationError,
+    PermissionDenied,
 )
 from .execution import ReportRegistry, execute as execute_foundation
 
@@ -1139,6 +1140,24 @@ def _execute_report(report_id: str, filters: Mapping[str, Any] | None):
     )
 
 
+def _execute_report_ui(report_id: str, filters: Mapping[str, Any] | None):
+    """Desk-facing adapter that preserves foundation guards without Server Error UX."""
+    try:
+        return _execute_report(report_id, filters)
+    except PermissionDenied as exc:
+        frappe.throw(
+            str(exc),
+            title=_("Report Permission Denied"),
+            exc=frappe.PermissionError,
+        )
+    except ValidationError as exc:
+        frappe.throw(
+            str(exc),
+            title=_("Invalid Report Filters"),
+            exc=frappe.ValidationError,
+        )
+
+
 def _currency(value: Any, currency: str | None = None) -> dict[str, Any]:
     return {
         "value": flt(value),
@@ -1153,7 +1172,7 @@ def _number(value: Any, indicator: str = "Blue") -> dict[str, Any]:
 
 
 def daily_report(filters=None):
-    result = _execute_report(DAILY_REPORT_ID, filters)
+    result = _execute_report_ui(DAILY_REPORT_ID, filters)
     s = dict(result.summary)
     company = result.applied_filters.get("company")
     currency = frappe.db.get_value("Company", company, "default_currency") if company else None
@@ -1215,7 +1234,7 @@ def daily_report(filters=None):
 
 
 def shift_report(filters=None):
-    result = _execute_report(SHIFT_REPORT_ID, filters)
+    result = _execute_report_ui(SHIFT_REPORT_ID, filters)
     s = dict(result.summary)
     company = result.applied_filters.get("company")
     currency = frappe.db.get_value("Company", company, "default_currency") if company else None
@@ -1246,7 +1265,7 @@ def shift_report(filters=None):
 
 
 def online_report(filters=None):
-    result = _execute_report(ONLINE_REPORT_ID, filters)
+    result = _execute_report_ui(ONLINE_REPORT_ID, filters)
     s = dict(result.summary)
     stages = s.get("stages") or {}
     columns = [
