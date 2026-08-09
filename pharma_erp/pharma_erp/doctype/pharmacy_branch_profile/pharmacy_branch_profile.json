@@ -1,0 +1,220 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-08-09 22:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "identity_section",
+  "branch",
+  "company",
+  "disabled",
+  "accounting_section",
+  "cost_center",
+  "selling_price_list",
+  "pos_profile",
+  "default_cash_account",
+  "default_till_account",
+  "operations_section",
+  "operating_hours_configured",
+  "opening_time",
+  "closing_time",
+  "branch_manager",
+  "allow_reservation",
+  "reservation_notes",
+  "printing_section",
+  "letter_head",
+  "default_print_format",
+  "warehouse_mapping_section",
+  "warehouse_roles"
+ ],
+ "fields": [
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Canonical Branch Identity"
+  },
+  {
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Branch",
+   "options": "Branch",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "accounting_section",
+   "fieldtype": "Section Break",
+   "label": "Accounting & Commercial Defaults"
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center"
+  },
+  {
+   "fieldname": "selling_price_list",
+   "fieldtype": "Link",
+   "label": "Selling Price List",
+   "options": "Price List"
+  },
+  {
+   "fieldname": "pos_profile",
+   "fieldtype": "Link",
+   "label": "POS Profile",
+   "options": "POS Profile"
+  },
+  {
+   "fieldname": "default_cash_account",
+   "fieldtype": "Link",
+   "label": "Default Cash Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "default_till_account",
+   "fieldtype": "Link",
+   "label": "Default Till Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "operations_section",
+   "fieldtype": "Section Break",
+   "label": "Branch Operations"
+  },
+  {
+   "default": "0",
+   "description": "Save the Branch Profile first. Then enable this option and set both Opening Time and Closing Time.",
+   "fieldname": "operating_hours_configured",
+   "fieldtype": "Check",
+   "label": "Operating Hours Configured",
+   "read_only_depends_on": "eval:doc.__islocal"
+  },
+  {
+   "fieldname": "opening_time",
+   "fieldtype": "Time",
+   "label": "Opening Time",
+   "depends_on": "eval:doc.operating_hours_configured",
+   "mandatory_depends_on": "eval:doc.operating_hours_configured"
+  },
+  {
+   "fieldname": "closing_time",
+   "fieldtype": "Time",
+   "label": "Closing Time",
+   "depends_on": "eval:doc.operating_hours_configured",
+   "mandatory_depends_on": "eval:doc.operating_hours_configured"
+  },
+  {
+   "fieldname": "branch_manager",
+   "fieldtype": "Link",
+   "label": "Branch Manager",
+   "options": "User"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_reservation",
+   "fieldtype": "Check",
+   "label": "Allow Reservation"
+  },
+  {
+   "fieldname": "reservation_notes",
+   "fieldtype": "Small Text",
+   "label": "Reservation Notes"
+  },
+  {
+   "fieldname": "printing_section",
+   "fieldtype": "Section Break",
+   "label": "Printing"
+  },
+  {
+   "fieldname": "letter_head",
+   "fieldtype": "Link",
+   "label": "Letter Head",
+   "options": "Letter Head"
+  },
+  {
+   "fieldname": "default_print_format",
+   "fieldtype": "Link",
+   "label": "Default Print Format",
+   "options": "Print Format"
+  },
+  {
+   "fieldname": "warehouse_mapping_section",
+   "fieldtype": "Section Break",
+   "label": "Canonical Warehouse Role Mapping"
+  },
+  {
+   "fieldname": "warehouse_roles",
+   "fieldtype": "Table",
+   "label": "Warehouse Role Mapping",
+   "options": "Pharmacy Branch Warehouse Role"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-09 22:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Branch Profile",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "field:branch",
+ "naming_rule": "By fieldname",
+ "title_field": "branch",
+ "search_fields": "branch, company, cost_center, pos_profile",
+ "track_changes": 1
+}

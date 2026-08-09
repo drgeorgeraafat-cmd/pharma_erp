@@ -1,0 +1,196 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-08-09 22:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "identity_section",
+  "warehouse",
+  "branch",
+  "company",
+  "disabled",
+  "classification_section",
+  "physicality",
+  "operational_class",
+  "manager",
+  "cost_center",
+  "policy_section",
+  "is_sellable",
+  "allow_online",
+  "include_projected",
+  "allow_reservation",
+  "operations_section",
+  "allowed_operations"
+ ],
+ "fields": [
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Canonical Warehouse Identity"
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Warehouse",
+   "options": "Warehouse",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Branch",
+   "options": "Branch",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "classification_section",
+   "fieldtype": "Section Break",
+   "label": "Operational Classification"
+  },
+  {
+   "default": "Physical",
+   "fieldname": "physicality",
+   "fieldtype": "Select",
+   "label": "Physical / Virtual",
+   "options": "Physical\nVirtual",
+   "reqd": 1
+  },
+  {
+   "default": "General",
+   "fieldname": "operational_class",
+   "fieldtype": "Select",
+   "label": "Operational Class",
+   "options": "General\nTransit\nQuarantine\nExpired\nSupplier Holding\nDamaged / Rejected",
+   "reqd": 1
+  },
+  {
+   "fieldname": "manager",
+   "fieldtype": "Link",
+   "label": "Manager",
+   "options": "User"
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center"
+  },
+  {
+   "fieldname": "policy_section",
+   "fieldtype": "Section Break",
+   "label": "Stock & Availability Policy"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_sellable",
+   "fieldtype": "Check",
+   "label": "Sellable"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_online",
+   "fieldtype": "Check",
+   "label": "Allow Online Fulfilment"
+  },
+  {
+   "default": "0",
+   "fieldname": "include_projected",
+   "fieldtype": "Check",
+   "label": "Include Projected Quantity"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_reservation",
+   "fieldtype": "Check",
+   "label": "Allow Reservation"
+  },
+  {
+   "fieldname": "operations_section",
+   "fieldtype": "Section Break",
+   "label": "Allowed Operations"
+  },
+  {
+   "fieldname": "allowed_operations",
+   "fieldtype": "Table",
+   "label": "Allowed Operations",
+   "options": "Pharmacy Warehouse Allowed Operation"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-09 22:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Warehouse Profile",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "field:warehouse",
+ "naming_rule": "By fieldname",
+ "title_field": "warehouse",
+ "search_fields": "warehouse, branch, company, operational_class",
+ "track_changes": 1
+}
