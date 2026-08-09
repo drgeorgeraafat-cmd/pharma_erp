@@ -10,6 +10,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime, strip_html
 
+from pharma_erp.pharma_erp.branch_operational_integration import require_online_order_context
+
 
 REVIEW_QUEUE_STATUSES = (
     "Placed",
@@ -369,6 +371,7 @@ def _snapshot(order) -> dict[str, Any]:
         "customer_address": order.customer_address or "",
         "fulfilment_method": order.fulfilment_method,
         "company": order.company,
+        "branch": order.branch or "",
         "warehouse": order.warehouse or "",
         "delivery_zone": order.delivery_zone or "",
         "currency": order.currency,
@@ -802,6 +805,8 @@ def apply_stock_review(
 ) -> dict[str, Any]:
     order = _get_order(online_order, "write")
     _prepare_review_stage(order, "Stock Review")
+    canonical_context = require_online_order_context(order)
+    canonical_warehouse = canonical_context["warehouse"]
 
     supplied = _json_list(rows)
     if not supplied:
@@ -848,7 +853,16 @@ def apply_stock_review(
                 )
             )
 
-        warehouse = _clean_text(input_row.get("warehouse"), 140)
+        submitted_warehouse = _clean_text(input_row.get("warehouse"), 140)
+        if submitted_warehouse and submitted_warehouse != canonical_warehouse:
+            frappe.throw(
+                _("Reviewed Warehouse {0} conflicts with canonical warehouse {1} for Branch {2}.").format(
+                    frappe.bold(submitted_warehouse),
+                    frappe.bold(canonical_warehouse),
+                    frappe.bold(order.branch),
+                )
+            )
+        warehouse = canonical_warehouse
         alternative_item = _clean_text(input_row.get("alternative_item"), 140)
         checked_item_code = order_row.item_code
 
@@ -1268,13 +1282,15 @@ def _apply_address_to_order(order, address_name: str, values: dict[str, Any]) ->
 
 
 def _zone_options(order) -> list[dict[str, Any]]:
+    context = require_online_order_context(order)
     zones = frappe.get_all(
         "Delivery Zone",
-        filters={"is_active": 1},
+        filters={"is_active": 1, "branch": context["branch"]},
         fields=[
             "name",
             "zone_name",
             "zone_name_ar",
+            "branch",
             "warehouse",
             "priority",
             "delivery_fee",
@@ -1288,7 +1304,7 @@ def _zone_options(order) -> list[dict[str, Any]]:
     )
     result: list[dict[str, Any]] = []
     for zone in zones:
-        if order.warehouse and zone.get("warehouse") and zone.get("warehouse") != order.warehouse:
+        if zone.get("warehouse") != context["warehouse"]:
             continue
         zone["label"] = zone.get("zone_name_ar") or zone.get("zone_name") or zone.get("name")
         result.append(zone)
@@ -1406,6 +1422,7 @@ def get_delivery_zone_context(online_order: str | None = None) -> dict[str, Any]
     return {
         "online_order": order.name,
         "fulfilment_method": order.fulfilment_method,
+        "branch": order.branch or "",
         "warehouse": order.warehouse or "",
         "delivery_zone": order.delivery_zone or "",
         "products_subtotal": flt(order.products_subtotal),
@@ -1431,6 +1448,7 @@ def apply_delivery_zone(
         [
             "name",
             "is_active",
+            "branch",
             "warehouse",
             "delivery_fee",
             "minimum_order_amount",
@@ -1443,18 +1461,26 @@ def apply_delivery_zone(
     )
     if not zone or not cint(zone.get("is_active")):
         frappe.throw(_("Select an active Delivery Zone."))
-    zone_warehouse = zone.get("warehouse") or ""
-    if order.warehouse and zone_warehouse and order.warehouse != zone_warehouse:
+    canonical_context = require_online_order_context(order)
+    if zone.get("branch") != canonical_context["branch"]:
         frappe.throw(
-            _("Delivery Zone warehouse {0} does not match reviewed warehouse {1}.").format(
-                frappe.bold(zone_warehouse), frappe.bold(order.warehouse)
+            _("Delivery Zone {0} belongs to Branch {1}, not {2}.").format(
+                frappe.bold(zone_name),
+                frappe.bold(zone.get("branch") or _("(blank)")),
+                frappe.bold(canonical_context["branch"]),
             )
         )
-    if zone_warehouse:
-        _warehouse_state(zone_warehouse, order.company)
+    zone_warehouse = zone.get("warehouse") or ""
+    if zone_warehouse != canonical_context["warehouse"]:
+        frappe.throw(
+            _("Delivery Zone warehouse {0} does not match canonical Online Fulfilment warehouse {1}.").format(
+                frappe.bold(zone_warehouse or _("(blank)")),
+                frappe.bold(canonical_context["warehouse"]),
+            )
+        )
     fee, rule = _zone_delivery_fee(zone, flt(order.products_subtotal))
     order.delivery_zone = zone_name
-    order.warehouse = order.warehouse or zone_warehouse
+    order.warehouse = canonical_context["warehouse"]
     order.delivery_fee = fee
     order.delivery_fee_rule = rule
     order.estimated_delivery_time_mins = cint(zone.get("estimated_time_mins"))

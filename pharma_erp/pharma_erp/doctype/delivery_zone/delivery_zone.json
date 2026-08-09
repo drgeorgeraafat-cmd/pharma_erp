@@ -10,6 +10,7 @@
   "zone_name",
   "zone_name_ar",
   "is_active",
+  "branch",
   "warehouse",
   "priority",
   "delivery_pricing_section",
@@ -51,6 +52,15 @@
    "in_filter": 1,
    "in_list_view": 1,
    "label": "Is Active"
+  },
+  {
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Branch",
+   "options": "Branch",
+   "reqd": 1
   },
   {
    "fieldname": "warehouse",

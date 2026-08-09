@@ -7,6 +7,11 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint, flt, now_datetime, today
 
+from pharma_erp.pharma_erp.branch_operational_integration import (
+    require_online_order_context,
+    resolve_online_context,
+)
+
 
 TERMINAL_STATUSES = {"Completed", "Rejected", "Cancelled"}
 PAYMENT_TOLERANCE = 0.01
@@ -19,6 +24,7 @@ IMMUTABLE_HEADER_FIELDS = (
     "external_reference",
     "external_created_at",
     "company",
+    "branch",
     "order_type",
     "fulfilment_method",
     "customer",
@@ -178,6 +184,28 @@ class OnlineOrder(Document):
             self.company = frappe.db.get_single_value("Global Defaults", "default_company")
         if not self.price_list:
             self.price_list = frappe.db.get_single_value("Selling Settings", "selling_price_list")
+
+        # New Online Orders always start with an explicit canonical branch and
+        # warehouse. Existing legacy orders without branch attribution are not
+        # guessed or silently backfilled during ordinary saves.
+        if self.is_new():
+            context = resolve_online_context(
+                company=self.company,
+                fulfilment_method=self.fulfilment_method,
+                requested_branch=self.branch,
+                submitted_warehouse=self.warehouse,
+            )
+            self.branch = context["branch"]
+            self.warehouse = context["warehouse"]
+        elif self.branch:
+            context = resolve_online_context(
+                company=self.company,
+                fulfilment_method=self.fulfilment_method,
+                requested_branch=self.branch,
+                submitted_warehouse=self.warehouse,
+            )
+            self.warehouse = context["warehouse"]
+
         if not self.payment_timing:
             self.payment_timing = "Collect on Delivery"
         if not self.payment_status:
@@ -644,29 +672,7 @@ def _active_conversion_rows(order):
 
 
 def _default_invoice_warehouse(order):
-    warehouse = str(order.warehouse or "").strip()
-    if not warehouse and frappe.db.exists("DocType", "Pharmacy POS Settings"):
-        warehouse = str(
-            frappe.db.get_single_value("Pharmacy POS Settings", "default_warehouse") or ""
-        ).strip()
-    if not warehouse:
-        return ""
-
-    values = frappe.db.get_value(
-        "Warehouse",
-        warehouse,
-        ["company", "is_group", "disabled"],
-        as_dict=True,
-    )
-    if not values:
-        frappe.throw(_("Warehouse {0} was not found.").format(warehouse))
-    if cint(values.get("is_group")):
-        frappe.throw(_("Warehouse {0} is a group warehouse.").format(warehouse))
-    if cint(values.get("disabled")):
-        frappe.throw(_("Warehouse {0} is disabled.").format(warehouse))
-    if values.get("company") and values.get("company") != order.company:
-        frappe.throw(_("Warehouse {0} belongs to another company.").format(warehouse))
-    return warehouse
+    return require_online_order_context(order)["warehouse"]
 
 
 def _conversion_factor(item_code: str, uom: str | None) -> float:
@@ -1029,6 +1035,7 @@ def _build_sales_invoice_draft(order):
     invoice = frappe.new_doc("Sales Invoice")
     invoice.customer = order.customer
     invoice.company = order.company
+    _set_if_has(invoice, "custom_pharmacy_branch", order.branch)
     invoice.posting_date = today()
     invoice.due_date = today()
     invoice.currency = order.currency

@@ -401,6 +401,12 @@ for _online_order_event, _online_order_handler in _online_order_sales_invoice_ho
         _online_order_handler,
     )
 
+_online_order_merge_hook(
+    _online_order_sales_invoice_events,
+    "validate",
+    "pharma_erp.pharma_erp.sales_invoice_branch_integration.validate_sales_invoice_branch",
+)
+
 # END ONLINE ORDER SALES INVOICE STEP 2C HOOKS
 
 # BEGIN ONLINE ORDER PAYMENT ENTRY STEP 2D HOOKS

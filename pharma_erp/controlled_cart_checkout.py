@@ -10,6 +10,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, now_datetime, strip_html
 
+from pharma_erp.pharma_erp.branch_operational_integration import resolve_online_context
+
 from pharma_erp.controlled_online_order_confirmation import (
     PAYMENT_OPTIONS,
     PUBLIC_PAYMENT_OPTIONS,
@@ -673,6 +675,13 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
     if not company:
         frappe.throw(_("Default Company is not configured."))
 
+    branch_context = resolve_online_context(
+        company=company,
+        fulfilment_method=fulfilment_method,
+        requested_branch=data.get("branch"),
+        submitted_warehouse=None,
+    )
+
     payment_values = _checkout_payment_values(data, fulfilment_method, cart)
     formatted_address = ", ".join(
         value for value in (address_line1, address_line2, city, state, country) if value
@@ -685,6 +694,8 @@ def create_online_order(payload: str | dict[str, Any] | None = None) -> dict[str
             "external_reference": checkout_token,
             "external_created_at": now_datetime(),
             "company": company,
+            "branch": branch_context["branch"],
+            "warehouse": branch_context["warehouse"],
             "order_type": "Retail",
             "fulfilment_method": fulfilment_method,
             "customer_name": customer_name,

@@ -45,3 +45,4 @@ pharma_erp.patches.v1_17.setup_invoice_return_physical_stock_fields
 pharma_erp.patches.v1_18.setup_supplier_claim_accounting_reconciliation
 pharma_erp.patches.v1_19.setup_expired_drugs_return_workflow
 pharma_erp.patches.v1_20.guard_supplier_claim_eligible_invoices
+pharma_erp.patches.v1_21.setup_sales_online_branch_integration

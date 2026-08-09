@@ -7,6 +7,11 @@ from frappe.model.naming import make_autoname
 from frappe.utils import cint, flt, getdate, nowdate
 
 from pharma_erp.pharma_erp.delivery_attempt import mark_add_on_invoice_created
+from pharma_erp.pharma_erp.branch_operational_integration import (
+    branch_from_canonical_warehouse,
+    resolve_pos_context,
+    resolve_role_context,
+)
 from pharma_erp.retail_price_lots import (
     LOT_DOCTYPE,
     LOT_FIELD,
@@ -59,6 +64,29 @@ def _company(value=None):
         or frappe.defaults.get_user_default("Company")
         or frappe.db.get_single_value("Global Defaults", "default_company")
         or ""
+    )
+
+
+def _canonical_pos_context(company=None, branch=None, submitted_warehouse=None):
+    company = _company(company)
+    return frappe._dict(
+        resolve_pos_context(
+            company=company,
+            requested_branch=branch,
+            submitted_warehouse=submitted_warehouse,
+        )
+    )
+
+
+def _canonical_customer_return_context(company=None, branch=None, submitted_warehouse=None):
+    company = _company(company)
+    return frappe._dict(
+        resolve_role_context(
+            company=company,
+            role="Customer Return",
+            requested_branch=branch,
+            submitted_warehouse=submitted_warehouse,
+        )
     )
 
 
@@ -1757,13 +1785,15 @@ def _require_open_shift_for_pos(company=None):
 
 
 @frappe.whitelist()
-def get_settings():
+def get_settings(branch=None):
     settings = _get_settings()
     company = _company()
+    canonical = _canonical_pos_context(company=company, branch=branch)
     open_shift = _open_shift_for_pos(company)
 
     return {
-        "default_warehouse": settings.get("default_warehouse") or "",
+        "branch": canonical.branch,
+        "default_warehouse": canonical.warehouse,
         "default_price_list": settings.get("default_price_list") or "",
         "default_customer": settings.get("default_customer") or "",
         "search_limit": _safe_limit(settings.get("search_limit"), 20, 100),
@@ -1847,13 +1877,14 @@ def _source_search_result(match, warehouse):
 
 
 @frappe.whitelist()
-def search_items(txt="", warehouse=None):
+def search_items(txt="", warehouse=None, branch=None):
     raw, like_txt, compact_txt = _search_pattern(txt)
     if not raw:
         return []
 
     settings = _get_settings()
-    warehouse = warehouse or settings.get("default_warehouse") or ""
+    canonical = _canonical_pos_context(branch=branch, submitted_warehouse=warehouse)
+    warehouse = canonical.warehouse
     limit = _safe_limit(settings.get("search_limit"), 20, 100)
 
     source_rows = []
@@ -1999,12 +2030,13 @@ def search_items(txt="", warehouse=None):
 
 
 @frappe.whitelist()
-def get_item(item_code, warehouse=None):
+def get_item(item_code, warehouse=None, branch=None):
     if not item_code:
         return None
 
     settings = _get_settings()
-    warehouse = warehouse or settings.get("default_warehouse") or ""
+    canonical = _canonical_pos_context(branch=branch, submitted_warehouse=warehouse)
+    warehouse = canonical.warehouse
     return _item_context(item_code, warehouse)
 
 
@@ -3021,12 +3053,24 @@ def _prepare_invoice_context(data):
         )
         company = parent_invoice.company
         order_type = "Home Delivery"
-        warehouse = (
-            parent_invoice.set_warehouse
-            or data.get("warehouse")
-            or settings.get("default_warehouse")
-            or ""
+        parent_warehouse = parent_invoice.set_warehouse or ""
+        parent_branch = (
+            parent_invoice.get("custom_pharmacy_branch")
+            if _has_field("Sales Invoice", "custom_pharmacy_branch")
+            else ""
         )
+        if not parent_branch and parent_warehouse:
+            parent_branch = branch_from_canonical_warehouse(
+                warehouse=parent_warehouse,
+                company=parent_invoice.company,
+            )
+        canonical = _canonical_pos_context(
+            company=parent_invoice.company,
+            branch=parent_branch,
+            submitted_warehouse=data.get("warehouse") or parent_warehouse,
+        )
+        branch = canonical.branch
+        warehouse = canonical.warehouse
         price_list = (
             parent_invoice.selling_price_list
             or data.get("price_list")
@@ -3054,7 +3098,13 @@ def _prepare_invoice_context(data):
     else:
         company = _company(data.get("company"))
         order_type = data.get("order_type") or "Walk In"
-        warehouse = data.get("warehouse") or settings.get("default_warehouse") or ""
+        canonical = _canonical_pos_context(
+            company=company,
+            branch=data.get("branch"),
+            submitted_warehouse=data.get("warehouse"),
+        )
+        branch = canonical.branch
+        warehouse = canonical.warehouse
         price_list = data.get("price_list") or settings.get("default_price_list") or ""
         customer = data.get("customer") or settings.get("default_customer") or ""
         customer_address = data.get("customer_address") or ""
@@ -3111,6 +3161,7 @@ def _prepare_invoice_context(data):
         {
             "settings": settings,
             "company": company,
+            "branch": branch,
             "cost_center": _company_cost_center(company),
             "order_type": order_type,
             "warehouse": warehouse,
@@ -3438,6 +3489,7 @@ def save_invoice(data):
 
     doc.company = context.company
     doc.customer = context.customer
+    _set_if_field(doc, "custom_pharmacy_branch", context.branch)
 
     shift_field = "custom_pharmacy_shift"
     if _has_field("Sales Invoice", shift_field):
@@ -3814,9 +3866,9 @@ def get_returnable_invoice(invoice, return_request=None):
     }
 
 @frappe.whitelist()
-def get_return_item(item_code, warehouse=None):
-    settings = _get_settings()
-    warehouse = warehouse or settings.get("default_warehouse") or ""
+def get_return_item(item_code, warehouse=None, branch=None):
+    canonical = _canonical_customer_return_context(branch=branch, submitted_warehouse=warehouse)
+    warehouse = canonical.warehouse
     item = _item_context(item_code, warehouse)
     item.return_batches = _get_all_item_batches(item_code) if cint(item.has_batch_no) else []
     return item
@@ -4233,6 +4285,23 @@ def create_sales_return(data):
         from erpnext.accounts.doctype.sales_invoice.sales_invoice import make_sales_return
 
         return_doc = make_sales_return(source_name)
+        source_branch = (
+            source_doc.get("custom_pharmacy_branch")
+            if _has_field("Sales Invoice", "custom_pharmacy_branch")
+            else ""
+        )
+        if not source_branch:
+            source_warehouse = source_doc.set_warehouse or next(
+                (row.warehouse for row in source_doc.items if row.warehouse),
+                "",
+            )
+            if source_warehouse:
+                source_branch = branch_from_canonical_warehouse(
+                    warehouse=source_warehouse,
+                    company=source_doc.company,
+                )
+        if source_branch:
+            _set_if_field(return_doc, "custom_pharmacy_branch", source_branch)
         selected_map = {
             row.get("source_item"): frappe._dict(row)
             for row in selections
@@ -4279,7 +4348,12 @@ def create_sales_return(data):
             frappe.throw(_("Return reason is required."))
         settings = _get_settings()
         company = _company(data.get("company"))
-        warehouse = data.get("warehouse") or settings.get("default_warehouse") or ""
+        pos_context = _canonical_customer_return_context(
+            company=company,
+            branch=data.get("branch"),
+            submitted_warehouse=data.get("warehouse"),
+        )
+        warehouse = pos_context.warehouse
         customer = data.get("customer") or settings.get("default_customer") or ""
         if not customer:
             frappe.throw(_("Select Customer."))
@@ -4287,6 +4361,7 @@ def create_sales_return(data):
         return_doc = frappe.new_doc("Sales Invoice")
         return_doc.company = company
         return_doc.customer = customer
+        _set_if_field(return_doc, "custom_pharmacy_branch", pos_context.branch)
         return_doc.is_return = 1
         return_doc.update_stock = 1
         return_doc.is_pos = 0
