@@ -538,3 +538,74 @@ elif isinstance(_step4f_existing_handlers, str):
 elif _step4f_dispatch_handler not in _step4f_existing_handlers:
     _step4f_existing_handlers.append(_step4f_dispatch_handler)
 # END PHARMA STEP 4F CONTROLLED CUSTOMER TRANSACTIONAL EMAIL DISPATCH
+
+
+# BEGIN PHARMA v0.9.2 STEP2B STANDARD RESERVATION FOUNDATION
+def _step2b_merge_hook(mapping, event, handler):
+    current = mapping.get(event)
+    if not current:
+        mapping[event] = handler
+    elif isinstance(current, str):
+        if current != handler:
+            mapping[event] = [current, handler]
+    elif handler not in current:
+        current.append(handler)
+
+
+_step2b_sales_order_events = doc_events.setdefault("Sales Order", {})
+for _step2b_event in ("validate", "before_submit"):
+    _step2b_merge_hook(
+        _step2b_sales_order_events,
+        _step2b_event,
+        "pharma_erp.pharma_erp.standard_reservation_service."
+        "validate_sales_order_reservation_context",
+    )
+
+_step2b_sre_events = doc_events.setdefault("Stock Reservation Entry", {})
+_step2b_sre_hooks = {
+    "validate": (
+        "pharma_erp.pharma_erp.standard_reservation_service."
+        "prepare_standard_reservation_entry"
+    ),
+    "before_submit": (
+        "pharma_erp.pharma_erp.standard_reservation_service."
+        "validate_before_submit_standard_reservation"
+    ),
+    "on_submit": (
+        "pharma_erp.pharma_erp.standard_reservation_service."
+        "sync_standard_reservation_contract"
+    ),
+    "on_update_after_submit": (
+        "pharma_erp.pharma_erp.standard_reservation_service."
+        "sync_standard_reservation_contract"
+    ),
+    "before_cancel": (
+        "pharma_erp.pharma_erp.standard_reservation_service."
+        "before_cancel_standard_reservation"
+    ),
+    "on_cancel": (
+        "pharma_erp.pharma_erp.standard_reservation_service."
+        "on_cancel_standard_reservation"
+    ),
+}
+for _step2b_event, _step2b_handler in _step2b_sre_hooks.items():
+    _step2b_merge_hook(_step2b_sre_events, _step2b_event, _step2b_handler)
+
+try:
+    scheduler_events
+except NameError:
+    scheduler_events = {}
+
+_step2b_expiry_handler = (
+    "pharma_erp.pharma_erp.standard_reservation_service.expire_due_reservations"
+)
+_step2b_hourly_handlers = scheduler_events.setdefault("hourly", [])
+if isinstance(_step2b_hourly_handlers, str):
+    if _step2b_hourly_handlers != _step2b_expiry_handler:
+        scheduler_events["hourly"] = [
+            _step2b_hourly_handlers,
+            _step2b_expiry_handler,
+        ]
+elif _step2b_expiry_handler not in _step2b_hourly_handlers:
+    _step2b_hourly_handlers.append(_step2b_expiry_handler)
+# END PHARMA v0.9.2 STEP2B STANDARD RESERVATION FOUNDATION
