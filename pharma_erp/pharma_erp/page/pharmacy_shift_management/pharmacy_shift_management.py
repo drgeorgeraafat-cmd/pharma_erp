@@ -1,6 +1,9 @@
 import frappe
 from frappe import _
 
+from pharma_erp.pharma_erp.branch_operational_integration import (
+    resolve_operational_branch,
+)
 from pharma_erp.pharma_erp.payment_card_management import (
     begin_shift_review,
     cancel_cashflow_document,
@@ -107,18 +110,75 @@ def _cash_drawer_rows(company=None):
     return result
 
 
+def _branch_rows(company=None):
+    company = company or _default_company()
+    return frappe.get_all(
+        "Pharmacy Branch Profile",
+        filters={"company": company, "disabled": 0},
+        fields=["branch", "company"],
+        order_by="branch asc",
+        limit_page_length=200,
+    )
+
+
 @frappe.whitelist()
-def get_dashboard(shift_name=None):
-    data = _get_dashboard(shift_name=shift_name)
+def get_dashboard(shift_name=None, branch=None):
+    company = _default_company()
+    branches = _branch_rows(company)
+    branch = str(branch or "").strip()
+    data = None
+
+    if shift_name:
+        shift_branch = frappe.db.get_value(
+            "Pharmacy Shift Closing",
+            shift_name,
+            "branch",
+        ) or ""
+        if branch and shift_branch and branch != shift_branch:
+            frappe.throw(_("Selected Shift belongs to another Branch."))
+        branch = shift_branch or branch
+    elif branch:
+        branch = resolve_operational_branch(
+            company=company,
+            requested_branch=branch,
+        )
+    else:
+        legacy_active = _get_dashboard()
+        legacy_shift = legacy_active.get("shift") or {}
+        if legacy_active.get("has_open_shift") and not legacy_shift.get("branch"):
+            data = legacy_active
+        elif len(branches) == 1:
+            branch = branches[0].branch
+            data = _get_dashboard(branch=branch)
+        else:
+            data = {
+                "has_open_shift": False,
+                "has_active_shift": False,
+                "active_shift": "",
+                "under_review_shifts": [],
+            }
+
+    if data is None:
+        data = _get_dashboard(
+            shift_name=shift_name,
+            branch=branch,
+        )
+
+    data["branches"] = branches
+    data["selected_branch"] = branch
     if not data.get("has_open_shift"):
-        data["cash_drawers"] = _cash_drawer_rows()
+        data["cash_drawers"] = _cash_drawer_rows(company)
     return data
 
 
 @frappe.whitelist()
-def create_shift(opening_balance=0, company=None, cash_drawer=None):
+def create_shift(opening_balance=0, company=None, cash_drawer=None, branch=None):
     company = company or _default_company()
     cash_drawer = (cash_drawer or "").strip()
+    branch = resolve_operational_branch(
+        company=company,
+        requested_branch=branch,
+    )
 
     if not cash_drawer:
         frappe.throw(_("Cash Drawer is required."))
@@ -150,4 +210,5 @@ def create_shift(opening_balance=0, company=None, cash_drawer=None):
         opening_balance=opening_balance,
         company=company,
         cash_drawer=cash_drawer,
+        branch=branch,
     )

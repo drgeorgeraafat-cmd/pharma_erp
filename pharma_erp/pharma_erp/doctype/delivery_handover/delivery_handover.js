@@ -6,6 +6,7 @@ frappe.ui.form.on("Delivery Handover", {
                 return {
                     filters: {
                         docstatus: 0,
+                        branch: ["is", "set"],
                         settlement_status: [
                             "not in",
                             ["Settled", "Cancelled"]
@@ -147,6 +148,7 @@ function load_handover_settlement(frm) {
         [
             "delivery_boy",
             "shift_reference",
+            "branch",
             "remaining_with_driver",
             "settlement_status"
         ]
@@ -173,6 +175,11 @@ function load_handover_settlement(frm) {
         frm.set_value(
             "shift_reference",
             data.shift_reference
+        );
+
+        frm.set_value(
+            "branch",
+            data.branch || ""
         );
 
         frm.set_value(

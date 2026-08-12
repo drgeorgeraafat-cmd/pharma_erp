@@ -18,6 +18,7 @@ class PharmacyShiftManagementV24 {
             : $(wrapper).find(".layout-main-section");
         this.data = null;
         this.selectedShift = "";
+        this.selectedBranch = "";
 
         this.addStyles();
         this.page.set_primary_action(
@@ -75,10 +76,12 @@ class PharmacyShiftManagementV24 {
                     "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.get_dashboard",
                 args: {
                     shift_name: this.selectedShift || "",
+                    branch: this.selectedBranch || "",
                 },
             });
 
             this.data = response.message || {};
+            this.selectedBranch = this.data.selected_branch || "";
             this.render();
         } catch (error) {
             console.error(error);
@@ -110,6 +113,7 @@ class PharmacyShiftManagementV24 {
 
         this.$main.html(`
             <div class="psm24">
+                ${this.renderBranchSwitcher()}
                 ${shift.is_under_review ? `
                     <div class="psm29-review-banner">
                         <strong>هذه الوردية مجمدة وتحت المراجعة.</strong>
@@ -145,6 +149,7 @@ class PharmacyShiftManagementV24 {
                 <div class="psm24-section">
                     <div class="psm24-grid">
                         ${this.infoCard(__("رقم الوردية"), shift.name)}
+                        ${this.infoCard(__("الفرع"), shift.branch || __("Not Attributable"))}
                         ${this.infoCard(__("الخزنة النقدية"), shift.cash_drawer || "-")}
                         ${this.infoCard(__("حساب الخزنة"), shift.cash_account || "-")}
                         ${this.infoCard(__("الكاشير"), shift.cashier || "-")}
@@ -203,7 +208,55 @@ class PharmacyShiftManagementV24 {
         this.bindEvents();
     }
 
+    renderBranchSwitcher() {
+        const branches = this.data.branches || [];
+        const selectedBranch =
+            this.data.selected_branch || this.selectedBranch || "";
+        if (!branches.length || (branches.length === 1 && selectedBranch)) {
+            return "";
+        }
+
+        return `
+            <div class="psm24-section">
+                <div class="form-group mb-0" style="max-width:440px">
+                    <label>${__("الفرع التشغيلي")}</label>
+                    <select class="form-control psm24-branch-switch">
+                        ${!selectedBranch ? `
+                            <option value="" selected>
+                                ${__("Not Attributable — اختر فرعًا للانتقال")}
+                            </option>
+                        ` : ""}
+                        ${branches.map((row) => `
+                            <option
+                                value="${frappe.utils.escape_html(row.branch)}"
+                                ${row.branch === selectedBranch ? "selected" : ""}
+                            >
+                                ${frappe.utils.escape_html(row.branch)}
+                            </option>
+                        `).join("")}
+                    </select>
+                </div>
+            </div>
+        `;
+    }
+
     renderNoShift() {
+        const branches = this.data.branches || [];
+        const selectedBranch =
+            this.data.selected_branch || this.selectedBranch || "";
+        const branchOptions = [
+            branches.length !== 1
+                ? `<option value="">${__("اختر الفرع")}</option>`
+                : "",
+            ...branches.map((row) => `
+                <option
+                    value="${frappe.utils.escape_html(row.branch)}"
+                    ${row.branch === selectedBranch || (branches.length === 1 && !selectedBranch) ? "selected" : ""}
+                >
+                    ${frappe.utils.escape_html(row.branch)}
+                </option>
+            `),
+        ].join("");
         const drawers = (this.data.cash_drawers || []).filter(
             (row) => !cint(row.is_busy),
         );
@@ -225,7 +278,22 @@ class PharmacyShiftManagementV24 {
             <div class="psm24">
                 <div class="psm24-section">
                     <h4>${__("فتح وردية جديدة")}</h4>
-                    ${drawers.length ? `
+                    ${branches.length ? `
+                        <div class="form-group" style="max-width:440px">
+                            <label>${__("الفرع")}</label>
+                            <select class="form-control psm24-branch" required>
+                                ${branchOptions}
+                            </select>
+                            <div class="small text-muted mt-1">
+                                ${__("الفرع canonical للوردية والتسويات والتوريدات المرتبطة.")}
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="alert alert-warning">
+                            ${__("لا يوجد Pharmacy Branch Profile canonical مفعّل لهذه الشركة.")}
+                        </div>
+                    `}
+                    ${drawers.length && branches.length ? `
                         <div class="form-group" style="max-width:440px">
                             <label>${__("الخزنة النقدية")}</label>
                             <select class="form-control psm24-cash-drawer" required>
@@ -260,6 +328,13 @@ class PharmacyShiftManagementV24 {
 
         this.$main
             .off(".psm24")
+            .on("change.psm24", ".psm24-branch", (event) => {
+                this.selectedBranch = $(event.currentTarget).val() || "";
+                this.selectedShift = "";
+                if (this.selectedBranch) {
+                    this.refresh();
+                }
+            })
             .on("click.psm24", ".psm24-create-shift", () => {
                 this.createShift();
             })
@@ -1132,6 +1207,11 @@ class PharmacyShiftManagementV24 {
     bindEvents() {
         this.$main
             .off(".psm24")
+            .on("change.psm24", ".psm24-branch-switch", (event) => {
+                this.selectedBranch = $(event.currentTarget).val() || "";
+                this.selectedShift = "";
+                this.refresh();
+            })
             .on("click.psm24", "[data-action='review-sales']", () =>
                 this.reviewSales(),
             )
@@ -1846,6 +1926,15 @@ class PharmacyShiftManagementV24 {
     }
 
     async createShift() {
+        const branch =
+            this.$main.find(".psm24-branch").val()
+            || this.selectedBranch
+            || "";
+        if (!branch) {
+            frappe.msgprint(__("اختر الفرع قبل فتح الوردية."));
+            return;
+        }
+
         const cashDrawer =
             this.$main.find(".psm24-cash-drawer").val() || "";
         if (!cashDrawer) {
@@ -1857,6 +1946,7 @@ class PharmacyShiftManagementV24 {
             method:
                 "pharma_erp.pharma_erp.page.pharmacy_shift_management.pharmacy_shift_management.create_shift",
             args: {
+                branch: branch,
                 cash_drawer: cashDrawer,
                 opening_balance: flt(
                     this.$main.find(".psm24-opening").val(),
@@ -1867,11 +1957,13 @@ class PharmacyShiftManagementV24 {
         });
 
         frappe.show_alert({
-            message: __("تم فتح الوردية على الخزنة {0}", [
+            message: __("تم فتح وردية الفرع {0} على الخزنة {1}", [
+                response.message?.branch || branch,
                 response.message?.cash_drawer || cashDrawer,
             ]),
             indicator: "green",
         });
+        this.selectedBranch = response.message?.branch || branch;
         await this.refresh();
     }
 

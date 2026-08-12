@@ -9,6 +9,7 @@
   "section_break_m6e0",
   "delivery_boy",
   "shift_reference",
+  "branch",
   "pilot_float",
   "date",
   "total_expected",
@@ -52,6 +53,17 @@
    "label": "Shift Reference",
    "options": "Pharmacy Shift Closing",
    "reqd": 1
+  },
+  {
+   "description": "Canonical Branch copied and validated from Shift Reference. Historical blank rows remain Not Attributable.",
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Branch",
+   "options": "Branch",
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "column_break_gwiv",

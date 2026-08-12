@@ -420,6 +420,7 @@ def _delivery_order_fields():
         "custom_collection_confirmed_by",
         "custom_collection_confirmed_at",
         "custom_collection_payment_entry",
+        "custom_pharmacy_branch",
         "custom_pharmacy_shift",
         "custom_delivery_shift",
         "custom_original_delivery_shift",
@@ -520,7 +521,7 @@ def get_delivery_orders():
     )
 
     by_name = {}
-    active_shift_by_company = {}
+    active_shift_by_context = {}
 
     for row in candidates:
         # Add-on invoices are represented under the parent invoice and must
@@ -529,10 +530,17 @@ def get_delivery_orders():
             continue
 
         company = row.get("company") or ""
-        if company not in active_shift_by_company:
-            active_shift_by_company[company] = shift_finance._current_open_shift(company)
+        branch = str(row.get("custom_pharmacy_branch") or "").strip()
+        if not branch:
+            continue
+        context_key = (company, branch)
+        if context_key not in active_shift_by_context:
+            active_shift_by_context[context_key] = shift_finance._current_open_shift(
+                company,
+                branch=branch,
+            )
 
-        active_shift = active_shift_by_company.get(company)
+        active_shift = active_shift_by_context.get(context_key)
         current_delivery_shift = (
             row.get("custom_delivery_shift")
             or row.get("custom_pharmacy_shift")
@@ -611,14 +619,19 @@ def get_delivery_orders():
 
     trips = annotate_orders_with_trips(orders)
 
-    active_shift_by_company = {}
+    active_shift_by_context = {}
     transferable_statuses = set(shift_finance.TRANSFERABLE_DELIVERY_STATUSES)
     for order in orders:
         company = order.get("company") or ""
-        if company not in active_shift_by_company:
-            active_shift_by_company[company] = shift_finance._current_open_shift(company)
+        branch = str(order.get("custom_pharmacy_branch") or "").strip()
+        context_key = (company, branch)
+        if branch and context_key not in active_shift_by_context:
+            active_shift_by_context[context_key] = shift_finance._current_open_shift(
+                company,
+                branch=branch,
+            )
 
-        active_shift = active_shift_by_company.get(company)
+        active_shift = active_shift_by_context.get(context_key) if branch else None
         current_delivery_shift = (
             order.get("custom_delivery_shift")
             or order.get("custom_pharmacy_shift")
@@ -655,6 +668,7 @@ def transfer_order_to_active_shift(invoice_name, reason=None):
         frappe.throw(_("رقم الفاتورة مطلوب."))
 
     required_fields = (
+        "custom_pharmacy_branch",
         "custom_pharmacy_shift",
         "custom_delivery_shift",
         "custom_original_delivery_shift",
@@ -702,7 +716,18 @@ def transfer_order_to_active_shift(invoice_name, reason=None):
     if not current_delivery_shift:
         frappe.throw(_("الأوردر غير مرتبط بوردية توصيل حالية."))
 
-    active_shift = shift_finance._current_open_shift(invoice.company)
+    invoice_branch = str(invoice.get("custom_pharmacy_branch") or "").strip()
+    if not invoice_branch:
+        frappe.throw(
+            _(
+                "الأوردر غير منسوب إلى Branch canonical ولا يمكن نقله بين الورديات."
+            )
+        )
+
+    active_shift = shift_finance._current_open_shift(
+        invoice.company,
+        branch=invoice_branch,
+    )
     if not active_shift:
         frappe.throw(_("لا توجد وردية Active حاليًا لنقل الأوردر إليها."))
     if active_shift.name == current_delivery_shift:

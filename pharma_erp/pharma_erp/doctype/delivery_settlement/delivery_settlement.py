@@ -5,8 +5,22 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import flt, get_datetime, now, now_datetime
 
+from pharma_erp.pharma_erp.shift_delivery_branch_integration import (
+    BRANCH_FIELD,
+    validate_delivery_settlement_branch,
+)
+
+
+INVOICE_SETTLEMENT_FIELD = "custom_delivery_settlement"
+
 
 class DeliverySettlement(Document):
+    def validate(self):
+        validate_delivery_settlement_branch(self)
+
+    def on_update(self):
+        self._sync_linked_invoices()
+
     def before_submit(self):
         self._validate_final_settlement()
 
@@ -15,6 +29,81 @@ class DeliverySettlement(Document):
 
     def on_cancel(self):
         self._clear_linked_invoices()
+
+    def on_trash(self):
+        self._clear_linked_invoices()
+
+    def _sync_linked_invoices(self):
+        """Keep Sales Invoice settlement links aligned with the child table."""
+        if not self.name or not frappe.db.exists(self.doctype, self.name):
+            return
+
+        invoice_names = {
+            str(row.invoice_number or "").strip()
+            for row in (self.get("invoices") or [])
+            if str(row.invoice_number or "").strip()
+        }
+
+        linked_to_self = set(
+            frappe.get_all(
+                "Sales Invoice",
+                filters={INVOICE_SETTLEMENT_FIELD: self.name},
+                pluck="name",
+                limit_page_length=500,
+            )
+        )
+
+        if invoice_names:
+            linked_rows = frappe.get_all(
+                "Sales Invoice",
+                filters={"name": ["in", sorted(invoice_names)]},
+                fields=["name", INVOICE_SETTLEMENT_FIELD],
+                limit_page_length=500,
+            )
+            found_names = {row.name for row in linked_rows}
+            missing_names = sorted(invoice_names - found_names)
+            if missing_names:
+                frappe.throw(
+                    "Sales Invoice records were not found: "
+                    + ", ".join(missing_names)
+                )
+
+            conflicts = [
+                row
+                for row in linked_rows
+                if row.get(INVOICE_SETTLEMENT_FIELD)
+                and row.get(INVOICE_SETTLEMENT_FIELD) != self.name
+            ]
+            if conflicts:
+                frappe.throw(
+                    "Sales Invoice records are already linked to another "
+                    "Delivery Settlement: "
+                    + ", ".join(
+                        "{0} ({1})".format(
+                            row.name,
+                            row.get(INVOICE_SETTLEMENT_FIELD),
+                        )
+                        for row in conflicts
+                    )
+                )
+
+        for invoice_name in sorted(invoice_names):
+            frappe.db.set_value(
+                "Sales Invoice",
+                invoice_name,
+                INVOICE_SETTLEMENT_FIELD,
+                self.name,
+                update_modified=False,
+            )
+
+        for invoice_name in sorted(linked_to_self - invoice_names):
+            frappe.db.set_value(
+                "Sales Invoice",
+                invoice_name,
+                INVOICE_SETTLEMENT_FIELD,
+                None,
+                update_modified=False,
+            )
 
     def _validate_final_settlement(self):
         if self.settlement_status not in ("Settled", "Disputed"):
@@ -128,7 +217,7 @@ class DeliverySettlement(Document):
     def _clear_linked_invoices(self):
         linked_invoices = frappe.get_all(
             "Sales Invoice",
-            filters={"custom_delivery_settlement": self.name},
+            filters={INVOICE_SETTLEMENT_FIELD: self.name},
             fields=["name"],
             limit_page_length=500,
         )
@@ -136,8 +225,9 @@ class DeliverySettlement(Document):
             frappe.db.set_value(
                 "Sales Invoice",
                 invoice.name,
-                "custom_delivery_settlement",
+                INVOICE_SETTLEMENT_FIELD,
                 None,
+                update_modified=False,
             )
 
 
@@ -164,6 +254,7 @@ def get_delivery_settlement_data(
         frappe.throw("The selected shift does not exist.")
 
     shift = frappe.get_doc("Pharmacy Shift Closing", shift_reference)
+    shift_branch = str(shift.get(BRANCH_FIELD) or "").strip()
     start_time = shift.start_time or shift.creation
     end_time = shift.end_time or now_datetime()
 
@@ -175,26 +266,33 @@ def get_delivery_settlement_data(
     )
     trip_names = [row.name for row in trip_rows]
 
+    invoice_filters = {
+        "docstatus": 1,
+        "custom_order_type": "Home Delivery",
+        "custom_delivery_boy": delivery_boy,
+        "custom_delivery_status": "Delivered",
+        "custom_collection_verification_status": "Confirmed",
+        "custom_collection_received_by": "Delivery Boy",
+    }
+    invoice_fields = [
+        "name",
+        "customer_name",
+        "custom_confirmed_collected_amount",
+        "custom_confirmed_customer_payment_method",
+        "custom_collection_payment_entry",
+        "custom_delivery_trip",
+        "custom_collection_confirmed_at",
+        "custom_delivery_settlement",
+    ]
+    invoice_meta = frappe.get_meta("Sales Invoice")
+    if shift_branch and invoice_meta.has_field("custom_pharmacy_branch"):
+        invoice_filters["custom_pharmacy_branch"] = shift_branch
+        invoice_fields.append("custom_pharmacy_branch")
+
     invoice_rows = frappe.get_all(
         "Sales Invoice",
-        filters={
-            "docstatus": 1,
-            "custom_order_type": "Home Delivery",
-            "custom_delivery_boy": delivery_boy,
-            "custom_delivery_status": "Delivered",
-            "custom_collection_verification_status": "Confirmed",
-            "custom_collection_received_by": "Delivery Boy",
-        },
-        fields=[
-            "name",
-            "customer_name",
-            "custom_confirmed_collected_amount",
-            "custom_confirmed_customer_payment_method",
-            "custom_collection_payment_entry",
-            "custom_delivery_trip",
-            "custom_collection_confirmed_at",
-            "custom_delivery_settlement",
-        ],
+        filters=invoice_filters,
+        fields=invoice_fields,
         order_by="custom_collection_confirmed_at asc",
         limit_page_length=500,
     )

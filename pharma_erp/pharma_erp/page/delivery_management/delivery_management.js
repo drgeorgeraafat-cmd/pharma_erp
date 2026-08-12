@@ -448,12 +448,35 @@ class DeliveryManagementPage {
             return;
         }
 
+        const branches = [
+            ...new Set(
+                selected
+                    .map((order) => order.custom_pharmacy_branch)
+                    .filter(Boolean),
+            ),
+        ];
+        if (branches.length !== 1 || selected.some((order) => !order.custom_pharmacy_branch)) {
+            frappe.msgprint({
+                title: __("لا يمكن إنشاء الرحلة"),
+                message: __("كل الأوردرات المحددة يجب أن تكون منسوبة إلى نفس الفرع."),
+                indicator: "red",
+            });
+            return;
+        }
+
         const driverName = selected[0].delivery_boy_name || drivers[0];
-        const currentShift = this.tripDefaults.shift_reference || "";
+        const activeShifts = [
+            ...new Set(
+                selected
+                    .map((order) => order.active_delivery_shift)
+                    .filter(Boolean),
+            ),
+        ];
+        const currentShift = activeShifts.length === 1 ? activeShifts[0] : "";
         if (!currentShift) {
             frappe.msgprint({
                 title: __("لا يوجد شيفت مفتوح"),
-                message: __("افتح Pharmacy Shift Closing أولًا، ثم اضغط Refresh وأعد إنشاء الرحلة."),
+                message: __("افتح Pharmacy Shift Closing لنفس الفرع أولًا، ثم اضغط Refresh وأعد إنشاء الرحلة."),
                 indicator: "orange"
             });
             return;

@@ -4,6 +4,9 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_datetime, getdate, now_datetime, nowdate, time_diff_in_seconds
 
+from pharma_erp.pharma_erp.branch_operational_integration import (
+    resolve_operational_branch,
+)
 from pharma_erp.pharma_erp.delivery_attempt import (
     ADD_ON_NOTES_FIELD,
     ADD_ON_STATUS_FIELD,
@@ -17,6 +20,11 @@ from pharma_erp.pharma_erp.delivery_attempt import (
     sales_invoice_has,
     start_delivery_attempt,
     sync_delivery_group,
+)
+from pharma_erp.pharma_erp.shift_delivery_branch_integration import (
+    BRANCH_FIELD,
+    SALES_INVOICE_BRANCH_FIELD,
+    require_attributed_shift,
 )
 
 
@@ -88,7 +96,7 @@ def _normalise_status(value):
     return str(value or "").strip().lower().replace("_", " ").replace("-", " ")
 
 
-def get_current_open_shift(company=None):
+def get_current_open_shift(company=None, branch=None):
     """Return the current open Pharmacy Shift Closing record.
 
     The custom DocType can differ between installations, so the lookup uses
@@ -100,6 +108,14 @@ def get_current_open_shift(company=None):
         return ""
 
     meta = frappe.get_meta(SHIFT_DOCTYPE)
+    branch = str(branch or "").strip()
+    if branch and company:
+        branch = resolve_operational_branch(
+            company=company,
+            requested_branch=branch,
+        )
+    if branch and not meta.has_field(BRANCH_FIELD):
+        return ""
     status_fields = [
         name for name in (
             "status",
@@ -146,6 +162,8 @@ def get_current_open_shift(company=None):
     ]
 
     fields = ["name", "docstatus", "creation", "modified", "owner"]
+    if meta.has_field(BRANCH_FIELD):
+        fields.append(BRANCH_FIELD)
     for fieldname in status_fields + company_fields + date_fields + user_fields + close_fields:
         if fieldname not in fields:
             fields.append(fieldname)
@@ -192,6 +210,8 @@ def get_current_open_shift(company=None):
     today_value = getdate(nowdate())
 
     for row in rows:
+        if branch and str(row.get(BRANCH_FIELD) or "").strip() != branch:
+            continue
         status = ""
         for fieldname in status_fields:
             if row.get(fieldname):
@@ -250,7 +270,7 @@ def get_current_open_shift(company=None):
     return best or ""
 
 
-def get_trip_defaults(company=None):
+def get_trip_defaults(company=None, branch=None):
     return frappe._dict(
         {
             "vehicle": _get_default_value(TRIP_DOCTYPE, "vehicle", ""),
@@ -259,7 +279,10 @@ def get_trip_defaults(company=None):
                 "custom_delivery_method",
                 "Motorcycle",
             ),
-            "shift_reference": get_current_open_shift(company=company),
+            "shift_reference": get_current_open_shift(
+                company=company,
+                branch=branch,
+            ),
         }
     )
 
@@ -515,6 +538,7 @@ def create_trip(invoice_names, vehicle=None, shift_reference=None, delivery_meth
     invoices = []
     company = None
     employee = None
+    branch = None
 
     for name in names:
         invoice = frappe.get_doc("Sales Invoice", name)
@@ -541,8 +565,22 @@ def create_trip(invoice_names, vehicle=None, shift_reference=None, delivery_meth
 
         company = company or invoice.company
         employee = employee or invoice.get("custom_delivery_boy")
+        invoice_branch = (
+            str(invoice.get(SALES_INVOICE_BRANCH_FIELD) or "").strip()
+            if invoice.meta.has_field(SALES_INVOICE_BRANCH_FIELD)
+            else ""
+        )
+        if not invoice_branch:
+            frappe.throw(
+                _(
+                    "Sales Invoice {0} has no canonical Branch attribution and cannot be assigned to a new Delivery Trip."
+                ).format(name)
+            )
+        branch = branch or invoice_branch
         if invoice.company != company:
             frappe.throw(_("كل الأوردرات يجب أن تكون لنفس الشركة."))
+        if invoice_branch != branch:
+            frappe.throw(_("كل الأوردرات المحددة يجب أن تكون لنفس الفرع."))
         if invoice.get("custom_delivery_boy") != employee:
             frappe.throw(_("كل الأوردرات المحددة يجب أن تكون لنفس الطيار."))
         if not _invoice_address(invoice):
@@ -550,24 +588,41 @@ def create_trip(invoice_names, vehicle=None, shift_reference=None, delivery_meth
 
         invoices.append(invoice)
 
+    branch = resolve_operational_branch(
+        company=company,
+        requested_branch=branch,
+    )
     employee_data = _employee_data(employee)
     if employee_data.get("status") != "Active":
         frappe.throw(_("الطيار المحدد غير نشط."))
 
     driver = _driver_for_employee(employee)
-    defaults = get_trip_defaults(company=company)
+    defaults = get_trip_defaults(company=company, branch=branch)
     vehicle = vehicle or defaults.vehicle
     if not vehicle:
         frappe.throw(_("حدد Vehicle للرحلة أو ضع قيمة افتراضية في Delivery Trip."))
     if not frappe.db.exists("Vehicle", vehicle):
         frappe.throw(_("Vehicle غير موجود: {0}").format(vehicle))
 
-    current_shift = defaults.shift_reference or get_current_open_shift(company=company)
+    current_shift = defaults.shift_reference or get_current_open_shift(
+        company=company,
+        branch=branch,
+    )
     if not current_shift:
         frappe.throw(
             _("لا يوجد Pharmacy Shift Closing مفتوح حاليًا. افتح الشيفت أولًا ثم أعد إنشاء الرحلة.")
         )
-    shift_reference = current_shift
+    requested_shift = str(shift_reference or "").strip()
+    if requested_shift and requested_shift != current_shift:
+        frappe.throw(
+            _(
+                "Selected Shift {0} is not the active Shift for Branch {1}."
+            ).format(requested_shift, branch)
+        )
+    shift_reference = requested_shift or current_shift
+    shift, shift_branch = require_attributed_shift(shift_reference)
+    if shift.company != company or shift_branch != branch:
+        frappe.throw(_("Delivery Trip Shift must match the Sales Invoice Branch and Company."))
 
     trip = frappe.new_doc(TRIP_DOCTYPE)
     if trip.meta.has_field("naming_series") and not trip.get("naming_series"):

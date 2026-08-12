@@ -4,7 +4,8 @@ frappe.ui.form.on("Delivery Settlement", {
             return {
                 filters: {
                     status: "Open",
-                    docstatus: 0
+                    docstatus: 0,
+                    branch: ["is", "set"]
                 }
             };
         });
@@ -34,9 +35,11 @@ frappe.ui.form.on("Delivery Settlement", {
     },
 
     shift_reference: function (frm) {
-        if (frm.doc.delivery_boy && frm.doc.shift_reference) {
-            load_settlement_collections(frm);
-        }
+        sync_shift_branch(frm).then(function () {
+            if (frm.doc.delivery_boy && frm.doc.shift_reference) {
+                load_settlement_collections(frm);
+            }
+        });
     },
 
     pilot_float: function (frm) {
@@ -120,15 +123,29 @@ function set_current_open_shift(frm) {
             status: "Open",
             docstatus: 0
         },
-        fields: ["name", "start_time"],
+        fields: ["name", "start_time", "branch"],
         order_by: "start_time desc",
-        limit: 1
+        limit: 2
     }).then(function (rows) {
-        if (rows && rows.length) {
-            frm.set_value("shift_reference", rows[0].name).then(function () {
-                add_settlement_buttons(frm);
-            });
+        if (rows && rows.length === 1 && rows[0].branch) {
+            frm.set_value("branch", rows[0].branch);
+            frm.set_value("shift_reference", rows[0].name);
         }
+    });
+}
+
+function sync_shift_branch(frm) {
+    if (!frm.doc.shift_reference) {
+        return frm.set_value("branch", "");
+    }
+
+    return frappe.db.get_value(
+        "Pharmacy Shift Closing",
+        frm.doc.shift_reference,
+        "branch"
+    ).then(function (r) {
+        const branch = r.message?.branch || "";
+        return frm.set_value("branch", branch);
     });
 }
 
@@ -140,6 +157,15 @@ function load_settlement_collections(frm) {
 
     if (!frm.doc.shift_reference) {
         frappe.msgprint(__("برجاء تحديد الشيفت."));
+        return;
+    }
+
+    if (!frm.doc.branch) {
+        frappe.msgprint(
+            __(
+                "الشيفت المحدد غير منسوب إلى Branch canonical ولا يمكن إنشاء تسوية جديدة عليه."
+            )
+        );
         return;
     }
 
@@ -262,6 +288,7 @@ function create_handover(frm, handover_type) {
         delivery_settlement: frm.doc.name,
         delivery_boy: frm.doc.delivery_boy,
         shift_reference: frm.doc.shift_reference,
+        branch: frm.doc.branch,
         handover_type: handover_type,
         amount:
             handover_type === "Final Settlement"

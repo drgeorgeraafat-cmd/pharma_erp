@@ -6,11 +6,19 @@ from frappe.utils import cint, flt, get_datetime, now_datetime, nowdate
 
 from erpnext.accounts.party import get_party_account
 
+from pharma_erp.pharma_erp.branch_operational_integration import (
+    resolve_operational_branch,
+)
 from pharma_erp.pharma_erp.delivery_return_workflow import (
     DRIVER_OUT,
     DRIVER_RETURNING,
     DRIVER_RETURN_STATUS_FIELD,
     driver_outside_orders,
+)
+from pharma_erp.pharma_erp.shift_delivery_branch_integration import (
+    BRANCH_FIELD,
+    SALES_INVOICE_BRANCH_FIELD,
+    require_attributed_shift,
 )
 
 COMPANY = "Cure"
@@ -118,6 +126,7 @@ def _shift_list_fields():
     ]
 
     for fieldname in [
+        BRANCH_FIELD,
         SHIFT_STATE_FIELD,
         SHIFT_CUTOFF_FIELD,
         "custom_review_started_at",
@@ -145,10 +154,13 @@ def _shift_list_fields():
     return fields
 
 
-def _current_open_shift(company=None):
+def _current_open_shift(company=None, branch=None):
     filters = {"docstatus": 0}
     if company:
         filters["company"] = company
+    branch = str(branch or "").strip()
+    if branch:
+        filters[BRANCH_FIELD] = branch
 
     rows = frappe.get_all(
         "Pharmacy Shift Closing",
@@ -175,10 +187,13 @@ def _current_open_shift(company=None):
     return active_rows[0] if active_rows else None
 
 
-def _under_review_shift_rows(company=None):
+def _under_review_shift_rows(company=None, branch=None):
     filters = {"docstatus": 0}
     if company:
         filters["company"] = company
+    branch = str(branch or "").strip()
+    if branch:
+        filters[BRANCH_FIELD] = branch
 
     rows = frappe.get_all(
         "Pharmacy Shift Closing",
@@ -418,6 +433,9 @@ def _normalize_payment_row(row):
     row.destination_account = str(
         row.get("destination_account") or ""
     )
+    row.pharmacy_branch = str(
+        row.get("pharmacy_branch") or ""
+    ).strip()
     return row
 
 
@@ -464,6 +482,11 @@ def _all_delivery_cash_rows(delivery_boy=None):
         and invoice_meta.has_field(SALES_SHIFT_FIELD)
         else sales_shift_expr
     )
+    branch_expr = (
+        "COALESCE(si.custom_pharmacy_branch, '')"
+        if invoice_meta.has_field("custom_pharmacy_branch")
+        else "''"
+    )
 
     if _has_field("Sales Invoice Payment", "reference_no"):
         sip_reference_expr = "COALESCE(sip.reference_no, '')"
@@ -491,6 +514,7 @@ def _all_delivery_cash_rows(delivery_boy=None):
             COALESCE(sip.account, '') AS destination_account,
             {sales_shift_expr} AS sales_shift,
             {delivery_shift_expr} AS delivery_shift,
+            {branch_expr} AS pharmacy_branch,
             ABS(sip.amount) AS amount,
             si.grand_total AS invoice_total,
             si.outstanding_amount,
@@ -526,6 +550,7 @@ def _all_delivery_cash_rows(delivery_boy=None):
             COALESCE(pe.paid_to, '') AS destination_account,
             {sales_shift_expr} AS sales_shift,
             {delivery_shift_expr} AS delivery_shift,
+            {branch_expr} AS pharmacy_branch,
             ABS(per.allocated_amount) AS amount,
             si.grand_total AS invoice_total,
             si.outstanding_amount,
@@ -668,7 +693,7 @@ def _legacy_handover_events(delivery_boy=None):
     return events
 
 
-def _delivery_outstanding_rows(delivery_boy=None):
+def _delivery_outstanding_rows(delivery_boy=None, branch=None):
     rows = _all_delivery_cash_rows(delivery_boy)
     allocation_totals = {}
     for allocation in _submitted_handover_allocations(delivery_boy=delivery_boy):
@@ -718,7 +743,13 @@ def _delivery_outstanding_rows(delivery_boy=None):
             row.remaining_amount = _money(row.remaining_amount - amount)
             credit = _money(credit - amount)
 
-    return [row for row in rows if row.remaining_amount > TOLERANCE]
+    branch = str(branch or "").strip()
+    return [
+        row
+        for row in rows
+        if row.remaining_amount > TOLERANCE
+        and (not branch or row.pharmacy_branch == branch)
+    ]
 
 
 def _allocation_payload(row, amount, allocation_type, collection_shift):
@@ -735,8 +766,14 @@ def _allocation_payload(row, amount, allocation_type, collection_shift):
     }
 
 
-def _build_delivery_allocations(delivery_boy, cash_amount, shortage_amount, collection_shift):
-    outstanding = _delivery_outstanding_rows(delivery_boy)
+def _build_delivery_allocations(
+    delivery_boy,
+    cash_amount,
+    shortage_amount,
+    collection_shift,
+    branch,
+):
+    outstanding = _delivery_outstanding_rows(delivery_boy, branch=branch)
     allocations = []
 
     for allocation_type, requested in (
@@ -2030,6 +2067,7 @@ def _active_delivery_orders(shift=None, delivery_boy=None):
     ]
     for fieldname in [
         "custom_delivery_boy",
+        SALES_INVOICE_BRANCH_FIELD,
         SALES_SHIFT_FIELD,
         DELIVERY_SHIFT_FIELD,
         "custom_original_delivery_shift",
@@ -2150,6 +2188,18 @@ def _expand_add_on_invoices(invoice_names):
 
 
 def _transfer_delivery_orders(old_shift, new_shift, invoice_names, reason=None):
+    _old_shift, old_branch = require_attributed_shift(old_shift.name)
+    _new_shift, new_branch = require_attributed_shift(new_shift.name)
+    if old_branch != new_branch:
+        frappe.throw(
+            _(
+                "Delivery orders cannot transfer across Branches ({0} to {1})."
+            ).format(
+                frappe.bold(old_branch),
+                frappe.bold(new_branch),
+            )
+        )
+
     invoice_names = _expand_add_on_invoices(invoice_names)
     allowed = {row.name: row for row in _transferable_delivery_orders(old_shift)}
     transferred = []
@@ -2160,6 +2210,23 @@ def _transfer_delivery_orders(old_shift, new_shift, invoice_names, reason=None):
         row = allowed.get(invoice_name)
         if not row:
             skipped.append({"invoice": invoice_name, "reason": "Order is no longer transferable."})
+            continue
+        invoice_branch = str(row.get(SALES_INVOICE_BRANCH_FIELD) or "").strip()
+        if not invoice_branch:
+            skipped.append(
+                {
+                    "invoice": invoice_name,
+                    "reason": "Order has no canonical Branch attribution.",
+                }
+            )
+            continue
+        if invoice_branch != old_branch:
+            skipped.append(
+                {
+                    "invoice": invoice_name,
+                    "reason": "Order Branch does not match the source Shift Branch.",
+                }
+            )
             continue
 
         original_delivery_shift = (
@@ -2303,7 +2370,8 @@ def _delivery_settlement_for_driver(
 
 
 def _delivery_driver_summaries(shift):
-    outstanding_rows = _delivery_outstanding_rows()
+    branch = str(shift.get(BRANCH_FIELD) or "").strip()
+    outstanding_rows = _delivery_outstanding_rows(branch=branch)
     outstanding_by_driver = {}
     for row in outstanding_rows:
         outstanding_by_driver.setdefault(row.delivery_boy, []).append(row)
@@ -2353,6 +2421,7 @@ def _delivery_driver_summaries(shift):
         fields=[
             "name",
             "delivery_boy",
+            BRANCH_FIELD,
             "docstatus",
             "settlement_status",
             "total_expected",
@@ -2488,7 +2557,11 @@ def _delivery_driver_summaries(shift):
 
 
 def _ensure_delivery_settlement(shift, delivery_boy):
-    outstanding_rows = _delivery_outstanding_rows(delivery_boy)
+    _shift, branch = require_attributed_shift(shift.name)
+    outstanding_rows = _delivery_outstanding_rows(
+        delivery_boy,
+        branch=branch,
+    )
     outstanding_amount = _money(
         sum(_money(row.remaining_amount) for row in outstanding_rows)
     )
@@ -2507,6 +2580,7 @@ def _ensure_delivery_settlement(shift, delivery_boy):
         doc = frappe.new_doc("Delivery Settlement")
         doc.delivery_boy = delivery_boy
         doc.shift_reference = shift.name
+        doc.set(BRANCH_FIELD, branch)
         doc.pilot_float = 0
         doc.date = now_datetime()
         doc.settlement_status = "Open"
@@ -2672,6 +2746,7 @@ def get_delivery_handover_summary(shift_name):
 def submit_delivery_handover(shift_name, delivery_boy, handover_type, amount, notes=None):
     frappe.only_for("System Manager")
     shift = _get_shift(shift_name)
+    _shift, branch = require_attributed_shift(shift.name)
 
     if handover_type not in ("Partial Handover", "Final Settlement"):
         frappe.throw(_("Invalid handover type."))
@@ -2703,7 +2778,10 @@ def submit_delivery_handover(shift_name, delivery_boy, handover_type, amount, no
     if not summary or summary.expected_amount <= TOLERANCE:
         frappe.throw(_("There are no confirmed cash collections for this driver."))
 
-    outstanding_rows = _delivery_outstanding_rows(delivery_boy)
+    outstanding_rows = _delivery_outstanding_rows(
+        delivery_boy,
+        branch=branch,
+    )
     remaining_before = _money(summary.remaining_amount)
     if handover_type == "Partial Handover" and remaining_before <= TOLERANCE:
         frappe.throw(_("There is no remaining cash to receive as a partial handover."))
@@ -2727,12 +2805,14 @@ def submit_delivery_handover(shift_name, delivery_boy, handover_type, amount, no
         amount,
         shortage_to_allocate,
         shift.name,
+        branch,
     )
 
     handover = frappe.new_doc("Delivery Handover")
     handover.delivery_settlement = settlement.name
     handover.delivery_boy = delivery_boy
     handover.shift_reference = shift.name
+    handover.set(BRANCH_FIELD, branch)
     if _has_field("Delivery Handover", COLLECTION_SHIFT_FIELD):
         handover.set(COLLECTION_SHIFT_FIELD, shift.name)
     handover.handover_type = handover_type
@@ -2821,6 +2901,7 @@ def submit_delivery_handover(shift_name, delivery_boy, handover_type, amount, no
         "shortage_amount": _money(shortage.shortage_amount) if shortage else 0,
         "shortage": shortage.name if shortage else "",
         "settlement_status": settlement.settlement_status,
+        "branch": branch,
         "collection_shift": shift.name,
         "allocation_count": len(allocations),
     }
@@ -2845,10 +2926,15 @@ def _finalize_covered_delivery_settlements(shift):
     )
     finalized = []
     for row in rows:
+        doc = frappe.get_doc("Delivery Settlement", row.name)
+        branch = str(doc.get(BRANCH_FIELD) or "").strip()
         outstanding = _money(
             sum(
                 _money(item.remaining_amount)
-                for item in _delivery_outstanding_rows(row.delivery_boy)
+                for item in _delivery_outstanding_rows(
+                    row.delivery_boy,
+                    branch=branch,
+                )
             )
         )
         if outstanding > TOLERANCE:
@@ -2858,7 +2944,6 @@ def _finalize_covered_delivery_settlements(shift):
         if driver_outside_orders(row.delivery_boy):
             continue
 
-        doc = frappe.get_doc("Delivery Settlement", row.name)
         handovers = frappe.get_all(
             "Delivery Handover",
             filters={
@@ -3110,11 +3195,12 @@ def _rollover_summary(shift):
 
 
 @frappe.whitelist()
-def get_dashboard(shift_name=None):
+def get_dashboard(shift_name=None, branch=None):
     frappe.only_for("System Manager")
 
-    active = _current_open_shift()
-    review_rows = _under_review_shift_rows()
+    branch = str(branch or "").strip()
+    active = _current_open_shift(branch=branch)
+    review_rows = _under_review_shift_rows(branch=branch)
     shift = _get_shift(shift_name) if shift_name else (
         frappe.get_doc(
             "Pharmacy Shift Closing",
@@ -3127,6 +3213,7 @@ def get_dashboard(shift_name=None):
     under_review = [
         {
             "name": row.name,
+            "branch": row.get(BRANCH_FIELD) or "",
             "cashier": row.cashier,
             "company": row.company,
             "start_time": row.start_time or row.creation,
@@ -3160,6 +3247,7 @@ def get_dashboard(shift_name=None):
         "under_review_shifts": under_review,
         "shift": {
             "name": shift.name,
+            "branch": shift.get(BRANCH_FIELD) or "",
             "cashier": shift.cashier,
             "company": shift.company,
             "status": shift.status,
@@ -4250,13 +4338,23 @@ def _drawer_for_shift(cash_drawer=None, company=None):
     return drawer
 
 
-def _create_shift_document(opening_balance=0, company=None, cash_drawer=None):
+def _create_shift_document(
+    opening_balance=0,
+    company=None,
+    cash_drawer=None,
+    branch=None,
+):
     opening_balance = _money(opening_balance)
     company = company or COMPANY
+    branch = resolve_operational_branch(
+        company=company,
+        requested_branch=branch,
+    )
     drawer = _drawer_for_shift(cash_drawer, company)
 
     doc = frappe.new_doc("Pharmacy Shift Closing")
     doc.company = company
+    doc.set(BRANCH_FIELD, branch)
     doc.cashier = frappe.session.user
     doc.status = "Open"
     doc.start_time = now_datetime()
@@ -4305,16 +4403,30 @@ def _create_shift_document(opening_balance=0, company=None, cash_drawer=None):
 
 
 @frappe.whitelist()
-def create_shift(opening_balance=0, company=None, cash_drawer=None):
+def create_shift(opening_balance=0, company=None, cash_drawer=None, branch=None):
     frappe.only_for("System Manager")
     company = company or COMPANY
-    if _current_open_shift(company):
-        frappe.throw(_("There is already an active shift. Move it to Under Review or close it first."))
+    branch = resolve_operational_branch(
+        company=company,
+        requested_branch=branch,
+    )
+    if _current_open_shift(company, branch=branch):
+        frappe.throw(
+            _(
+                "Branch {0} already has an active shift. Move it to Under Review or close it first."
+            ).format(frappe.bold(branch))
+        )
 
-    doc, opening_result = _create_shift_document(opening_balance, company, cash_drawer)
+    doc, opening_result = _create_shift_document(
+        opening_balance,
+        company,
+        cash_drawer,
+        branch,
+    )
     frappe.db.commit()
     return {
         "name": doc.name,
+        "branch": doc.get(BRANCH_FIELD) or "",
         "cash_drawer": doc.get(CASH_DRAWER_FIELD) or "",
         "cash_account": doc.get("cash_account") or "",
         "opening_cash_movement": opening_result["name"] if opening_result else None,
@@ -4702,6 +4814,7 @@ def rollover_shift(
         new_opening_balance,
         shift.company,
         drawer_name,
+        shift.get(BRANCH_FIELD),
     )
 
     if isinstance(transfer_invoices, str):
@@ -5522,6 +5635,7 @@ def close_and_open_shift(
         opening_balance=new_opening_balance,
         company=shift.company,
         cash_drawer=drawer_name,
+        branch=shift.get(BRANCH_FIELD),
     )
     transfer_result = _transfer_delivery_orders(
         shift,
