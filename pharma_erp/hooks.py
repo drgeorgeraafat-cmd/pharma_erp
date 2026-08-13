@@ -609,3 +609,45 @@ if isinstance(_step2b_hourly_handlers, str):
 elif _step2b_expiry_handler not in _step2b_hourly_handlers:
     _step2b_hourly_handlers.append(_step2b_expiry_handler)
 # END PHARMA v0.9.2 STEP2B STANDARD RESERVATION FOUNDATION
+
+
+# BEGIN PHARMA v0.9.2 STEP2C CUSTOMER RESERVATION OPERATIONS
+_step2c_sales_order_events = doc_events.setdefault("Sales Order", {})
+for _step2c_event in ("validate", "before_submit"):
+    _step2b_merge_hook(
+        _step2c_sales_order_events,
+        _step2c_event,
+        "pharma_erp.pharma_erp.customer_reservation_service."
+        "validate_customer_reservation_sales_order",
+    )
+
+_step2c_sales_invoice_events = doc_events.setdefault("Sales Invoice", {})
+_step2c_sales_invoice_hooks = {
+    "validate": (
+        "pharma_erp.pharma_erp.customer_reservation_service."
+        "validate_customer_reservation_invoice"
+    ),
+    "before_submit": (
+        "pharma_erp.pharma_erp.customer_reservation_service."
+        "validate_customer_reservation_invoice"
+    ),
+    "on_submit": (
+        "pharma_erp.pharma_erp.customer_reservation_service."
+        "on_submit_customer_reservation_invoice"
+    ),
+    "on_cancel": (
+        "pharma_erp.pharma_erp.customer_reservation_service."
+        "on_cancel_customer_reservation_invoice"
+    ),
+    "on_update_after_submit": (
+        "pharma_erp.pharma_erp.customer_reservation_service."
+        "on_update_after_submit_customer_reservation_invoice"
+    ),
+}
+for _step2c_event, _step2c_handler in _step2c_sales_invoice_hooks.items():
+    _step2b_merge_hook(
+        _step2c_sales_invoice_events,
+        _step2c_event,
+        _step2c_handler,
+    )
+# END PHARMA v0.9.2 STEP2C CUSTOMER RESERVATION OPERATIONS

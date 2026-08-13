@@ -12,6 +12,11 @@ from pharma_erp.pharma_erp.branch_operational_integration import (
     resolve_pos_context,
     resolve_role_context,
 )
+from pharma_erp.pharma_erp.customer_reservation_contract import (
+    locked_reservation_pricing,
+    validate_locked_reservation_price,
+    weighted_source_price,
+)
 from pharma_erp.retail_price_lots import (
     LOT_DOCTYPE,
     LOT_FIELD,
@@ -1399,6 +1404,80 @@ def _item_context(item_code, warehouse=None):
 
     item.ingredient_summary = _item_ingredient_summary(item_code)
     return item
+
+
+def _canonical_pos_source_pricing(item_code, warehouse, requested_qty):
+    """Price a reservation with the same stock sources used by Pharmacy POS."""
+
+    item = _item_context(item_code, warehouse)
+    qty = flt(requested_qty, 6)
+    if qty <= 0:
+        frappe.throw(_("Reservation quantity must be greater than zero."))
+
+    pack_size = flt(item.get("custom_pack_size") or 1) or 1
+    box_qty = int(qty)
+    raw_units = flt((qty - box_qty) * pack_size, 6)
+    unit_qty = int(round(raw_units))
+    if abs(raw_units - unit_qty) > 0.000001:
+        frappe.throw(
+            _(
+                "Reservation quantity {0} cannot be represented by pack size {1}."
+            ).format(qty, pack_size)
+        )
+
+    if cint(item.get("has_batch_no")):
+        allocations = _allocate_batches_by_pack(
+            item_code,
+            warehouse,
+            box_qty,
+            unit_qty,
+            pack_size,
+        )
+    elif (
+        cint(item.get("is_stock_item", 1))
+        and warehouse
+        and frappe.db.exists("DocType", LOT_DOCTYPE)
+        and get_available_retail_lots(item_code, warehouse)
+    ):
+        allocations = _allocate_retail_lots_by_pack(
+            item_code,
+            warehouse,
+            box_qty,
+            unit_qty,
+            pack_size,
+        )
+    else:
+        fallback_price = flt(item.get("custom_customer_price"))
+        allocations = [
+            frappe._dict(
+                {
+                    "qty": qty,
+                    "customer_price": fallback_price,
+                    "price_source": "Item Customer Price",
+                }
+            )
+        ]
+
+    allocated_qty = flt(sum(flt(row.qty) for row in allocations), 6)
+    if abs(allocated_qty - qty) > 0.000001:
+        frappe.throw(
+            _("Pharmacy POS source pricing did not cover the full reservation quantity.")
+        )
+    try:
+        weighted_rate = weighted_source_price(allocations)
+    except ValueError as exc:
+        frappe.throw(_(str(exc)))
+    if weighted_rate <= 0:
+        frappe.throw(_("Customer Price is missing for item {0}.").format(item_code))
+
+    return frappe._dict(
+        {
+            "price_list_rate": weighted_rate,
+            "rate": weighted_rate,
+            "discount_percentage": 0,
+            "allocations": allocations,
+        }
+    )
 
 
 def _mode_of_payment_account(mode_of_payment, company):
@@ -3181,6 +3260,39 @@ def _prepare_invoice_context(data):
     )
 
 
+def _locked_reservation_item_pricing(
+    sales_order: str,
+    so_detail: str,
+    item_code: str,
+) -> frappe._dict:
+    row = frappe.db.get_value(
+        "Sales Order Item",
+        {
+            "name": so_detail,
+            "parent": sales_order,
+            "item_code": item_code,
+        },
+        ["price_list_rate", "rate", "discount_percentage"],
+        as_dict=True,
+    )
+    if not row:
+        frappe.throw(
+            _(
+                "Reserved item {0} does not belong to Sales Order {1}."
+            ).format(item_code, sales_order)
+        )
+    try:
+        return frappe._dict(
+            locked_reservation_pricing(
+                price_list_rate=row.price_list_rate,
+                rate=row.rate,
+                discount_percentage=row.discount_percentage,
+            )
+        )
+    except ValueError as exc:
+        frappe.throw(_(str(exc)))
+
+
 def _append_invoice_items(doc, data, context):
     items = data.get("items") or []
     if not items:
@@ -3218,8 +3330,30 @@ def _append_invoice_items(doc, data, context):
                 )
             )
 
+        reservation_sales_order = str(
+            item_data.get("reservation_sales_order") or ""
+        ).strip()
+        reservation_so_detail = str(
+            item_data.get("reservation_so_detail") or ""
+        ).strip()
+        if bool(reservation_sales_order) != bool(reservation_so_detail):
+            frappe.throw(
+                _("Reserved item {0} requires both Sales Order and Sales Order Item ownership.").format(
+                    item_code
+                )
+            )
+
+        locked_pricing = None
+        if reservation_sales_order and reservation_so_detail:
+            locked_pricing = _locked_reservation_item_pricing(
+                reservation_sales_order,
+                reservation_so_detail,
+                item_code,
+            )
+
         item_customer_price = flt(
-            item.get("custom_customer_price")
+            (locked_pricing or {}).get("price_list_rate")
+            or item.get("custom_customer_price")
             or item_data.get("price_list_rate")
             or item_data.get("rate")
         )
@@ -3230,6 +3364,11 @@ def _append_invoice_items(doc, data, context):
             discount_percentage = flt(discount_map.get(origin, 0))
         else:
             discount_percentage = flt(submitted_discount or 0)
+
+        if locked_pricing:
+            discount_percentage = flt(
+                locked_pricing.discount_percentage
+            )
 
         if discount_percentage < 0 or discount_percentage > 100:
             frappe.throw(
@@ -3299,6 +3438,35 @@ def _append_invoice_items(doc, data, context):
                 )
             ]
 
+        if locked_pricing:
+            allocated_qty = flt(sum(flt(row.qty) for row in allocations), 6)
+            if allocated_qty <= 0:
+                frappe.throw(_("Reserved stock source allocation is empty."))
+            try:
+                weighted_list_rate = weighted_source_price(allocations)
+            except ValueError as exc:
+                frappe.throw(_(str(exc)))
+            weighted_rate = flt(
+                weighted_list_rate * (1 - discount_percentage / 100),
+                6,
+            )
+            try:
+                validate_locked_reservation_price(
+                    locked_price_list_rate=locked_pricing.price_list_rate,
+                    locked_rate=locked_pricing.rate,
+                    locked_discount_percentage=locked_pricing.discount_percentage,
+                    invoice_price_list_rate=weighted_list_rate,
+                    invoice_rate=weighted_rate,
+                    invoice_discount_percentage=discount_percentage,
+                )
+            except ValueError:
+                frappe.throw(
+                    _(
+                        "Reserved source pricing changed after the reservation was created. "
+                        "Review the reservation before completing the sale."
+                    )
+                )
+
         for allocation in allocations:
             allocation_qty = flt(allocation.qty, 6)
             customer_price = flt(
@@ -3316,6 +3484,9 @@ def _append_invoice_items(doc, data, context):
             row.rate = rate
             row.discount_percentage = discount_percentage
             row.price_list_rate = customer_price or rate
+            if reservation_sales_order and reservation_so_detail:
+                row.sales_order = reservation_sales_order
+                row.so_detail = reservation_so_detail
 
             if context.warehouse:
                 row.warehouse = context.warehouse

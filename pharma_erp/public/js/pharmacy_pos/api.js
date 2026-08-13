@@ -72,6 +72,12 @@ window.PharmacyAPI = {
             { parent_invoice }
         );
     },
+    getCustomerReservationContext(sales_order, fulfilment_mode = "") {
+        return this.call(
+            "pharma_erp.pharma_erp.customer_reservation_service.get_customer_reservation_pos_context",
+            { sales_order, fulfilment_mode }
+        );
+    },
     saveInvoice(data) {
         return this.call("pharma_erp.pharma_erp.page.pharmacy_pos.api.save_invoice", { data: JSON.stringify(data) });
     },

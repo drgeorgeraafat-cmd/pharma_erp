@@ -26,6 +26,7 @@ window.PharmacyPOS = {
         parentDeliveryInvoice: null,
         skipDeliveryFee: false,
         addOnContext: null,
+        customerReservation: null,
         fullscreen: false
     },
 
@@ -55,9 +56,15 @@ window.PharmacyPOS = {
             SearchManager.init();
 
             const addOnRoute = this.getAddOnRoute();
+            const reservationRoute = this.getCustomerReservationRoute();
 
             if (addOnRoute.parentInvoice) {
                 await this.loadAddOnContext(addOnRoute.parentInvoice);
+            } else if (reservationRoute.salesOrder) {
+                await this.loadCustomerReservationContext(
+                    reservationRoute.salesOrder,
+                    reservationRoute.fulfilmentMode
+                );
             } else {
                 await HeaderManager.applyOrderType("Walk In", true);
 
@@ -98,6 +105,99 @@ window.PharmacyPOS = {
             enabled,
             parentInvoice: enabled ? (params.get("parent") || "").trim() : ""
         };
+    },
+
+    getCustomerReservationRoute() {
+        const params = new URLSearchParams(window.location.search || "");
+        return {
+            salesOrder: (params.get("customer_reservation") || "").trim(),
+            fulfilmentMode: (params.get("fulfilment_mode") || "").trim()
+        };
+    },
+
+    async loadCustomerReservationContext(salesOrder, fulfilmentMode = "") {
+        PharmacyPOS.setStatus(__("Loading Customer Reservation..."), "working");
+        const context = await PharmacyAPI.getCustomerReservationContext(
+            salesOrder,
+            fulfilmentMode
+        );
+        const configuredWarehouse = this.state.settings.default_warehouse || "";
+        if (configuredWarehouse && context.warehouse !== configuredWarehouse) {
+            frappe.throw(
+                __(
+                    "Reservation warehouse {0} does not match the Pharmacy POS warehouse {1}."
+                ).format(context.warehouse, configuredWarehouse)
+            );
+        }
+
+        this.state.customerReservation = context;
+        await HeaderManager.applyOrderType(context.order_type || "Walk In", true);
+        await CustomerManager.selectCustomer(context.customer_data, true);
+        CustomerManager.setManualSelectionEnabled(false);
+        const orderType = document.getElementById("order-type");
+        if (orderType) orderType.disabled = true;
+
+        for (const item of context.items || []) {
+            await InvoiceManager.addItem(item.item_code, {
+                force_new_line: true,
+                box_qty: item.box_qty,
+                unit_qty: item.unit_qty,
+                pack_size: item.pack_size,
+                rate: item.rate,
+                discount_percentage: item.discount_percentage,
+                reservation_owner: {
+                    sales_order: context.sales_order,
+                    so_detail: item.sales_order_item,
+                    reservation: item.reservation,
+                    remaining_qty: item.remaining_qty,
+                    price_list_rate: item.price_list_rate,
+                    rate: item.rate,
+                    discount_percentage: item.discount_percentage
+                }
+            });
+        }
+
+        this.renderCustomerReservationBanner();
+        InvoiceManager.render();
+        PharmacyPOS.setStatus(__("Customer Reservation"), "success");
+        const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+        window.history.replaceState({}, document.title, cleanUrl);
+    },
+
+    unlockCustomerReservationFields() {
+        const orderType = document.getElementById("order-type");
+        if (orderType) orderType.disabled = false;
+        if (window.CustomerManager?.setManualSelectionEnabled) {
+            CustomerManager.setManualSelectionEnabled(true);
+        }
+    },
+
+    renderCustomerReservationBanner() {
+        const banner = document.getElementById("customer-reservation-banner");
+        if (!banner) return;
+        const context = this.state.customerReservation;
+        const root = document.getElementById("pharmacy-pos");
+        banner.classList.toggle("is-hidden", !context);
+        root?.classList.toggle(
+            "is-add-on-mode",
+            Boolean(context || this.state.isAddOn)
+        );
+        root?.classList.toggle("is-customer-reservation-mode", Boolean(context));
+        if (!context) {
+            banner.innerHTML = "";
+            return;
+        }
+        banner.innerHTML = `
+            <div>
+                <strong>🔒 ${__("CUSTOMER RESERVATION")}</strong>
+                <span>${frappe.utils.escape_html(context.sales_order || "")}</span>
+            </div>
+            <div class="add-on-banner-meta">
+                <span>${__("Customer")}: <strong>${frappe.utils.escape_html(context.customer_name || context.customer || "")}</strong></span>
+                <span>${__("Mode")}: <strong>${frappe.utils.escape_html(context.fulfilment_mode || "")}</strong></span>
+                <span>${__("Reserved lines are linked to the standard Stock Reservation Entry")}</span>
+            </div>
+        `;
     },
 
     async loadAddOnContext(parentInvoice) {
@@ -219,6 +319,7 @@ window.PharmacyPOS = {
                 </div>
 
                 <div id="add-on-banner" class="add-on-banner is-hidden"></div>
+                <div id="customer-reservation-banner" class="add-on-banner is-hidden"></div>
 
                 <header id="header">
                     <div class="header-row header-main-row">
@@ -417,7 +518,10 @@ window.PharmacyPOS = {
         this.state.parentDeliveryInvoice = null;
         this.state.skipDeliveryFee = false;
         this.state.addOnContext = null;
+        this.state.customerReservation = null;
         this.unlockAddOnFields();
+        this.unlockCustomerReservationFields();
         this.renderAddOnBanner();
+        this.renderCustomerReservationBanner();
     }
 };

@@ -18,6 +18,7 @@ window.InvoiceManager = {
 
     async addItem(itemCode, options = {}) {
         const requestedSource = options.batch_no || options.retail_price_lot || "";
+        const requestedOwner = options.reservation_owner?.so_detail || "";
         const requestedMode = requestedSource || options.stock_source_mode === "manual"
             ? "manual"
             : "auto";
@@ -26,7 +27,8 @@ window.InvoiceManager = {
                 const rowSource = row.batch_no || row.retail_price_lot || "";
                 return row.item_code === itemCode
                     && (row.stock_source_mode || "auto") === requestedMode
-                    && rowSource === requestedSource;
+                    && rowSource === requestedSource
+                    && (row.reservation_owner?.so_detail || "") === requestedOwner;
             })
             : null;
 
@@ -52,7 +54,19 @@ window.InvoiceManager = {
             const warehouse = PharmacyPOS.state.settings.default_warehouse || "";
             const item = await PharmacyAPI.getItem(itemCode, warehouse);
             if (!item) return null;
-            const basePrice = flt(item.custom_customer_price || item.customer_price || options.rate || 0);
+            const reservationRate = options.reservation_owner
+                ? flt(options.rate || options.reservation_owner.rate || 0)
+                : 0;
+            const reservationListRate = options.reservation_owner
+                ? flt(options.reservation_owner.price_list_rate || reservationRate)
+                : 0;
+            const basePrice = flt(
+                reservationListRate
+                || item.custom_customer_price
+                || item.customer_price
+                || options.rate
+                || 0
+            );
             const row = {
                 row_key: Math.random().toString(36).slice(2, 12),
                 item_code: item.item_code || item.name,
@@ -86,7 +100,10 @@ window.InvoiceManager = {
                 unit_qty: flt(options.unit_qty || 0),
                 qty: 0,
                 total: 0,
-                focus_units: 0
+                focus_units: 0,
+                reservation_owner: options.reservation_owner || null,
+                reservation_locked_rate: reservationRate,
+                reservation_locked_price_list_rate: reservationListRate
             };
 
             if (Object.prototype.hasOwnProperty.call(options, "box_qty")) {
@@ -153,6 +170,22 @@ window.InvoiceManager = {
     },
 
     setRowDiscount(row, value) {
+        if (row.reservation_owner) {
+            row.price_list_rate = flt(
+                row.reservation_locked_price_list_rate
+                || row.reservation_owner.price_list_rate
+                || row.reservation_locked_rate
+            );
+            row.discount_percentage = flt(
+                row.reservation_owner.discount_percentage || 0
+            );
+            row.rate = flt(
+                row.reservation_locked_rate
+                || row.reservation_owner.rate
+            );
+            this.recalculateRow(row);
+            return;
+        }
         row.discount_percentage = Math.min(100, Math.max(0, flt(value || 0)));
         row.rate = flt(flt(row.price_list_rate || row.customer_price || 0) * (1 - row.discount_percentage / 100), 6);
         this.recalculateRow(row);
@@ -261,8 +294,24 @@ window.InvoiceManager = {
     },
 
     applySelectedBatchPrice(row, preserveDiscount = true) {
+        const lockedReservationRate = row.reservation_owner
+            ? flt(
+                row.reservation_locked_rate
+                || row.reservation_owner.rate
+                || row.rate
+                || 0
+            )
+            : 0;
+        const lockedReservationListRate = row.reservation_owner
+            ? flt(
+                row.reservation_locked_price_list_rate
+                || row.reservation_owner.price_list_rate
+                || lockedReservationRate
+            )
+            : 0;
         const generalPrice = flt(
-            row.general_customer_price
+            lockedReservationListRate
+            || row.general_customer_price
             || row.customer_price
             || row.price_list_rate
             || row.rate
@@ -277,8 +326,16 @@ window.InvoiceManager = {
             row.source_allocations = [];
             row.mixed_source_price = 0;
             row.customer_price = generalPrice;
-            row.price_source = "Item Customer Price";
-            this.applyContractPrice(row, preserveDiscount);
+            row.price_source = lockedReservationRate
+                ? "Customer Reservation Locked Price"
+                : "Item Customer Price";
+            if (lockedReservationRate) {
+                row.price_list_rate = lockedReservationListRate;
+                row.discount_percentage = flt(row.reservation_owner.discount_percentage || 0);
+                row.rate = lockedReservationRate;
+            } else {
+                this.applyContractPrice(row, preserveDiscount);
+            }
             return;
         }
 
@@ -308,6 +365,17 @@ window.InvoiceManager = {
         const allocatedQty = flt(pricing.allocations.reduce(
             (total, allocation) => total + flt(allocation.qty || 0), 0
         ), 6);
+
+        if (lockedReservationRate > 0) {
+            row.price_integrity_error = 0;
+            row.customer_price = lockedReservationListRate;
+            row.price_list_rate = lockedReservationListRate;
+            row.discount_percentage = flt(row.reservation_owner.discount_percentage || 0);
+            row.rate = lockedReservationRate;
+            row.price_source = "Customer Reservation Locked Price";
+            row.mixed_source_price = 0;
+            return;
+        }
 
         if (row.price_integrity_error) {
             row.customer_price = 0;
@@ -452,12 +520,15 @@ window.InvoiceManager = {
                 : '<option value="">N/A</option>';
             const lowStock = flt(row.actual_qty) < 1 ? '<span class="row-warning" title="Less than one full box">Loose only</span>' : "";
             const subtitle = row.item_name_ar || row.ingredient_summary || row.item_code;
+            const reservationLabel = row.reservation_owner
+                ? `<small class="item-code">${__("Reserved for")} ${frappe.utils.escape_html(row.reservation_owner.sales_order || "")} · ${__("Remaining")}: ${flt(row.reservation_owner.remaining_qty || 0, 3)}</small>`
+                : "";
             const priceHtml = row.mixed_source_price
                 ? `<strong>${__("Mixed")}</strong><small>${format_currency(row.price_list_rate || 0)} ${__("effective")}</small>`
                 : format_currency(row.price_list_rate || 0);
             return `<tr data-row="${index}" data-row-key="${frappe.utils.escape_html(row.row_key || "")}">
                 <td>${index + 1}</td>
-                <td><button type="button" class="link-button item-info-link item-hover-target"><strong>${frappe.utils.escape_html(row.item_name)}</strong></button><small class="item-code">${frappe.utils.escape_html(subtitle)}</small>${lowStock}</td>
+                <td><button type="button" class="link-button item-info-link item-hover-target"><strong>${frappe.utils.escape_html(row.item_name)}</strong></button><small class="item-code">${frappe.utils.escape_html(subtitle)}</small>${reservationLabel}${lowStock}</td>
                 <td><span title="${flt(row.actual_qty, 3)} Box">${frappe.utils.escape_html(this.formatStock(row))}</span></td>
                 <td><div class="batch-cell stock-source-cell"><select class="row-source" ${sources.length ? "" : "disabled"}>${sourceOptions}</select>${this.expiryWarning(row)}${this.allocationSummary(row)}</div></td>
                 <td><input class="row-boxes" type="number" min="0" step="1" value="${row.box_qty}"></td>
@@ -564,6 +635,17 @@ window.InvoiceManager = {
         if (PharmacyPOS.state.orderType === "Home Delivery") DeliveryManager.validate();
         PharmacyPOS.state.items.forEach(row => {
             if (row.qty <= 0) frappe.throw(__("Item quantity must be greater than zero."));
+            if (
+                row.reservation_owner
+                && flt(row.qty) > flt(row.reservation_owner.remaining_qty || 0) + 1e-9
+            ) {
+                frappe.throw(
+                    __("Reserved quantity for {0} cannot exceed {1}.").format(
+                        row.item_name,
+                        flt(row.reservation_owner.remaining_qty || 0, 3)
+                    )
+                );
+            }
             if (row.discount_percentage < 0 || row.discount_percentage > 100) frappe.throw(__("Discount must be between 0 and 100."));
             this.selectBestBatch(row);
             const sources = this.getSources(row);
@@ -624,7 +706,10 @@ window.InvoiceManager = {
                 qty: row.qty,
                 price_list_rate: row.price_list_rate,
                 discount_percentage: row.discount_percentage,
-                rate: row.rate
+                rate: row.rate,
+                reservation_sales_order: row.reservation_owner?.sales_order || "",
+                reservation_so_detail: row.reservation_owner?.so_detail || "",
+                reservation_sre: row.reservation_owner?.reservation || ""
             }))
         };
     },
@@ -632,6 +717,11 @@ window.InvoiceManager = {
     async save(submit, options = {}) {
         if (this.saving) return;
         try {
+            if (PharmacyPOS.state.customerReservation && !submit) {
+                frappe.throw(
+                    __("Customer Reservation fulfilment must be completed with Submit; draft and hold are not supported for this controlled handoff.")
+                );
+            }
             this.validate(false);
             if (submit) {
                 const ready = await PaymentManager.prepareForSubmit();
