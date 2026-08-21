@@ -651,3 +651,22 @@ for _step2c_event, _step2c_handler in _step2c_sales_invoice_hooks.items():
         _step2c_handler,
     )
 # END PHARMA v0.9.2 STEP2C CUSTOMER RESERVATION OPERATIONS
+
+
+# BEGIN PHARMA v0.9.2 STEP2D CUSTOMER PRODUCT REQUEST
+_step2d_purchase_receipt_events = doc_events.setdefault("Purchase Receipt", {})
+_step2b_merge_hook(
+    _step2d_purchase_receipt_events,
+    "on_submit",
+    "pharma_erp.pharma_erp.customer_product_request_service."
+    "on_submit_purchase_receipt_match_requests",
+)
+
+_step2d_purchase_invoice_events = doc_events.setdefault("Purchase Invoice", {})
+_step2b_merge_hook(
+    _step2d_purchase_invoice_events,
+    "on_submit",
+    "pharma_erp.pharma_erp.customer_product_request_service."
+    "on_submit_purchase_invoice_match_requests",
+)
+# END PHARMA v0.9.2 STEP2D CUSTOMER PRODUCT REQUEST

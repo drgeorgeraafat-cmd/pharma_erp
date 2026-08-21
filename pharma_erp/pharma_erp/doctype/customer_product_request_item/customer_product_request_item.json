@@ -1,0 +1,21 @@
+{
+ "actions": [], "doctype": "DocType", "editable_grid": 1, "engine": "InnoDB", "istable": 1,
+ "field_order": ["item_code","item_name","stock_uom","requested_qty","matched_qty","converted_qty","remaining_qty","operational_role","warehouse","match_status","fulfilment_mode","customer_reservation","match_reference","fifo_sequence"],
+ "fields": [
+  {"fieldname":"item_code","fieldtype":"Link","in_list_view":1,"label":"Item","options":"Item","reqd":1},
+  {"fetch_from":"item_code.item_name","fieldname":"item_name","fieldtype":"Data","in_list_view":1,"label":"Item Name","read_only":1},
+  {"fetch_from":"item_code.stock_uom","fieldname":"stock_uom","fieldtype":"Link","label":"Stock UOM","options":"UOM","read_only":1},
+  {"fieldname":"requested_qty","fieldtype":"Float","in_list_view":1,"label":"Requested Qty","reqd":1},
+  {"default":"0","fieldname":"matched_qty","fieldtype":"Float","in_list_view":1,"label":"Matched Qty","read_only":1},
+  {"default":"0","fieldname":"converted_qty","fieldtype":"Float","label":"Converted Qty","read_only":1},
+  {"default":"0","fieldname":"remaining_qty","fieldtype":"Float","in_list_view":1,"label":"Remaining Qty","read_only":1},
+  {"default":"Sales","fieldname":"operational_role","fieldtype":"Select","label":"Operational Role","options":"Sales","read_only":1,"reqd":1},
+  {"fieldname":"warehouse","fieldtype":"Link","label":"Canonical Warehouse","options":"Warehouse","read_only":1},
+  {"default":"Waiting","fieldname":"match_status","fieldtype":"Select","in_list_view":1,"label":"Match Status","options":"Waiting\nPartially Available\nAvailable\nConverted\nDeclined\nClosed","read_only":1},
+  {"default":"Undecided","fieldname":"fulfilment_mode","fieldtype":"Select","label":"Fulfilment Mode","options":"Undecided\nPickup\nHome Delivery","read_only":1},
+  {"fieldname":"customer_reservation","fieldtype":"Link","label":"Customer Reservation","options":"Sales Order","read_only":1},
+  {"fieldname":"match_reference","fieldtype":"Link","label":"Persistent Match","options":"Customer Product Request Match","read_only":1},
+  {"fieldname":"fifo_sequence","fieldtype":"Int","hidden":1,"label":"FIFO Sequence","read_only":1}
+ ],
+ "modified":"2026-08-14 02:00:00.000000","modified_by":"Administrator","module":"Pharma Erp","name":"Customer Product Request Item","owner":"Administrator","permissions":[]
+}

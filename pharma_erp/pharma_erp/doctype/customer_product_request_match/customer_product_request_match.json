@@ -1,0 +1,22 @@
+{
+ "actions": [], "allow_rename": 0, "autoname": "hash", "doctype": "DocType", "engine": "InnoDB",
+ "field_order": ["match_key","request","request_item","item_code","branch","warehouse","source_type","source_name","available_to_promise","matched_qty","status","matched_at","superseded_at"],
+ "fields": [
+  {"fieldname":"match_key","fieldtype":"Data","hidden":1,"label":"Match Key","read_only":1,"unique":1},
+  {"fieldname":"request","fieldtype":"Link","in_list_view":1,"in_standard_filter":1,"label":"Request","options":"Customer Product Request","read_only":1,"reqd":1},
+  {"fieldname":"request_item","fieldtype":"Data","label":"Request Item Row","read_only":1,"reqd":1},
+  {"fieldname":"item_code","fieldtype":"Link","in_list_view":1,"label":"Item","options":"Item","read_only":1,"reqd":1},
+  {"fieldname":"branch","fieldtype":"Link","in_standard_filter":1,"label":"Branch","options":"Branch","read_only":1,"reqd":1},
+  {"fieldname":"warehouse","fieldtype":"Link","label":"Canonical Warehouse","options":"Warehouse","read_only":1},
+  {"default":"Manual Review","fieldname":"source_type","fieldtype":"Select","label":"Source Type","options":"Purchase Receipt\nPurchase Invoice\nManual Review","read_only":1,"reqd":1},
+  {"fieldname":"source_name","fieldtype":"Data","label":"Source Name","read_only":1},
+  {"fieldname":"available_to_promise","fieldtype":"Float","label":"Available To Promise","read_only":1},
+  {"fieldname":"matched_qty","fieldtype":"Float","in_list_view":1,"label":"Matched Qty","read_only":1},
+  {"default":"Available","fieldname":"status","fieldtype":"Select","in_list_view":1,"label":"Status","options":"Available\nPartially Available\nUnavailable\nConsumed\nSuperseded","read_only":1},
+  {"fieldname":"matched_at","fieldtype":"Datetime","label":"Matched At","read_only":1},
+  {"fieldname":"superseded_at","fieldtype":"Datetime","label":"Superseded At","read_only":1}
+ ],
+ "modified":"2026-08-14 02:00:00.000000","modified_by":"Administrator","module":"Pharma Erp","name":"Customer Product Request Match","owner":"Administrator",
+ "permissions":[{"export":1,"print":1,"read":1,"report":1,"role":"System Manager"},{"export":1,"print":1,"read":1,"report":1,"role":"Stock Manager"},{"print":1,"read":1,"report":1,"role":"Sales Manager"},{"read":1,"role":"Sales User"},{"read":1,"role":"POS User"}],
+ "sort_field":"matched_at","sort_order":"DESC","track_changes":1
+}
