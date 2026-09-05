@@ -95,5 +95,17 @@ window.PharmacyAPI = {
     },
     createSalesReturn(data) {
         return this.call("pharma_erp.pharma_erp.page.pharmacy_pos.api.create_sales_return", { data: JSON.stringify(data) });
+    },
+    getPosLocationPlan(data) {
+        return this.call(
+            "pharma_erp.pharma_erp.pos_location_control.get_pos_location_plan",
+            { data: JSON.stringify(data || {}) }
+        );
+    },
+    replenishPosLocations(data) {
+        return this.call(
+            "pharma_erp.pharma_erp.pos_location_control.replenish_pos_locations",
+            { data: JSON.stringify(data || {}) }
+        );
     }
 };

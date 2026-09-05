@@ -3615,8 +3615,8 @@ def _append_payments(doc, payments, company):
     return flt(total, 6), cash_account
 
 
-@frappe.whitelist()
-def save_invoice(data):
+# Step2B: original save path internalized; wrapper below is whitelisted.
+def _save_invoice_without_location_control(data):
     if isinstance(data, str):
         data = json.loads(data)
 
@@ -4672,3 +4672,33 @@ def create_sales_return(data):
         "delivery_return_pending_amount": flt(workflow_result.get("pending_amount")) if source_doc else 0,
         "delivery_return_pending_items": workflow_result.get("pending_items") if source_doc else [],
     }
+
+# BEGIN STEP2B POS LOCATION CONTROL R1
+@frappe.whitelist()
+def save_invoice(data):
+    # Controlled wrapper around the existing Pharmacy POS save path.
+    from pharma_erp.pharma_erp.pos_location_control import (
+        _payload as _location_payload,
+        apply_submitted_pos_invoice,
+        assert_payload_ready_for_submit,
+        location_control_enabled,
+    )
+
+    location_payload = _location_payload(data)
+    enabled = location_control_enabled()
+
+    if enabled and cint(location_payload.get("submit")):
+        assert_payload_ready_for_submit(location_payload)
+
+    result = _save_invoice_without_location_control(data)
+
+    result_name = (result or {}).get("name") if hasattr(result, "get") else None
+    if enabled and result_name:
+        result_docstatus = cint(frappe.db.get_value("Sales Invoice", result_name, "docstatus") or 0)
+        if result_docstatus == 1:
+            location_result = apply_submitted_pos_invoice(result_name)
+            if hasattr(result, "__setitem__"):
+                result["location_control"] = location_result
+
+    return result
+# END STEP2B POS LOCATION CONTROL R1

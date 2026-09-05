@@ -831,3 +831,104 @@ window.InvoiceManager = {
         PrintManager.printInvoice(this.lastInvoice.name, true);
     }
 };
+
+// BEGIN STEP2B POS LOCATION PRE-SUBMIT R1
+(() => {
+    if (!window.InvoiceManager || InvoiceManager.__step2bLocationWrapped) return;
+
+    const originalSave = InvoiceManager.save;
+
+    const batchLabel = row => {
+        if (row.batch_no) {
+            return ` • ${__("Batch")}: ${frappe.utils.escape_html(row.batch_no)}`;
+        }
+        if ((row.selected_batches || []).length) {
+            return ` • ${__("Batch")}: ${frappe.utils.escape_html(row.selected_batches.join(", "))}`;
+        }
+        return "";
+    };
+
+    const htmlForRows = rows => (rows || []).map(row => `
+        <div style="margin-bottom:8px">
+            <strong>${frappe.utils.escape_html(row.item_name || row.item_code)}</strong>
+            ${batchLabel(row)}<br>
+            ${__("Requested")}: ${flt(row.requested_qty, 3)}
+            • ${__("Selling")}: ${flt(row.selling_qty, 3)}
+            • ${__("Reserve")}: ${flt(row.reserve_qty, 3)}
+            ${row.status === "replenish_required" ? `• <strong>${__("Move")}: ${flt(row.shortage_qty, 3)}</strong>` : ""}
+        </div>
+    `).join("");
+
+    const confirmReplenishment = rows => new Promise(resolve => {
+        frappe.confirm(
+            `<div>
+                <p><strong>${__("Selling Location shortage — Replenishment Required")}</strong></p>
+                ${htmlForRows(rows)}
+                <p>${__("Confirm the physical move from Reserve to Selling, then continue.")}</p>
+            </div>`,
+            () => resolve(true),
+            () => resolve(false)
+        );
+    });
+
+    InvoiceManager.save = async function(submit, options = {}) {
+        if (!submit) {
+            return originalSave.call(this, submit, options);
+        }
+        if (this.locationPlanning) return;
+
+        this.locationPlanning = true;
+        try {
+            const payload = this.buildPayload(submit, options);
+            payload.location_request_key =
+                this.locationRequestKey ||
+                `POSLOC-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+            this.locationRequestKey = payload.location_request_key;
+
+            const plan = await PharmacyAPI.getPosLocationPlan(payload);
+            if (plan?.enabled) {
+                if (plan.blocking) {
+                    frappe.msgprint({
+                        title: __("Location Stock Review Required"),
+                        indicator: "orange",
+                        message: htmlForRows(plan.blocking_rows || [])
+                    });
+                    return;
+                }
+
+                const replenishRows = (plan.rows || []).filter(row => row.status === "replenish_required");
+                if (replenishRows.length) {
+                    const confirmed = await confirmReplenishment(replenishRows);
+                    if (!confirmed) return;
+
+                    PharmacyPOS.setStatus(__("Replenishing Selling Location..."), "working");
+                    const refreshed = await PharmacyAPI.replenishPosLocations(payload);
+                    if (refreshed?.blocking || refreshed?.requires_replenishment) {
+                        frappe.throw(__("Location stock changed. Review the cart and try again."));
+                    }
+                    frappe.show_alert({
+                        message: __("Selling Location replenished. Continuing POS submit."),
+                        indicator: "green"
+                    });
+                }
+            }
+        } catch (error) {
+            console.error(error);
+            PharmacyPOS.setStatus(__("Location review failed"), "error");
+            return;
+        } finally {
+            this.locationPlanning = false;
+        }
+
+        try {
+            return await originalSave.call(this, submit, options);
+        } finally {
+            if (submit) {
+                this.locationRequestKey = null;
+            }
+        }
+    };
+
+    InvoiceManager.__step2bLocationWrapped = true;
+})();
+// END STEP2B POS LOCATION PRE-SUBMIT R1

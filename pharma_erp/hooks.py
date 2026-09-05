@@ -670,3 +670,24 @@ _step2b_merge_hook(
     "on_submit_purchase_invoice_match_requests",
 )
 # END PHARMA v0.9.2 STEP2D CUSTOMER PRODUCT REQUEST
+
+# BEGIN STEP2B POS LOCATION CANCEL REVERSAL R1
+_pos_location_cancel_hook = (
+    "pharma_erp.pharma_erp.pos_location_control.reverse_pos_consumption_before_cancel"
+)
+_pos_location_sales_invoice_events = doc_events.setdefault("Sales Invoice", {})
+_pos_location_existing_before_cancel = _pos_location_sales_invoice_events.get("before_cancel")
+if not _pos_location_existing_before_cancel:
+    _pos_location_sales_invoice_events["before_cancel"] = _pos_location_cancel_hook
+elif isinstance(_pos_location_existing_before_cancel, str):
+    if _pos_location_existing_before_cancel != _pos_location_cancel_hook:
+        _pos_location_sales_invoice_events["before_cancel"] = [
+            _pos_location_existing_before_cancel,
+            _pos_location_cancel_hook,
+        ]
+else:
+    _pos_location_before_cancel_list = list(_pos_location_existing_before_cancel)
+    if _pos_location_cancel_hook not in _pos_location_before_cancel_list:
+        _pos_location_before_cancel_list.append(_pos_location_cancel_hook)
+    _pos_location_sales_invoice_events["before_cancel"] = _pos_location_before_cancel_list
+# END STEP2B POS LOCATION CANCEL REVERSAL R1
