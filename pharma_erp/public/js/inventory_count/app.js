@@ -564,10 +564,60 @@ window.PharmacyInventoryCountApp = {
         return html;
     },
 
+    formatExpiryDMY(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+
+        let match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (match) {
+            return `${match[3]}/${match[2]}/${match[1]}`;
+        }
+
+        match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (match) return raw;
+
+        return raw;
+    },
+
+    normalizeExpiryISO(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+
+        let day;
+        let month;
+        let year;
+
+        let match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (match) {
+            day = Number(match[1]);
+            month = Number(match[2]);
+            year = Number(match[3]);
+        } else {
+            match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (!match) return null;
+
+            year = Number(match[1]);
+            month = Number(match[2]);
+            day = Number(match[3]);
+        }
+
+        const check = new Date(Date.UTC(year, month - 1, day));
+        if (
+            check.getUTCFullYear() !== year ||
+            check.getUTCMonth() !== month - 1 ||
+            check.getUTCDate() !== day
+        ) {
+            return null;
+        }
+
+        return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    },
+
     physicalLotRowHtml(row, pack, line) {
+        const expiryDisplay = this.formatExpiryDMY(row.expiry_date || "");
         return `<tr class="ic-physical-lot-row">
             <td><input class="form-control input-sm ic-physical-batch" value="${frappe.utils.escape_html(row.batch_no || "")}" placeholder="${__("Optional / AUTO")}"></td>
-            <td><input class="form-control input-sm ic-physical-expiry" type="date" value="${frappe.utils.escape_html(row.expiry_date || "")}"></td>
+            <td><input class="form-control input-sm ic-physical-expiry" type="text" inputmode="numeric" maxlength="10" placeholder="DD/MM/YYYY" value="${frappe.utils.escape_html(expiryDisplay)}"></td>
             <td><input class="form-control input-sm ic-physical-boxes" type="number" min="0" step="1" value="${row.boxes === undefined || row.boxes === null ? "" : cint(row.boxes)}"></td>
             <td><input class="form-control input-sm ic-physical-units" type="number" min="0" step="1" max="${Math.max(0, Math.ceil(pack) - 1)}" value="${row.units === undefined || row.units === null ? "" : cint(row.units)}" ${cint(line.box_only) ? "disabled" : ""}></td>
             <td><button type="button" class="btn btn-danger btn-xs ic-remove-physical-lot">×</button></td>
@@ -585,8 +635,13 @@ window.PharmacyInventoryCountApp = {
             const units = unitsRaw === "" ? 0 : cint(unitsRaw);
             if (!boxes && !units) return;
             const batch = (el.querySelector(".ic-physical-batch")?.value || "").trim();
-            const expiry = el.querySelector(".ic-physical-expiry")?.value || "";
-            if (!expiry) invalid = __("Expiry is required for every physical Batch lot.");
+            const expiryRaw = (el.querySelector(".ic-physical-expiry")?.value || "").trim();
+            const expiry = this.normalizeExpiryISO(expiryRaw);
+            if (!expiryRaw) {
+                invalid = __("Expiry is required for every physical Batch lot.");
+            } else if (!expiry) {
+                invalid = __("Enter Expiry in DD/MM/YYYY format, for example 01/05/2028.");
+            }
             if (pack > 1 && units >= pack) invalid = __("Units must be less than Pack Size {0}.", [pack]);
             segments.push({
                 batch_no: batch,
@@ -644,6 +699,24 @@ window.PharmacyInventoryCountApp = {
                 event.currentTarget.closest("tr")?.remove();
             }
         });
+
+        dialog.$wrapper.on("input", ".ic-physical-expiry", event => {
+            const input = event.currentTarget;
+            const digits = String(input.value || "")
+                .replace(/\D/g, "")
+                .slice(0, 8);
+
+            let formatted = digits;
+
+            if (digits.length > 4) {
+                formatted = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+            } else if (digits.length > 2) {
+                formatted = `${digits.slice(0, 2)}/${digits.slice(2)}`;
+            }
+
+            input.value = formatted;
+        });
+
         dialog.show();
         setTimeout(() => dialog.$wrapper.find(".ic-physical-batch").first().focus(), 80);
     },
