@@ -1,0 +1,333 @@
+{
+ "actions": [],
+ "creation": "2026-09-12 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "identity_section",
+  "warehouse",
+  "location",
+  "item_code",
+  "item_name",
+  "stock_uom",
+  "has_batch_no",
+  "batch_no",
+  "count_basis",
+  "line_key",
+  "snapshot_section",
+  "snapshot_qty",
+  "warehouse_snapshot_qty",
+  "valuation_rate_snapshot",
+  "count_section",
+  "entry_mode",
+  "pack_size",
+  "box_only",
+  "actual_boxes",
+  "actual_loose_units",
+  "actual_qty",
+  "count_entered",
+  "counted_at",
+  "counted_by",
+  "expected_qty_at_count",
+  "variance_qty",
+  "variance_value",
+  "resolution_status",
+  "found_location",
+  "found_elsewhere_qty",
+  "posting_batch_no",
+  "observed_batch_no",
+  "reason_code",
+  "reason_note",
+  "control_section",
+  "count_round",
+  "high_variance",
+  "unexpected_item",
+  "location_followup_required"
+ ],
+ "fields": [
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Count Line"
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Warehouse",
+   "options": "Warehouse",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "location",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Location",
+   "options": "Pharmacy Storage Location",
+   "read_only": 1
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "stock_uom",
+   "fieldtype": "Link",
+   "label": "Stock UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "has_batch_no",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Has Batch",
+   "read_only": 1
+  },
+  {
+   "fieldname": "batch_no",
+   "fieldtype": "Link",
+   "label": "Count Batch",
+   "options": "Batch",
+   "read_only": 1
+  },
+  {
+   "fieldname": "count_basis",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Count Basis",
+   "options": "Warehouse\nLocation",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "line_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Line Key",
+   "read_only": 1
+  },
+  {
+   "fieldname": "snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Snapshot"
+  },
+  {
+   "fieldname": "snapshot_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Snapshot Qty",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "fieldname": "warehouse_snapshot_qty",
+   "fieldtype": "Float",
+   "label": "Warehouse Snapshot Qty",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "fieldname": "valuation_rate_snapshot",
+   "fieldtype": "Currency",
+   "label": "Valuation Rate Snapshot",
+   "read_only": 1
+  },
+  {
+   "fieldname": "count_section",
+   "fieldtype": "Section Break",
+   "label": "Physical Count"
+  },
+  {
+   "default": "Stock Qty",
+   "fieldname": "entry_mode",
+   "fieldtype": "Select",
+   "label": "Count Entry Mode",
+   "options": "Stock Qty\nBox / Unit"
+  },
+  {
+   "default": "1",
+   "fieldname": "pack_size",
+   "fieldtype": "Float",
+   "label": "Pack Size",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "box_only",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Box Only",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.entry_mode=='Box / Unit'",
+   "fieldname": "actual_boxes",
+   "fieldtype": "Int",
+   "label": "Actual Boxes"
+  },
+  {
+   "depends_on": "eval:doc.entry_mode=='Box / Unit'",
+   "fieldname": "actual_loose_units",
+   "fieldtype": "Int",
+   "label": "Actual Loose Units"
+  },
+  {
+   "fieldname": "actual_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Actual Qty",
+   "precision": "6"
+  },
+  {
+   "default": "0",
+   "fieldname": "count_entered",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Count Entered",
+   "read_only": 1
+  },
+  {
+   "fieldname": "counted_at",
+   "fieldtype": "Datetime",
+   "label": "Counted At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "counted_by",
+   "fieldtype": "Link",
+   "label": "Counted By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "expected_qty_at_count",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Expected Qty at Count",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "fieldname": "variance_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Variance Qty",
+   "precision": "6",
+   "read_only": 1
+  },
+  {
+   "fieldname": "variance_value",
+   "fieldtype": "Currency",
+   "label": "Variance Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "resolution_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Resolution",
+   "options": "Pending\nCounted\nConfirmed Zero\nFound Elsewhere\nResolved by Movement\nAuthorized Exclusion",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.resolution_status=='Found Elsewhere'",
+   "fieldname": "found_location",
+   "fieldtype": "Link",
+   "label": "Found Location",
+   "options": "Pharmacy Storage Location"
+  },
+  {
+   "depends_on": "eval:doc.resolution_status=='Found Elsewhere'",
+   "fieldname": "found_elsewhere_qty",
+   "fieldtype": "Float",
+   "label": "Found Elsewhere Qty",
+   "precision": "6"
+  },
+  {
+   "description": "Required for positive variance on batch-controlled items. Must be the real physical Batch.",
+   "fieldname": "posting_batch_no",
+   "fieldtype": "Link",
+   "label": "Physical Batch for Posting",
+   "options": "Batch"
+  },
+  {
+   "description": "Use when a physical Batch label is found but the Batch is not yet present in ERPNext. Reviewer must verify/create the real Batch before posting.",
+   "fieldname": "observed_batch_no",
+   "fieldtype": "Data",
+   "label": "Observed Unknown Batch"
+  },
+  {
+   "fieldname": "reason_code",
+   "fieldtype": "Select",
+   "label": "Reason Code",
+   "options": "\nReceiving Error\nSale Not Posted\nReturn Not Posted\nWrong Location\nDamage\nExpired\nUOM Error\nBatch Allocation Difference\nTheft / Loss\nData Entry Error\nUnexpected Stock\nOther"
+  },
+  {
+   "fieldname": "reason_note",
+   "fieldtype": "Small Text",
+   "label": "Reason Note"
+  },
+  {
+   "fieldname": "control_section",
+   "fieldtype": "Section Break",
+   "label": "Controls"
+  },
+  {
+   "default": "1",
+   "fieldname": "count_round",
+   "fieldtype": "Int",
+   "label": "Count Round",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "high_variance",
+   "fieldtype": "Check",
+   "label": "High Variance",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "unexpected_item",
+   "fieldtype": "Check",
+   "label": "Unexpected Item",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Official stock was corrected but Location allocation requires a later physical-location reconciliation because the count was Warehouse-total only.",
+   "fieldname": "location_followup_required",
+   "fieldtype": "Check",
+   "label": "Location Follow-up Required",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Inventory Count Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

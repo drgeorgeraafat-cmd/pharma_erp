@@ -1955,16 +1955,20 @@ def _source_search_result(match, warehouse):
     return result
 
 
-@frappe.whitelist()
-def search_items(txt="", warehouse=None, branch=None):
+def search_items_for_warehouse(txt="", warehouse=None, *, limit=None, stock_only=False):
+    """Shared Pharmacy item search engine.
+
+    This is the canonical matching/ranking implementation used by Pharmacy POS
+    and Inventory Count. Callers are responsible for validating the warehouse
+    operational context before invoking this helper.
+    """
     raw, like_txt, compact_txt = _search_pattern(txt)
     if not raw:
         return []
 
     settings = _get_settings()
-    canonical = _canonical_pos_context(branch=branch, submitted_warehouse=warehouse)
-    warehouse = canonical.warehouse
-    limit = _safe_limit(settings.get("search_limit"), 20, 100)
+    warehouse = (warehouse or "").strip()
+    limit = _safe_limit(limit or settings.get("search_limit"), 20, 100)
 
     source_rows = []
     for match in find_source_matches(raw, warehouse, limit):
@@ -1981,6 +1985,7 @@ def search_items(txt="", warehouse=None, branch=None):
     box_only_sql = "i.custom_box_only" if _has_field("Item", "custom_box_only") else "0"
     arabic_sql = "i.custom_item_name_ar" if _has_field("Item", "custom_item_name_ar") else "''"
     keywords_sql = "i.custom_search_keywords" if _has_field("Item", "custom_search_keywords") else "''"
+    stock_filter_sql = "AND IFNULL(i.is_stock_item, 0) = 1" if stock_only else ""
 
     child_enabled = (
         frappe.db.exists("DocType", "Item Active Ingredient")
@@ -2039,6 +2044,7 @@ def search_items(txt="", warehouse=None, branch=None):
             i.image,
             i.stock_uom,
             i.has_batch_no,
+            i.is_stock_item,
             {customer_price_sql} AS customer_price,
             {origin_sql} AS item_origin,
             {pack_size_sql} AS pack_size,
@@ -2057,6 +2063,7 @@ def search_items(txt="", warehouse=None, branch=None):
         {master_join}
         WHERE IFNULL(i.disabled, 0) = 0
           AND IFNULL(i.is_sales_item, 1) = 1
+          {stock_filter_sql}
           AND (
               i.name LIKE %(like_txt)s
               OR i.item_code LIKE %(like_txt)s
@@ -2094,6 +2101,8 @@ def search_items(txt="", warehouse=None, branch=None):
     combined = []
     seen = set()
     for row in source_rows + item_rows:
+        if stock_only and not cint(row.get("is_stock_item", 1)):
+            continue
         key = (
             row.get("item_code") or row.get("name"),
             row.get("matched_source_type") or "item",
@@ -2106,6 +2115,12 @@ def search_items(txt="", warehouse=None, branch=None):
         if len(combined) >= limit:
             break
     return combined
+
+
+@frappe.whitelist()
+def search_items(txt="", warehouse=None, branch=None):
+    canonical = _canonical_pos_context(branch=branch, submitted_warehouse=warehouse)
+    return search_items_for_warehouse(txt, canonical.warehouse)
 
 
 @frappe.whitelist()

@@ -1,0 +1,105 @@
+{
+ "actions": [],
+ "creation": "2026-09-12 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "feature_section",
+  "enable_inventory_count",
+  "blind_count_default",
+  "approval_section",
+  "high_variance_value_threshold",
+  "high_variance_percentage_threshold",
+  "require_recount_for_full_shortage",
+  "maximum_recounts",
+  "high_variance_approval_role"
+ ],
+ "fields": [
+  {
+   "fieldname": "feature_section",
+   "fieldtype": "Section Break",
+   "label": "Inventory Count Feature"
+  },
+  {
+   "default": "0",
+   "description": "Controlled feature flag. Remains OFF after installation until explicitly enabled for acceptance/operation.",
+   "fieldname": "enable_inventory_count",
+   "fieldtype": "Check",
+   "label": "Enable Inventory Count"
+  },
+  {
+   "default": "1",
+   "fieldname": "blind_count_default",
+   "fieldtype": "Check",
+   "label": "Blind Count by Default"
+  },
+  {
+   "fieldname": "approval_section",
+   "fieldtype": "Section Break",
+   "label": "Variance & Approval Policy"
+  },
+  {
+   "default": "0",
+   "description": "0 disables value-based high variance classification.",
+   "fieldname": "high_variance_value_threshold",
+   "fieldtype": "Currency",
+   "label": "High Variance Value Threshold"
+  },
+  {
+   "default": "0",
+   "description": "0 disables percentage-based high variance classification.",
+   "fieldname": "high_variance_percentage_threshold",
+   "fieldtype": "Percent",
+   "label": "High Variance Percentage Threshold"
+  },
+  {
+   "default": "1",
+   "fieldname": "require_recount_for_full_shortage",
+   "fieldtype": "Check",
+   "label": "Require Recount for Full Shortage"
+  },
+  {
+   "default": "2",
+   "fieldname": "maximum_recounts",
+   "fieldtype": "Int",
+   "label": "Maximum Recounts"
+  },
+  {
+   "default": "Inventory High Variance Approver",
+   "fieldname": "high_variance_approval_role",
+   "fieldtype": "Link",
+   "label": "High Variance Approval Role",
+   "options": "Role"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Inventory Count Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Stock Manager",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

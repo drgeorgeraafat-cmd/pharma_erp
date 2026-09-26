@@ -1,0 +1,234 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:IC-{YYYY}-{#####}",
+ "creation": "2026-09-12 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "identity_section",
+  "company",
+  "branch",
+  "status",
+  "count_round",
+  "scope_section",
+  "scope_type",
+  "warehouse",
+  "scope_location",
+  "item_code",
+  "item_group",
+  "batch_no",
+  "blind_count",
+  "snapshot_section",
+  "snapshot_datetime",
+  "started_by",
+  "started_at",
+  "completed_by",
+  "completed_at",
+  "reviewed_by",
+  "reviewed_at",
+  "approved_by",
+  "approved_at",
+  "posted_by",
+  "posted_at",
+  "cancelled_by",
+  "cancelled_at",
+  "items_section",
+  "items",
+  "summary_section",
+  "total_snapshot_qty",
+  "total_actual_qty",
+  "net_variance_qty",
+  "absolute_variance_qty",
+  "total_variance_value",
+  "high_variance",
+  "posting_section",
+  "stock_reconciliation",
+  "cancellation_reason",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Inventory Count"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Branch",
+   "options": "Branch",
+   "reqd": 1
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nCounting\nCount Completed\nUnder Review\nApproved\nPosted\nCancelled",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "count_round",
+   "fieldtype": "Int",
+   "label": "Count Round",
+   "read_only": 1
+  },
+  {
+   "fieldname": "scope_section",
+   "fieldtype": "Section Break",
+   "label": "Count Scope"
+  },
+  {
+   "fieldname": "scope_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Scope Type",
+   "options": "Branch\nWarehouse\nZone\nAisle\nShelf\nBin\nItem\nItem Group\nBatch",
+   "reqd": 1
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "label": "Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "scope_location",
+   "fieldtype": "Link",
+   "label": "Storage Location",
+   "options": "Pharmacy Storage Location"
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "label": "Item",
+   "options": "Item"
+  },
+  {
+   "fieldname": "item_group",
+   "fieldtype": "Link",
+   "label": "Item Group",
+   "options": "Item Group"
+  },
+  {
+   "fieldname": "batch_no",
+   "fieldtype": "Link",
+   "label": "Batch",
+   "options": "Batch"
+  },
+  {
+   "default": "1",
+   "fieldname": "blind_count",
+   "fieldtype": "Check",
+   "label": "Blind Count"
+  },
+  {
+   "fieldname": "snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Audit Timeline"
+  },
+  {
+   "fieldname": "snapshot_datetime",
+   "fieldtype": "Datetime",
+   "label": "Snapshot Date/Time",
+   "read_only": 1
+  },
+  {"fieldname": "started_by", "fieldtype": "Link", "label": "Started By", "options": "User", "read_only": 1},
+  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "read_only": 1},
+  {"fieldname": "completed_by", "fieldtype": "Link", "label": "Completed By", "options": "User", "read_only": 1},
+  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At", "read_only": 1},
+  {"fieldname": "reviewed_by", "fieldtype": "Link", "label": "Reviewed By", "options": "User", "read_only": 1},
+  {"fieldname": "reviewed_at", "fieldtype": "Datetime", "label": "Reviewed At", "read_only": 1},
+  {"fieldname": "approved_by", "fieldtype": "Link", "label": "Approved By", "options": "User", "read_only": 1},
+  {"fieldname": "approved_at", "fieldtype": "Datetime", "label": "Approved At", "read_only": 1},
+  {"fieldname": "posted_by", "fieldtype": "Link", "label": "Posted By", "options": "User", "read_only": 1},
+  {"fieldname": "posted_at", "fieldtype": "Datetime", "label": "Posted At", "read_only": 1},
+  {"fieldname": "cancelled_by", "fieldtype": "Link", "label": "Cancelled By", "options": "User", "read_only": 1},
+  {"fieldname": "cancelled_at", "fieldtype": "Datetime", "label": "Cancelled At", "read_only": 1},
+  {
+   "fieldname": "items_section",
+   "fieldtype": "Section Break",
+   "label": "Count Lines"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Inventory Count Items",
+   "options": "Pharmacy Inventory Count Item"
+  },
+  {
+   "fieldname": "summary_section",
+   "fieldtype": "Section Break",
+   "label": "Variance Summary"
+  },
+  {"fieldname": "total_snapshot_qty", "fieldtype": "Float", "label": "Counted Snapshot Qty", "precision": "6", "read_only": 1},
+  {"fieldname": "total_actual_qty", "fieldtype": "Float", "label": "Total Actual Qty", "precision": "6", "read_only": 1},
+  {"fieldname": "net_variance_qty", "fieldtype": "Float", "label": "Net Variance Qty", "precision": "6", "read_only": 1},
+  {"fieldname": "absolute_variance_qty", "fieldtype": "Float", "label": "Absolute Variance Qty", "precision": "6", "read_only": 1},
+  {"fieldname": "total_variance_value", "fieldtype": "Currency", "label": "Total Absolute Variance Value", "read_only": 1},
+  {"default": "0", "fieldname": "high_variance", "fieldtype": "Check", "label": "High Variance", "read_only": 1},
+  {
+   "fieldname": "posting_section",
+   "fieldtype": "Section Break",
+   "label": "Posting & Notes"
+  },
+  {
+   "fieldname": "stock_reconciliation",
+   "fieldtype": "Link",
+   "label": "Stock Reconciliation",
+   "options": "Stock Reconciliation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cancellation_reason",
+   "fieldtype": "Small Text",
+   "label": "Cancellation Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-09-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Pharma Erp",
+ "name": "Pharmacy Inventory Count",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Stock Manager", "share": 1, "write": 1},
+  {"create": 1, "read": 1, "role": "Inventory Counter", "write": 1},
+  {"read": 1, "report": 1, "role": "Inventory Reviewer", "write": 1},
+  {"read": 1, "report": 1, "role": "Inventory Approver", "write": 1},
+  {"read": 1, "report": 1, "role": "Inventory High Variance Approver", "write": 1},
+  {"read": 1, "report": 1, "role": "Inventory Stock Poster", "write": 1}
+ ],
+ "quick_entry": 0,
+ "search_fields": "status,branch,warehouse,scope_type,item_code,item_group,batch_no",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -38,18 +38,32 @@ def get_official_warehouse_qty(item_code: str, warehouse: str) -> float:
 
 
 def get_official_batch_qty(item_code: str, warehouse: str, batch_no: str) -> float:
+    """Return official Batch qty using ERPNext's bundle-aware Batch API.
+
+    ERPNext v15 can carry Batch allocation through Serial and Batch Bundles, so
+    summing ``Stock Ledger Entry.batch_no`` is not an authoritative Batch source.
+    Keep Location allocation math on the same source used by Inventory Count.
+    """
     batch_key = normalize_batch_key(batch_no)
     if not batch_key:
         return get_official_warehouse_qty(item_code, warehouse)
-    value = frappe.db.sql(
-        """
-        SELECT COALESCE(SUM(actual_qty), 0)
-        FROM `tabStock Ledger Entry`
-        WHERE item_code=%s AND warehouse=%s AND IFNULL(batch_no, '')=%s
-        """,
-        (item_code, warehouse, batch_key),
-    )
-    return flt(value[0][0] if value else 0)
+
+    from erpnext.stock.doctype.batch.batch import get_batch_qty
+
+    rows = get_batch_qty(batch_no=batch_key, warehouse=warehouse, item_code=item_code) or []
+    if isinstance(rows, (int, float)):
+        return flt(rows, 6)
+    if isinstance(rows, dict):
+        return flt(rows.get("qty") or rows.get(batch_key) or 0, 6)
+
+    total = 0.0
+    for raw in rows:
+        row = frappe._dict(raw)
+        candidate = normalize_batch_key(row.get("batch_no") or row.get("name"))
+        if candidate and candidate != batch_key:
+            continue
+        total += flt(row.get("qty") or row.get("actual_qty") or 0, 6)
+    return flt(total, 6)
 
 
 def get_allocated_qty(item_code: str, warehouse: str, batch_no: Optional[str] = None, location: Optional[str] = None) -> float:
