@@ -897,7 +897,17 @@ def get_batch_system_snapshot(item_code: str, warehouse: str) -> list[dict[str, 
     The snapshot intentionally includes expired/disabled Batch masters when they still
     carry positive official stock. Retail price is metadata only; Stock Ledger remains
     the valuation source.
+
+    R1.13: retail-price metadata follows the same effective-price contract used by
+    Pharmacy POS and Inventory Count: Batch printed/POSA price first, then Item
+    Customer Price fallback when the Batch itself has no retail price.
     """
+    from pharma_erp.pharma_erp.page.pharmacy_pos.api import (
+        _batch_price_context,
+        _item_customer_price,
+    )
+
+    fallback_price = flt(_item_customer_price(item_code), 6)
     meta = frappe.get_meta("Batch")
     fields = ["name", "expiry_date", "disabled"]
     for fieldname in ("custom_printed_retail_price", "posa_batch_price"):
@@ -916,7 +926,12 @@ def get_batch_system_snapshot(item_code: str, warehouse: str) -> list[dict[str, 
         qty = flt(_batch_qty(row.name, warehouse, item_code), 6)
         if qty <= EPSILON:
             continue
-        price = flt(row.get("custom_printed_retail_price") or row.get("posa_batch_price") or 0, 6)
+        price_context = _batch_price_context(
+            row.name,
+            item_code,
+            fallback_price,
+        )
+        price = flt(price_context.get("customer_price") or 0, 6)
         expiry = clean(row.get("expiry_date"))
         result.append({
             "batch_no": row.name,
@@ -1295,7 +1310,14 @@ def validate_for_approval(doc) -> None:
         if cint(item.has_batch_no) and clean(row.count_basis) == "Location":
             _location_batch_matrix(doc, row)
         elif cint(item.has_batch_no) and variance > EPSILON:
-            validate_posting_batch(row.item_code, row.posting_batch_no)
+            # R1.13.2: Warehouse Batch rows whose physical Batch composition is
+            # handled by the controlled reconciliation plan must not fall through
+            # to the legacy single-posting_batch_no guard. The plan owns the exact
+            # per-Batch target matrix and is later excluded from the legacy target
+            # builder through handled_rows.
+            reconciliation_status = batch_reconciliation_row_status(doc, row)
+            if not cint(reconciliation_status.get("required")):
+                validate_posting_batch(row.item_code, row.posting_batch_no)
 
 
 def _lock_bins(rows) -> None:
@@ -1511,6 +1533,33 @@ def _create_inventory_count_batch(doc, row, segment, *, batch_no: str | None = N
     return batch.name
 
 
+def batch_reconciliation_segment_action(segment):
+    """Return the canonical controlled action for one physical Batch segment.
+
+    R1.13.1: the pre-arm Final Target Matrix must use the same action semantics
+    as the reviewer plan. This prevents an unarmed preview from incorrectly
+    rendering Existing Batches as AUTO-on-post targets.
+    """
+    segment = frappe._dict(segment or {})
+    batch_no = clean(segment.get("batch_no"))
+
+    if cint(segment.get("price_mismatch")):
+        return "Reclassify to AUTO Batch", ["Reclassify to AUTO Batch"]
+
+    if batch_no and frappe.db.exists("Batch", batch_no):
+        if cint(segment.get("expiry_mismatch")):
+            return "Correct Existing Expiry", [
+                "Correct Existing Expiry",
+                "Reclassify to AUTO Batch",
+            ]
+        return "Use Existing Batch", ["Use Existing Batch"]
+
+    if batch_no:
+        return "Create Observed Batch", ["Create Observed Batch"]
+
+    return "Create AUTO Batch", ["Create AUTO Batch"]
+
+
 def build_batch_reconciliation_execution_preview(doc, row) -> dict[str, Any]:
     status = batch_reconciliation_row_status(doc, row)
     breakdown = _latest_batch_breakdown_payload(doc.name, row)
@@ -1528,6 +1577,9 @@ def build_batch_reconciliation_execution_preview(doc, row) -> dict[str, Any]:
         qty = flt(segment.get("qty"), 6)
         physical_total = flt(physical_total + qty, 6)
         action = decisions.get(index) or ""
+        if not action:
+            action, _allowed = batch_reconciliation_segment_action(segment)
+
         batch_no = clean(segment.get("batch_no"))
         if action in {"Use Existing Batch", "Correct Existing Expiry", "Create Observed Batch"}:
             key = batch_no or _("Observed Batch")

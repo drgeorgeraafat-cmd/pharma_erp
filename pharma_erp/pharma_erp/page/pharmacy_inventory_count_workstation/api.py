@@ -16,6 +16,7 @@ from pharma_erp.pharma_erp.inventory_count_service import (
     _warehouse_company,
     _latest_batch_reconciliation_plan_for_row,
     batch_system_snapshot_fingerprint,
+    batch_reconciliation_segment_action,
     build_batch_reconciliation_execution_preview,
     get_batch_system_snapshot,
     get_location_batch_snapshot,
@@ -522,7 +523,15 @@ def _validated_breakdown_segment(row, raw):
             frappe.throw(_("Batch {0} belongs to Item {1}, not {2}.").format(frappe.bold(batch_no), frappe.bold(batch.item), frappe.bold(row.item_code)))
         system_expiry = str(batch.expiry_date or "")
         mismatch = cint(bool(system_expiry and getdate(system_expiry) != getdate(observed_expiry)))
-        price = _batch_price_context(batch_no, row.item_code, 0)
+        fallback_price = flt(
+            _item_count_meta(row.item_code).get("custom_customer_price") or 0,
+            6,
+        )
+        price = _batch_price_context(
+            batch_no,
+            row.item_code,
+            fallback_price,
+        )
         system_price = flt(price.get("customer_price") or 0, 6)
         effective_observed_price = flt(observed_price if has_observed_price else system_price, 6)
         price_mismatch = cint(abs(effective_observed_price - system_price) > 0.000001)
@@ -746,17 +755,7 @@ def save_batch_breakdown(name, row_name, segments, price_groups=None):
 
 
 def _reconciliation_segment_action(segment):
-    segment = frappe._dict(segment or {})
-    batch_no = _clean(segment.get("batch_no"))
-    if cint(segment.get("price_mismatch")):
-        return "Reclassify to AUTO Batch", ["Reclassify to AUTO Batch"]
-    if batch_no and frappe.db.exists("Batch", batch_no):
-        if cint(segment.get("expiry_mismatch")):
-            return "Correct Existing Expiry", ["Correct Existing Expiry", "Reclassify to AUTO Batch"]
-        return "Use Existing Batch", ["Use Existing Batch"]
-    if batch_no:
-        return "Create Observed Batch", ["Create Observed Batch"]
-    return "Create AUTO Batch", ["Create AUTO Batch"]
+    return batch_reconciliation_segment_action(segment)
 
 
 def _reconciliation_preview_row(doc, row, breakdown, status):
