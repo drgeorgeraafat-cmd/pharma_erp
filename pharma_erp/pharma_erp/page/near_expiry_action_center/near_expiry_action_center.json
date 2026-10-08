@@ -1,0 +1,24 @@
+{
+ "content": null,
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "stock",
+ "idx": 0,
+ "module": "Pharma Erp",
+ "name": "near-expiry-action-center",
+ "page_name": "near-expiry-action-center",
+ "roles": [
+  {"role": "Purchase User"},
+  {"role": "Purchase Manager"},
+  {"role": "Accounts User"},
+  {"role": "Accounts Manager"},
+  {"role": "Stock User"},
+  {"role": "Stock Manager"},
+  {"role": "System Manager"}
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Near Expiry Action Center"
+}

@@ -6,12 +6,15 @@ import json
 from typing import Any
 
 import frappe
-from frappe.utils import cint
+from frappe.utils import cint, flt, getdate, nowdate
+
+from erpnext.stock.doctype.batch.batch import get_batch_qty
 
 from pharma_erp.pharma_erp.unified_stock_availability import (
     CONTRACT_VERSION,
     MODE,
     SELLABLE_ROLES,
+    _batch_rows,
     get_unified_stock_availability,
 )
 
@@ -118,14 +121,74 @@ def _sellable_mappings() -> list[frappe._dict]:
     return rows
 
 
+def _verify_expired_physical_batch_semantics(
+    limit: int, failures: list[str], warnings: list[str]
+) -> int:
+    """Verify that expired physical Batch stock survives the canonical Batch-row layer."""
+
+    today = getdate(nowdate())
+    expired_masters = frappe.get_all(
+        "Batch",
+        filters={"disabled": 0, "expiry_date": ("<", today)},
+        fields=["name", "item", "expiry_date"],
+        order_by="expiry_date asc, name asc",
+        limit_page_length=limit,
+    )
+    evaluated = 0
+    for batch in expired_masters:
+        physical_rows = get_batch_qty(
+            batch_no=batch.name,
+            item_code=batch.item,
+            for_stock_levels=True,
+            ignore_reserved_stock=True,
+        ) or []
+        if not isinstance(physical_rows, (list, tuple)):
+            continue
+        for physical in physical_rows:
+            warehouse = str(physical.get("warehouse") or "").strip()
+            physical_qty = flt(physical.get("qty"), 6)
+            if not warehouse or physical_qty <= 0:
+                continue
+            rows = _batch_rows(
+                batch.item,
+                warehouse,
+                sre_rows=[],
+                as_of_date=today,
+            )
+            match = next((row for row in rows if row.batch_no == batch.name), None)
+            label = f"expired_batch/{batch.name}/{warehouse}"
+            if not match:
+                failures.append(f"{label}: expired physical Batch missing from _batch_rows")
+                continue
+            if abs(flt(match.physical_qty, 6) - physical_qty) > 0.000001:
+                failures.append(
+                    f"{label}: physical qty mismatch {match.physical_qty} != {physical_qty}"
+                )
+            if not match.expired:
+                failures.append(f"{label}: row is not classified expired")
+            if match.sellable:
+                failures.append(f"{label}: expired row is incorrectly sellable")
+            evaluated += 1
+            if evaluated >= limit:
+                return evaluated
+
+    if not evaluated:
+        warnings.append("No positive-stock expired Batch was available for R5-F2B live regression")
+    return evaluated
+
+
 def run(limit: int = 100) -> dict[str, Any]:
     """Execute a bounded shadow comparison without changing persistent state."""
 
     limit = max(1, min(cint(limit) or 100, 500))
     counts_before = _snapshot_counts()
     failures: list[str] = []
+    warnings: list[str] = []
     comparison_rows = []
     mapping_rows = _sellable_mappings()
+    expired_physical_evaluated = _verify_expired_physical_batch_semantics(
+        limit, failures, warnings
+    )
 
     if not mapping_rows:
         failures.append("No canonical sellable Branch/Warehouse mappings were found")
@@ -236,7 +299,8 @@ def run(limit: int = 100) -> dict[str, Any]:
         "mode": MODE,
         "status": "PASS" if not failures else "FAIL",
         "failures": failures,
-        "warnings": [],
+        "warnings": warnings,
+        "expired_physical_batch_rows_evaluated": expired_physical_evaluated,
         "canonical_mappings_evaluated": len(mapping_rows),
         "availability_rows_evaluated": evaluated,
         "divergent_from_legacy_actual": sum(

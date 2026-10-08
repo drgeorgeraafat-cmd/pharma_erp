@@ -307,8 +307,15 @@ def _batch_rows(
     sre_rows: list[frappe._dict],
     as_of_date,
 ) -> list[frappe._dict]:
-    """Return physical batch rows before subtracting active SRE quantities."""
+    """Return Batch rows while preserving saleable semantics and surfacing expired physical stock.
 
+    The original Step2A lookup remains authoritative for non-expired/saleable
+    quantities.  R5-F2B supplements only currently omitted expired Batches from
+    ERPNext stock-level semantics so a physical expired Batch can be classified
+    as ``batch_expired`` instead of ``batch_not_available_in_warehouse``.
+    """
+
+    effective_date = getdate(as_of_date or nowdate())
     ignore_reservations = [row.name for row in sre_rows]
     raw_rows = get_batch_qty(
         item_code=item_code,
@@ -316,7 +323,7 @@ def _batch_rows(
         ignore_voucher_nos=ignore_reservations,
     ) or []
     if not isinstance(raw_rows, (list, tuple)):
-        return []
+        raw_rows = []
 
     quantities: dict[str, float] = {}
     for row in raw_rows:
@@ -327,23 +334,62 @@ def _batch_rows(
             quantities.get(batch_no, 0) + flt(row.get("qty"))
         )
 
-    if not quantities:
+    # Supplemental physical read: include expired stock without changing the
+    # existing quantity semantics of any Batch already returned above.
+    stock_level_rows = get_batch_qty(
+        item_code=item_code,
+        warehouse=warehouse,
+        ignore_voucher_nos=ignore_reservations,
+        for_stock_levels=True,
+        ignore_reserved_stock=True,
+    ) or []
+    if not isinstance(stock_level_rows, (list, tuple)):
+        stock_level_rows = []
+
+    stock_level_quantities: dict[str, float] = {}
+    for row in stock_level_rows:
+        batch_no = _clean(row.get("batch_no") if hasattr(row, "get") else "")
+        if not batch_no:
+            continue
+        stock_level_quantities[batch_no] = normalized_qty(
+            stock_level_quantities.get(batch_no, 0) + flt(row.get("qty"))
+        )
+
+    candidate_batch_nos = sorted(set(quantities) | set(stock_level_quantities))
+    if not candidate_batch_nos:
         return []
 
     metadata = {
         row.name: row
         for row in frappe.get_all(
             "Batch",
-            filters={"name": ("in", sorted(quantities))},
+            filters={"name": ("in", candidate_batch_nos)},
             fields=["name", "item", "disabled", "expiry_date"],
         )
     }
+
+    for batch_no, stock_level_qty in stock_level_quantities.items():
+        if batch_no in quantities:
+            continue
+        batch = metadata.get(batch_no)
+        if not batch:
+            continue
+        disabled = bool(cint(batch.disabled))
+        expiry_date = getdate(batch.expiry_date) if batch.expiry_date else None
+        expired = bool(expiry_date and expiry_date < effective_date)
+        item_mismatch = _clean(batch.item) != item_code
+        if disabled or item_mismatch or not expired:
+            continue
+        if stock_level_qty <= 0:
+            continue
+        quantities[batch_no] = stock_level_qty
+
     result = []
     for batch_no in sorted(quantities):
         batch = metadata.get(batch_no)
         disabled = bool(cint(batch.disabled)) if batch else True
         expiry_date = getdate(batch.expiry_date) if batch and batch.expiry_date else None
-        expired = bool(expiry_date and expiry_date < as_of_date)
+        expired = bool(expiry_date and expiry_date < effective_date)
         item_mismatch = bool(batch and _clean(batch.item) != item_code)
         result.append(
             frappe._dict(
